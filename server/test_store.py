@@ -1,0 +1,408 @@
+"""RecordStore: single truth, apply rules, cards, plans, timers."""
+
+import tempfile
+import time
+import unittest
+from pathlib import Path
+
+from server.store import RecordStore
+
+
+def T(name, **args):
+    return {"name": name, "args": args}
+
+
+class StoreTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.s = RecordStore(path=Path(self.tmp.name) / "r.json")
+        self.sess = {}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def apply(self, calls, origin="test", route="spark"):
+        return self.s.apply_calls(calls, "voice", origin, route, self.sess)
+
+    def test_seed(self):
+        self.assertEqual(self.s.r["step_index"], 2)
+        self.assertEqual(len(self.s.steps()), 5)
+        self.assertEqual(self.s.r["done"], [])
+
+    def test_mark_planned(self):
+        r = self.apply([T("mark_done", wells=["C2", "C3"])])
+        self.assertEqual(r["messages"], ["✓ C2, C3 done"])
+        self.assertEqual(r["cards"], [])
+        self.assertEqual(self.s.r["done"], ["C2", "C3"])
+
+    def test_catch_and_confirm(self):
+        r = self.apply([T("mark_done", wells=["A1"])])
+        self.assertEqual(r["messages"], [])
+        self.assertEqual(r["cards"][0]["question"], "A1 is not in the step 3 plan. Record it anyway?")
+        self.assertEqual(self.s.r["done"], [])
+        msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
+        self.assertEqual(msg, "✓ A1 done")
+        self.assertEqual(self.s.r["done"], ["A1"])
+
+    def test_catch_plural_and_decline(self):
+        r = self.apply([T("mark_done", wells=["A1", "A2"])])
+        self.assertIn("are not in the step 3 plan. Record them anyway?", r["cards"][0]["question"])
+        msg, _, _ = self.s.confirm(r["cards"][0]["id"], False, "card", self.sess)
+        self.assertEqual(msg, "Canceled.")
+        self.assertEqual(self.s.r["done"], [])
+
+    def test_mark_invalid(self):
+        r = self.apply([T("mark_done", wells=["Z9"])])
+        self.assertEqual(r["messages"], ["I couldn't record Z9: not a plate well."])
+        self.assertEqual(r["cards"], [])
+
+    def test_exclude_card_roundtrip(self):
+        r = self.apply([T("exclude_well", well="C3", reason="contaminated")])
+        self.assertEqual(r["cards"][0]["question"], "Exclude C3?")
+        self.assertEqual(r["cards"][0]["detail"], "contaminated")
+        msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
+        self.assertEqual(msg, "C3 excluded (contaminated)")
+        self.assertEqual(self.s.r["excluded"], {"C3": "contaminated"})
+
+    def test_exclude_invalid(self):
+        r = self.apply([T("exclude_well", well="Z9")])
+        self.assertEqual(r["messages"], ["I couldn't record Z9: not a plate well."])
+
+    def test_redo_roundtrip(self):
+        r = self.apply([T("record_redo", wells=["D7", "D8"], note="spill")])
+        self.assertEqual(r["cards"][0]["question"], "Redo D7, D8?")
+        msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
+        self.assertEqual(msg, "D7, D8 marked for redo (spill)")
+
+    def test_note_verbatim_and_provenance(self):
+        r = self.apply([T("add_note", target="C3", text="BIG BUBBLES EVERYWHERE")],
+                       origin="note C3, big bubbles everywhere", route="grammar")
+        self.assertEqual(r["messages"], ["Note saved (C3)"])
+        memo = self.s.r["notes"][-1]
+        self.assertEqual(memo["text"], "big bubbles everywhere")
+        self.assertEqual(memo["transcript"], "note C3, big bubbles everywhere")
+        self.assertEqual(memo["route"], "grammar")
+        self.assertEqual(memo["wells"], ["C3"])
+        self.assertEqual(r["info"]["saved_memo"]["text"], "big bubbles everywhere")
+
+    def test_edit_note_history(self):
+        r = self.apply([T("edit_note", text="x")])
+        self.assertEqual(r["messages"], ["No notes yet."])
+        self.apply([T("add_note", target="C3", text="bubbles")], origin="note C3 bubbles")
+        r = self.apply([T("edit_note", text="NO BUBBLES ACTUALLY")], origin="edit last note, no bubbles actually")
+        self.assertEqual(r["messages"], ["Note updated."])
+        memo = self.s.r["notes"][-1]
+        self.assertEqual(memo["text"], "no bubbles actually")
+        self.assertEqual(memo["history"], [{"text": "bubbles", "ts": memo["history"][0]["ts"]}])
+        self.assertEqual(r["info"]["edited"], {"id": memo["id"], "target": "C3"})
+
+    def test_manual_edit(self):
+        self.apply([T("add_note", target="C3", text="bubbles")], origin="note C3 bubbles")
+        mid = self.s.r["notes"][-1]["id"]
+        self.assertEqual(self.s.edit_note_manual(mid, "fixed by hand"), "Note updated (C3).")
+        self.assertEqual(self.s.r["notes"][-1]["text"], "fixed by hand")
+        self.assertEqual(len(self.s.r["notes"][-1]["history"]), 1)
+        self.assertEqual(self.s.edit_note_manual("nope", "x"), "That note is gone.")
+
+    def test_tip_roundtrip(self):
+        r = self.apply([T("save_tip", step_id="s1", text="tip text")], origin="tip: tip text")
+        self.assertEqual(r["cards"][0]["question"], "Save this tip?")
+        self.assertEqual(r["cards"][0]["detail"], "[s1] tip text")
+        msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
+        self.assertEqual(msg, "Tip saved (s1)")
+
+    def test_tip_attach_uses_candidate(self):
+        self.sess["pending"] = {"kind": "attach", "candidate": "Incubate 30 minutes. (Source: X)"}
+        r = self.apply([T("save_tip", step_id="s3", text="incubate 30 minutes")], origin="yes")
+        self.assertEqual(r["cards"][0]["detail"], "[s3] Incubate 30 minutes")
+        msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
+        self.assertEqual(msg, "Tip saved (s3)")
+        self.assertEqual(self.s.r["tips"][-1]["text"], "Incubate 30 minutes")
+
+    def test_timer_fanout_and_dup(self):
+        r = self.apply([T("set_timer", label="x", minutes=30, wells=["C2", "C3"])])
+        self.assertEqual(r["messages"], ["Timer started: drug A · C2 · 30 min", "Timer started: drug A · C3 · 30 min"])
+        r = self.apply([T("set_timer", label="x", minutes=30, wells=["C2"])])
+        self.assertTrue(r["cards"][0]["question"].startswith("A drug A · C2 timer is already running ("))
+        msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
+        self.assertEqual(msg, "Timer started: drug A · C2 · 30 min")
+
+    def test_timer_unscoped_and_each(self):
+        r = self.apply([T("set_timer", label="x", minutes=5)])
+        self.assertEqual(r["messages"], ["Timer started: drug A · 5 min"])
+        r = self.apply([T("set_timer", label="x", minutes=5, each=True)])
+        self.assertEqual(len(self.s.r["timers"]), 8)
+
+    def test_cancel_extend_list(self):
+        r = self.apply([T("manage_timers", action="cancel", label="wash")])
+        self.assertEqual(r["messages"], ["I couldn't find a wash timer. No timers running."])
+        self.apply([T("set_timer", label="x", minutes=5, wells=["C1"])])
+        self.apply([T("set_timer", label="x", minutes=5, wells=["C10"])])
+        r = self.apply([T("manage_timers", action="cancel")])
+        self.assertTrue(r["messages"][0].startswith("Which timer should I cancel?"))
+        r = self.apply([T("manage_timers", action="cancel", label="C1")])
+        self.assertEqual(r["messages"], ["Timer canceled: drug A · C1 · 5 min"])
+        self.assertEqual(len(self.s.r["timers"]), 1)
+        r = self.apply([T("manage_timers", action="extend", label="C10")])
+        self.assertEqual(r["messages"], ["+5 min: drug A · C10 · 5 min (10 min)"])
+        r = self.apply([T("manage_timers", action="list")])
+        self.assertEqual(r["messages"], ["Timers: drug A · C10 · 5 min 10 min"])
+
+    def test_cancel_finished(self):
+        self.apply([T("set_timer", label="x", minutes=0, wells=["C4"])])
+        r = self.apply([T("manage_timers", action="cancel", label="C4")])
+        self.assertEqual(r["messages"], ["That timer already finished."])
+
+    def test_next_card_and_last(self):
+        r = self.apply([T("next_step")])
+        self.assertEqual(len(r["cards"]), 1)
+        self.assertTrue(r["cards"][0]["question"].startswith("Move to step 4 ("))
+        msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
+        self.assertTrue(msg.startswith("Next: "))
+        self.s.r["step_index"] = 4
+        r = self.apply([T("next_step")])
+        self.assertEqual(r["messages"], ["Already at the last step"])
+
+    def test_where_and_show(self):
+        r = self.apply([T("where_am_i")])
+        self.assertTrue(r["messages"][0].startswith("Step 3 of 5"))
+        r = self.apply([T("show", view="plate", target="C")])
+        self.assertEqual(r["messages"], ["Viewing: plate C"])
+
+    def test_redo_needs_empty_well(self):
+        self.s.r["done"] = ["C9"]
+        r = self.apply([T("record_redo", wells=["C9"], note="bubble")])
+        self.assertEqual(r["messages"], ["I couldn't mark C9 for redo: already done."])
+        self.assertEqual(r["cards"], [])
+        r = self.apply([T("record_redo", wells=["C4"], note="bubble")])
+        self.assertEqual(len(r["cards"]), 1)
+        self.assertEqual(r["cards"][0]["question"], "Redo C4?")
+
+    def test_redo_busy_reasons(self):
+        self.s.r["excluded"]["D6"] = "x"
+        self.s.r["redo"]["D7"] = "x"
+        self.s.r["timers"].append({
+            "id": "t", "label": "L", "minutes": 30, "on_done": None,
+            "started_at": time.time(), "step": "s", "wells": "D5",
+            "warned": False, "notified": False,
+        })
+        for well, reason in (("D6", "already excluded"), ("D7", "already marked for redo"),
+                             ("D5", "has a running timer")):
+            r = self.apply([T("record_redo", wells=[well])])
+            self.assertEqual(r["messages"], [f"I couldn't mark {well} for redo: {reason}."])
+
+    def test_redo_mixed_free_and_busy(self):
+        self.s.r["done"] = ["C9"]
+        r = self.apply([T("record_redo", wells=["C4", "C9"])])
+        self.assertEqual(r["messages"], ["I couldn't mark C9 for redo: already done."])
+        self.assertEqual(r["cards"][0]["question"], "Redo C4?")
+
+    def test_redo_confirms_into_affinity_group(self):
+        r = self.apply([T("record_redo", wells=["C9"], note="backup")])
+        self.assertNotIn("C9", self.s.r["plan"]["groups"]["drug_A"]["wells"])
+        msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
+        self.assertEqual(msg, "C9 marked for redo (backup)")
+        self.assertIn("C9", self.s.r["plan"]["groups"]["drug_A"]["wells"])
+        self.assertNotIn("C9", self.s.find_free_wells("C3", 12))
+        r = self.apply([T("mark_done", wells=["C9"])])
+        self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
+        self.assertIn("drug_A 1/5", self.s.model_state(self.sess)["groups"])
+
+    def test_find_free_order(self):
+        self.assertEqual(self.s.find_free_wells("C3", 6),
+                         ["C9", "C10", "C11", "C12", "C1", "B9"])
+
+    def test_find_free_skips_occupied(self):
+        self.s.r["done"] = ["C9"]
+        self.s.r["excluded"]["C10"] = "x"
+        self.assertEqual(self.s.find_free_wells("C3", 2), ["C11", "C12"])
+
+    def test_find_free_backups_first(self):
+        self.assertEqual(self.s.r["plan"].get("backups"), [])
+        self.s.r["plan"]["backups"] = ["D12", "Z9", "C9"]
+        self.assertEqual(self.s.find_free_wells("C3", 3), ["D12", "C9", "C10"])
+        self.s.r["done"] = ["D12"]
+        self.assertEqual(self.s.find_free_wells("C3", 2), ["C9", "C10"])
+
+    def test_find_free_count_clamp(self):
+        self.assertEqual(len(self.s.find_free_wells("C3", 99)), 12)
+        self.assertEqual(len(self.s.find_free_wells("C3", "x")), 3)
+        self.assertEqual(self.s.find_free_wells("c3", 1), ["C9"])
+
+    def test_multi_card_turn_queues_in_order(self):
+        r = self.apply([T("exclude_well", well="C3", reason="bubble"),
+                        T("record_redo", wells=["C4"], note="backup")])
+        self.assertEqual([c["question"] for c in r["cards"]], ["Exclude C3?", "Redo C4?"])
+
+    def test_drop_reasons_carry_raw_args(self):
+        r = self.apply([T("add_note", target="C3", text=5)])
+        d = r["info"]["drop_reasons"][0]
+        self.assertEqual(d["args"], {"target": "C3", "text": 5})
+        r = self.apply([T("nope", x=1)])
+        d = r["info"]["drop_reasons"][0]
+        self.assertEqual((d["call"], d["args"], d["reason"]), ("nope", {"x": 1}, "unknown tool"))
+
+    def test_user_text_names_no_tool(self):
+        tools = ["mark_done", "exclude_well", "record_redo", "add_note", "save_tip",
+                 "set_timer", "manage_timers", "where_am_i", "next_step", "show",
+                 "ask", "make_robot", "get_well", "find_free_wells", "answer",
+                 "propose_plan"]
+        r = self.apply([
+            T("mark_done", wells=["Z9"]),
+            T("exclude_well", well="Z9"),
+            T("record_redo", wells=["C9"]),
+            T("add_note", target="C3", text=5),
+            T("save_tip", step_id="s1", text=5),
+            T("set_timer", label="x"),
+            T("manage_timers", action="frobnicate"),
+            T("get_well", well="Z9"),
+            T("find_free_wells", near="Z9"),
+            T("answer", text="  "),
+            T("nope"),
+        ])
+        seen = " ".join(r["messages"] + [c["question"] for c in r["cards"]]
+                        + [d["reason"] for d in r["info"]["drop_reasons"]])
+        for t in tools:
+            self.assertNotIn(t, seen)
+
+    def test_propose_plan_is_unknown_now(self):
+        r = self.apply([T("propose_plan", steps=[{"label": "x", "calls": []}])])
+        d = r["info"]["drop_reasons"][0]
+        self.assertEqual((d["call"], d["reason"]), ("propose_plan", "unknown tool"))
+
+    def test_confirm_gone(self):
+        self.assertEqual(self.s.confirm("nope", True, "card", self.sess)[0], "That card is gone.")
+
+    def _expired_timer(self, wid, label, ago=330, minutes=5):
+        self.s.r["timers"].append({
+            "id": wid, "label": label, "minutes": minutes, "on_done": None,
+            "started_at": time.time() - ago, "step": "drug A", "wells": wid,
+            "warned": True, "notified": False,
+        })
+
+    def test_merge_simultaneous_done(self):
+        self._expired_timer("C2", "drug A · C2 · 5 min")
+        self._expired_timer("C3", "drug A · C3 · 5 min")
+        evs = self.s.check_timers(time.time())
+        self.assertEqual([e["kind"] for e in evs], ["timer_done", "timer_done"])
+        cards = [c for c in self.s.r["cards"].values() if c["kind"] == "suggest_next"]
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["question"], "2 timers done: C2–C3. Move to step 4?")
+
+    def test_suggest_fold_in(self):
+        self._expired_timer("C2", "drug A · C2 · 5 min")
+        self.s.check_timers(time.time())
+        self._expired_timer("C5", "drug A · C5 · 5 min")
+        self._expired_timer("C6", "drug A · C6 · 5 min")
+        self.s.check_timers(time.time())
+        cards = [c for c in self.s.r["cards"].values() if c["kind"] == "suggest_next"]
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["question"], "3 timers done: C2, C5–C6. Move to step 4?")
+
+    def test_stale_step_cards_dropped(self):
+        self._expired_timer("C2", "drug A · C2 · 5 min")
+        self.s.check_timers(time.time())
+        r = self.apply([T("next_step")])
+        msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
+        self.assertTrue(msg.startswith("Next: "))
+        kinds = [c["kind"] for c in self.s.r["cards"].values()]
+        self.assertNotIn("suggest_next", kinds)
+        self.assertNotIn("next_step", kinds)
+
+    def test_concurrent_expiry_and_note(self):
+        import threading
+        self._expired_timer("C2", "drug A · C2 · 5 min")
+        self._expired_timer("C3", "drug A · C3 · 5 min")
+        errs: list = []
+        results: list = []
+
+        def expire():
+            try:
+                for _ in range(5):
+                    self.s.check_timers(time.time())
+            except Exception as e:  # noqa: BLE001
+                errs.append(e)
+
+        def note(i):
+            try:
+                results.append(self.s.apply_calls(
+                    [{"name": "add_note", "args": {"target": "C5", "text": f"note {i}"},
+                      "call_id": f"n{i}"}],
+                    "voice", f"note C5, note {i}", "spark", {}))
+            except Exception as e:  # noqa: BLE001
+                errs.append(e)
+
+        threads = [threading.Thread(target=expire) for _ in range(2)]
+        threads += [threading.Thread(target=note, args=(i,)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errs, [])
+        self.assertEqual(sorted(m["text"] for m in self.s.r["notes"]),
+                         ["note 0", "note 1", "note 2", "note 3"])
+        for r in results:
+            self.assertEqual(r["messages"], ["Note saved (C5)"])
+        cards = [c for c in self.s.r["cards"].values() if c["kind"] == "suggest_next"]
+        self.assertEqual(len(cards), 1)
+
+    def test_outcomes_and_card_call_id(self):
+        r = self.apply([{"name": "mark_done", "args": {"wells": ["C2"]}, "call_id": "c1"},
+                        {"name": "exclude_well", "args": {"well": "C3"}, "call_id": "c2"}])
+        self.assertEqual(len(r["outcomes"]), 2)
+        self.assertEqual(r["outcomes"][0]["messages"], ["✓ C2 done"])
+        self.assertEqual(r["outcomes"][0]["cards"], [])
+        self.assertEqual(r["outcomes"][1]["cards"][0]["payload"]["_call_id"], "c2")
+        msg, _, card = self.s.confirm(r["outcomes"][1]["cards"][0]["id"], True, "card", self.sess)
+        self.assertEqual(msg, "C3 excluded")
+        self.assertEqual(card["payload"]["_call_id"], "c2")
+
+    def test_check_timers_warn_done_purge(self):
+        now = time.time()
+        self.s.r["timers"].append({"id": "a", "label": "drug A · C2 · 10 min", "minutes": 10,
+                                   "on_done": "wash", "started_at": now - 6 * 60, "step": "drug A",
+                                   "wells": "C2", "warned": False, "notified": False})
+        self.s.r["timers"].append({"id": "b", "label": "drug A · C3 · 1 min", "minutes": 1,
+                                   "on_done": None, "started_at": now - 70, "step": "drug A",
+                                   "wells": "C3", "warned": True, "notified": False})
+        self.s.r["timers"].append({"id": "c", "label": "old", "minutes": 1,
+                                   "on_done": None, "started_at": now - 500, "step": "s",
+                                   "wells": "", "warned": True, "notified": True})
+        evs = self.s.check_timers(now)
+        kinds = [e["kind"] for e in evs]
+        self.assertEqual(kinds, ["timer_warning", "timer_done"])
+        self.assertEqual(evs[1]["message"], "drug A on C3: 1 minutes done.")
+        self.assertNotIn("card", evs[1])
+        cards = [c for c in self.s.r["cards"].values() if c["kind"] == "suggest_next"]
+        self.assertEqual(len(cards), 1)
+        self.assertIn("Move to step 4?", cards[0]["question"])
+        self.assertEqual(sorted(t["id"] for t in self.s.r["timers"]), ["a", "b"])
+
+    def test_plan_times(self):
+        self.assertEqual(self.s.plan_times(), {4: [30]})
+        st = self.s.model_state({})
+        self.assertEqual(st["plan_times"], "5: 30m")
+        self.assertEqual(st["step"], "3/5 drug A C2–C8")
+
+    def test_recent_and_prompt_state(self):
+        self.apply([T("mark_done", wells=["C2", "C3"])], route="grammar")
+        st = self.s.prompt_state({})
+        self.assertEqual(st["recent"], [{"route": "grammar", "action": "mark_done",
+                                         "wells": ["C2", "C3"], "ts": st["recent"][0]["ts"]}])
+        for k in ("step", "total", "step_name", "done", "excluded", "step_wells",
+                  "remaining", "timers", "recent"):
+            self.assertIn(k, st)
+        self.assertEqual(self.s.prompt_state({"pending": {"question": "Q?"}})["pending_question"],
+                         {"question": "Q?"})
+
+    def test_persistence_and_broadcast(self):
+        seen = []
+        self.s.subscribe(seen.append)
+        self.apply([T("mark_done", wells=["C2"])])
+        self.assertTrue(seen and seen[-1]["kind"] == "snapshot")
+        again = RecordStore(path=Path(self.tmp.name) / "r.json")
+        self.assertEqual(again.r["done"], ["C2"])
+
+
+if __name__ == "__main__":
+    unittest.main()

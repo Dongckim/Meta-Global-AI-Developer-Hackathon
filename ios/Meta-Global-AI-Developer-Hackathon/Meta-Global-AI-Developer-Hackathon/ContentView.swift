@@ -5,6 +5,7 @@ struct DebugRun {
     var calls: [(name: String, args: String)]
     var ms: [String: Int]
     var route: String?
+    var sources: [String]
 }
 
 /// Reliable press-and-hold: tracks the button's own pressed state, no gesture fights.
@@ -16,89 +17,211 @@ struct HoldStyle: ButtonStyle {
     }
 }
 
+enum RobotState {
+    case idle
+    case building
+    case done(RobotResponse)
+}
+
+/// Right column, top to bottom: step → Pip response (fixed slot) → timers →
+/// memos → log (fills rest) → input. Nothing overlays anything.
 struct ContentView: View {
     @State private var lab = LabState()
     @State private var input = ""
     @State private var log: [String] = ["Pip ready — speak or type"]
     @State private var debug: DebugRun?
+    @State private var showDebug = false
+    @State private var lastReply = ""
     @State private var recorder = Recorder()
     @State private var recording = false
     @State private var pressing = false
     @State private var recordStart: Date?
     @State private var busy = false
+    @State private var selectedWell: WellSelect?
+    @State private var memoFlash: SavedMemo?
+    @State private var memoGen = 0
+    @State private var robotState = RobotState.idle
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            VStack(spacing: 12) {
-                statusView
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 4) {
-                            ForEach(log.indices, id: \.self) { i in
-                                Text(log[i]).font(.body).textSelection(.enabled)
-                            }
-                            Color.clear.frame(height: 1).id("logBottom")
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .onChange(of: log.count) { _, _ in
-                        proxy.scrollTo("logBottom", anchor: .bottom)
-                    }
+        GeometryReader { g in
+            let inner = g.size.width - 32
+            let left = inner * 0.58
+            HStack(spacing: 12) {
+                VStack(spacing: 8) {
+                    PlateView(lab: lab, selected: $selectedWell)
+                    GroupBars(lab: lab)
                 }
-                if let first = lab.pending.first {
-                    confirmCard(question: first.question, detail: first.detail, rest: lab.pending.count - 1)
+                .frame(width: left)
+                VStack(spacing: 8) {
+                    StepCard(lab: lab)
+                    responseCard
+                    TimerList(lab: lab)
+                    MemoList(lab: lab) { selectedWell = WellSelect(id: $0) }
+                    logSection.frame(maxHeight: .infinity)
+                    inputBar
                 }
-                inputBar
+                .frame(width: inner - left - 12)
             }
             .padding()
-            if let d = debug {
-                debugPanel(d)
-                    .padding(.trailing)
-                    .padding(.bottom, 84)
+        }
+        .sheet(item: $selectedWell) { sel in WellSheet(well: sel.id, lab: lab) { say($0) } }
+        .sheet(isPresented: robotSheet) { robotPanel }
+        .overlay(alignment: .top) {
+            if let m = memoFlash {
+                memoBanner(m)
+                    .allowsHitTesting(false)
             }
         }
-        .onAppear { lab.loadPlan() }
+        .onAppear { connect() }
+    }
+
+    private var robotSheet: Binding<Bool> {
+        Binding(
+            get: { if case .idle = robotState { false } else { true } },
+            set: { if !$0 { robotState = .idle } }
+        )
     }
 
     // MARK: - Subviews
 
-    private var statusView: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Step \(lab.stepIndex + 1) of \(lab.steps.count): \(lab.steps[lab.stepIndex])")
-                .font(.title2.bold())
-            Text("Done \(lab.done.count) · Excluded \(lab.excluded.count) · Redo \(lab.redo.count) · Notes \(lab.notes.count) · Tips \(lab.tips.count)")
-                .font(.callout).foregroundStyle(.secondary)
-            if !lab.groups.isEmpty {
-                Text(lab.groupProgress().map { "\($0.name) \($0.have)/\($0.need)" }.joined(separator: " · "))
-                    .font(.callout)
-            }
-            if !lab.timers.isEmpty {
-                Text("⏲ " + lab.timers.map { "\($0.label) \(fmtMinutes($0.minutes)) min" }.joined(separator: " · "))
-                    .font(.callout)
-            }
-            if !lab.lastShown.isEmpty {
-                Text("Viewing \(lab.lastShown)").font(.callout)
+    /// The current Pip response, or the card(s) awaiting an answer. Fixed slot.
+    private var responseCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Pip").font(.caption.bold()).foregroundStyle(.secondary)
+            if lab.cards.count >= 2 {
+                cardChecklist
+            } else if let first = lab.cards.first {
+                Text(first.question).font(.headline)
+                if let detail = first.detail, !detail.isEmpty {
+                    Text(detail).font(.callout).foregroundStyle(.secondary)
+                }
+                HStack(spacing: 16) {
+                    Button("Yes") { answer(true) }
+                        .buttonStyle(.borderedProminent)
+                    Button("No") { answer(false) }
+                        .buttonStyle(.bordered)
+                }
+            } else {
+                Text(lastReply.isEmpty ? "Speak or type a command" : lastReply)
+                    .font(.body)
+                    .foregroundStyle(lastReply.isEmpty ? .secondary : .primary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
+        .padding(10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
     }
 
-    private func confirmCard(question: String, detail: String?, rest: Int) -> some View {
-        VStack(spacing: 8) {
-            Text(question).font(.headline)
-            if let detail, !detail.isEmpty { Text(detail).font(.callout).foregroundStyle(.secondary) }
-            if rest > 0 { Text("\(rest) more waiting").font(.caption).foregroundStyle(.secondary) }
-            HStack(spacing: 16) {
-                Button("Yes") { answer(true) }
-                    .buttonStyle(.borderedProminent)
-                Button("No") { answer(false) }
+    /// One row per pending card, each with its own Yes/No, plus Yes to all.
+    private var cardChecklist: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Checklist (\(lab.cards.count))").font(.headline)
+                Spacer()
+                Button("Yes to all") { answerAll() }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(lab.cards) { card in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(card.question).font(.callout)
+                                if let detail = card.detail, !detail.isEmpty {
+                                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            Button("Yes") { answer(id: card.id, ok: true) }
+                                .buttonStyle(.borderedProminent).controlSize(.small)
+                            Button("No") { answer(id: card.id, ok: false) }
+                                .buttonStyle(.bordered).controlSize(.small)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 180)
+        }
+    }
+
+    private var logSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Log").font(.headline)
+                Spacer()
+                Button(showDebug ? "Hide debug" : "Debug") { showDebug.toggle() }
+                    .font(.caption)
                     .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+            if showDebug, let d = debug {
+                debugPanel(d)
+            } else if showDebug {
+                Text("No runs yet").font(.caption).foregroundStyle(.secondary)
+            }
+            logView
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var logView: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(log.indices, id: \.self) { i in
+                        Text(log[i]).font(.callout).textSelection(.enabled)
+                    }
+                    Color.clear.frame(height: 1).id("logBottom")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .onChange(of: log.count) { _, _ in
+                proxy.scrollTo("logBottom", anchor: .bottom)
             }
         }
-        .frame(maxWidth: .infinity)
+    }
+
+    private var robotPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Robot protocol").font(.title2.bold())
+                Spacer()
+                Button("Close") { robotState = .idle }
+            }
+            switch robotState {
+            case .idle: EmptyView()
+            case .building:
+                HStack {
+                    ProgressView()
+                    Text("Simulating in a Modal sandbox…").foregroundStyle(.secondary)
+                }
+            case .done(let r):
+                LabeledContent("Simulation", value: r.sim.ok ? "passed" : "failed")
+                    .foregroundStyle(r.sim.ok ? .green : .red)
+                LabeledContent("Wells match", value: r.check.ok ? "yes" : "missing \(r.check.missing.joined(separator: ", "))")
+                    .foregroundStyle(r.check.ok ? .green : .orange)
+                Text("Code").font(.callout).foregroundStyle(.secondary)
+                ScrollView {
+                    Text(r.preview.code_head).font(.caption.monospaced()).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            Spacer()
+        }
         .padding()
-        .background(.yellow.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.yellow.opacity(0.5)))
+    }
+
+    private func memoBanner(_ m: SavedMemo) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Note saved (\(m.target))").font(.caption.bold())
+            Text(m.text).font(.body)
+        }
+        .frame(maxWidth: 420, alignment: .leading)
+        .padding(10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.top, 12)
     }
 
     private var inputBar: some View {
@@ -134,15 +257,49 @@ struct ContentView: View {
             ForEach(d.calls.indices, id: \.self) { i in
                 Text("\(d.calls[i].name)(\(d.calls[i].args))").font(.caption2.monospaced())
             }
+            ForEach(d.sources, id: \.self) { s in
+                Text("src: \(s)").font(.caption2).foregroundStyle(.secondary)
+            }
             Text(msLine(d.ms))
                 .font(.caption2).foregroundStyle(.secondary)
+            Divider()
         }
-        .frame(maxWidth: 320, alignment: .leading)
-        .padding(10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
     }
 
     // MARK: - Logic
+
+    private func connect() {
+        Task {
+            do {
+                lab.sync(try await PipClient.record())
+            } catch {
+                say("Record unavailable: \(error.localizedDescription)")
+            }
+            while !Task.isCancelled {
+                do {
+                    for try await ev in PipClient.events() {
+                        handleEvent(ev)
+                    }
+                } catch {
+                    try? await Task.sleep(for: .seconds(2))
+                }
+            }
+        }
+    }
+
+    private func handleEvent(_ ev: SSEvent) {
+        switch ev {
+        case .snapshot(let snap):
+            lab.sync(snap)
+        case .timerWarning(let label):
+            say("⏰ \(label): 5 minutes left")
+        case .timerDone(let message):
+            lastReply = message
+            say("Pip: \(message)")
+        }
+    }
 
     private func say(_ s: String) {
         log.append(s)
@@ -150,10 +307,31 @@ struct ContentView: View {
     }
 
     private func answer(_ ok: Bool) {
-        if let msg = lab.confirmFirst(ok) {
-            say(msg)
-        } else {
-            say("Canceled")
+        guard let first = lab.cards.first else { return }
+        answer(id: first.id, ok: ok)
+    }
+
+    private func answer(id: String, ok: Bool) {
+        Task {
+            do {
+                let r = try await PipClient.confirm(cardId: id, ok: ok)
+                say(r.message)
+            } catch {
+                say("Error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func answerAll() {
+        let ids = lab.cards.map(\.id)
+        Task {
+            for id in ids {
+                do {
+                    say(try await PipClient.confirm(cardId: id, ok: true).message)
+                } catch {
+                    say("Error: \(error.localizedDescription)")
+                }
+            }
         }
     }
 
@@ -162,26 +340,40 @@ struct ContentView: View {
         guard !text.isEmpty, !busy else { return }
         input = ""
         say("> \(text)")
-        if !lab.pending.isEmpty {
-            if text.lowercased() == "yes" { answer(true) } else if text.lowercased() == "no" { answer(false) }
-            else { say("Answer the card first (yes/no)") }
+        if !lab.cards.isEmpty, isYesToAll(text) {
+            answerAll()
             return
         }
-        if let action = Action.rule(text) {
-            for msg in lab.enqueue([action]) { say(msg) }
+        if !lab.cards.isEmpty, let ok = cardAnswer(for: text) {
+            answer(ok)
             return
         }
         Task { await sendText(text) }
+    }
+
+    /// Card answers are yes/no/cancel only; everything else is a new command.
+    private func cardAnswer(for text: String) -> Bool? {
+        switch text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "yes": true
+        case "no", "cancel": false
+        default: nil
+        }
+    }
+
+    private func isYesToAll(_ text: String) -> Bool {
+        ["yes to all", "yes all", "approve all"].contains(
+            text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
 
     private func sendText(_ text: String) async {
         busy = true
         defer { busy = false }
         do {
-            let r = try await PipClient.orchestrate(text: text, state: lab.takeState())
-            handle(calls: r.tool_calls, reply: r.reply, ms: r.ms, route: r.route, input: text)
+            let r = try await PipClient.orchestrate(text: text)
+            handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
+                   route: r.route, input: text, sources: r.sources,
+                   savedMemo: r.saved_memo, robot: r.robot == true, dropped: r.dropped ?? 0)
         } catch {
-            lab.answerTarget = nil
             say("Error: \(error.localizedDescription)")
         }
     }
@@ -189,7 +381,6 @@ struct ContentView: View {
     private func startHold() {
         pressing = true
         guard !recording, !busy else { return }
-        guard lab.pending.isEmpty else { say("Answer the card first (yes/no)"); return }
         Task {
             guard await Recorder.requestPermission() else { say("Microphone permission needed"); return }
             guard pressing else { return } // released before the mic was ready
@@ -231,35 +422,70 @@ struct ContentView: View {
                 return
             }
             guard loud >= 0.001 else { say("No sound reached the mic — on the simulator, check the Mac mic permission and input"); return }
-            let r = try await PipClient.voice(wav: data, state: lab.takeState())
+            let r = try await PipClient.voice(wav: data)
             say("🎙 \(r.transcript)")
-            handle(calls: r.tool_calls, reply: r.reply, ms: r.ms, route: r.route, input: r.transcript)
+            if !lab.cards.isEmpty, isYesToAll(r.transcript) {
+                answerAll()
+                return
+            }
+            if !lab.cards.isEmpty, let ok = cardAnswer(for: r.transcript) {
+                answer(ok)
+                return
+            }
+            handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
+                   route: r.route, input: r.transcript, sources: r.sources,
+                   savedMemo: r.saved_memo, robot: r.robot == true, dropped: r.dropped ?? 0)
         } catch {
-            lab.answerTarget = nil
             say("Error: \(error.localizedDescription)")
         }
     }
 
-    private func handle(calls: [ToolCall], reply: String, ms: [String: Int], route: String?, input: String) {
-        let actions = calls.compactMap { Action.fromTool(name: $0.name, args: $0.args) }
-        let wasPending = lab.pending.count
-        for msg in lab.enqueue(actions) { say(msg) }
-        lab.answerTarget = nil // this round's timer labels are already applied
-        lab.noteQuestion(reply: reply, target: targetOf(calls.map(\.args)))
-        if let q = lab.pending.dropFirst(wasPending).first(where: \.fromCatch)?.question {
-            say("Pip: \(q)")
-        } else if !reply.isEmpty {
+    private func handle(calls: [ToolCall], messages: [String], reply: String, ms: [String: Int],
+                        route: String?, input: String, sources: [Source],
+                        savedMemo: SavedMemo?, robot: Bool, dropped: Int) {
+        for msg in messages { say(msg) }
+        if !reply.isEmpty {
+            lastReply = reply
             say("Pip: \(reply)")
         }
-        let dropped = calls.count - actions.count
+        if let show = calls.first(where: { $0.name == "show" }) {
+            lab.lastShown = "plate \(show.args["target"]?.string ?? "")"
+            lab.flash(parseShowTarget(show.args["target"]?.string))
+        }
+        if let m = savedMemo { flashMemo(m) }
         if dropped > 0 { say("Ignored \(dropped) bad call(s)") }
+        if robot { runRobot() }
         debug = DebugRun(
             input: input,
             calls: calls.map { ($0.name, "{" + $0.args.map { "\"\($0.key)\": \($0.value.compact)" }.sorted().joined(separator: ", ") + "}") },
             ms: ms,
-            route: route
+            route: route,
+            sources: sources.map(\.title)
         )
         say("⏱ " + msLine(ms))
+    }
+
+    private func flashMemo(_ m: SavedMemo) {
+        memoFlash = m
+        memoGen += 1
+        let g = memoGen
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            if memoGen == g { memoFlash = nil }
+        }
+    }
+
+    private func runRobot() {
+        robotState = .building
+        Task {
+            do {
+                robotState = .done(try await PipClient.robot())
+                say("Robot protocol ready")
+            } catch {
+                robotState = .idle
+                say("Robot failed: \(error.localizedDescription)")
+            }
+        }
     }
 }
 

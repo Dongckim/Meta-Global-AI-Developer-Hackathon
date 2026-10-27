@@ -87,6 +87,64 @@ def expand_range(start: str, end: str | None = None) -> list[str] | None:
     return [f"{s[0]}{c}" for c in range(lo, hi + 1)]
 
 
+def parse_wells(s) -> list[str]:
+    """'C2-C8' → full range; 'C2,C5,C7' → list; combos allowed. Invalid parts dropped."""
+    if isinstance(s, list):
+        return [w.upper() for w in s if isinstance(w, str) and _split(w.upper())]
+    out = []
+    for part in str(s or "").split(","):
+        ends = [
+            e.strip().upper()
+            for e in re.split(r"\s*(?:–|—|-|to|through)\s*", part, flags=re.IGNORECASE)
+        ]
+        if len(ends) == 2:
+            out.extend(expand_range(ends[0], ends[1]) or [])
+        elif len(ends) == 1 and _split(ends[0]):
+            out.append(ends[0])
+    return list(dict.fromkeys(out))
+
+
+def expand_tool_wells(tool_calls):
+    """Expand string wells args to arrays; drop calls left with no valid wells.
+
+    Timer wells fall back to unscoped when unparseable (the app used to do this).
+    """
+    out = []
+    for c in tool_calls:
+        if c.get("name") in ("mark_done", "record_redo"):
+            args = dict(c.get("args") or {})
+            if "wells" in args:
+                wells = parse_wells(args["wells"])
+                if not wells:
+                    continue
+                args["wells"] = wells
+            c = {**c, "args": args}
+        elif c.get("name") == "set_timer":
+            args = dict(c.get("args") or {})
+            if "wells" in args:
+                wells = parse_wells(args["wells"])
+                if wells:
+                    args["wells"] = wells
+                else:
+                    del args["wells"]
+            c = {**c, "args": args}
+        out.append(c)
+    return out
+
+
+def call_wells(call) -> list[str]:
+    """Well IDs a call touches, for the recent-actions list."""
+    args = call.get("args") or {}
+    out: list[str] = []
+    if isinstance(args.get("well"), str):
+        out += parse_wells(args["well"])
+    if "wells" in args:
+        out += parse_wells(args["wells"])
+    if isinstance(args.get("target"), str):
+        out += parse_wells(args["target"])
+    return list(dict.fromkeys(out))
+
+
 def where_am_i_reply(state: dict) -> str:
     step = state.get("step", 0)
     if not isinstance(step, int):
@@ -100,7 +158,11 @@ def where_am_i_reply(state: dict) -> str:
         s += f" of {total}"
     if name:
         s += f", {name}"
-    return f"{s}. {n} wells done."
+    out = f"{s}. {n} wells done."
+    if isinstance(state.get("remaining"), list):
+        left = [w for w in state["remaining"] if isinstance(w, str)]
+        out += f" {len(left)} left: {wells_label(left)}." if left else " None left."
+    return out
 
 
 def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
@@ -121,6 +183,8 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
         return [{"name": "next_step", "args": {}}], "Next step."
     if re.fullmatch(r"\s*where am i[?!]?\s*", low):
         return [{"name": "where_am_i", "args": {}}], where_am_i_reply(state)
+    if re.search(r"\b(how many|what(?:'s|s| is)?|which)\b[^?.!]{0,25}\b(left|remaining)\b", low):
+        return [{"name": "where_am_i", "args": {}}], where_am_i_reply(state)
     m = re.fullmatch(r"\s*exclude\s+([a-h]\d{1,2})\s*(.*)", low)
     if m:
         wells = expand_range(m.group(1).upper())
@@ -140,29 +204,245 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
         if not body:
             return None
         return [{"name": "add_note", "args": {"target": wells[0], "text": body}}], f"Noted for {wells[0]}."
+    m = re.fullmatch(r"\s*edit\s+(?:the\s+|my\s+)?last\s+note\s*(.+)", low)
+    if m:
+        body = text[m.start(1):m.end(1)].strip(" \t.,!?;:")
+        if not body:
+            return None
+        return [{"name": "edit_note", "args": {"text": body}}], "Note updated."
+    m = re.fullmatch(r"\s*cancel\s+(?:the\s+)?(.*?)\s*timer\s*", low)
+    if m:
+        label = text[m.start(1):m.end(1)].strip(" \t.,!?;:")
+        args = {"action": "cancel"}
+        if label:
+            args["label"] = label
+        return [{"name": "manage_timers", "args": args}], f"Canceling {timer_who(label)}."
+    m = re.fullmatch(r"\s*extend\s+(?:the\s+)?(.*?)\s*timer\s+by\s+(.+?)(?:\s*min(?:ute)?s?)?\s*", low)
+    if m:
+        minutes = words_to_minutes(text[m.start(2):m.end(2)])
+        if minutes is not None:
+            label = text[m.start(1):m.end(1)].strip(" \t.,!?;:")
+            args = {"action": "extend", "minutes": minutes}
+            if label:
+                args["label"] = label
+            n = int(minutes) if float(minutes).is_integer() else minutes
+            who = timer_who(label)
+            return [{"name": "manage_timers", "args": args}], f"Extending {who} by {n} minutes."
     return None
+
+
+_ONES_MAP = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19,
+}
+_TENS_MAP = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
+
+
+def words_to_minutes(s: str) -> int | float | None:
+    """Digits, one..ninety words, or 'half an hour'. None when unparseable."""
+    t = (s or "").strip().lower()
+    if re.fullmatch(r"\d+(?:\.\d+)?", t):
+        f = float(t)
+        return int(f) if f.is_integer() else f
+    if re.fullmatch(r"half (?:an )?hour", t):
+        return 30
+    total, ok = 0, False
+    for w in re.split(r"[\s-]+", t):
+        if w in _ONES_MAP:
+            total += _ONES_MAP[w]
+            ok = True
+        elif w in _TENS_MAP:
+            total += _TENS_MAP[w]
+            ok = True
+        else:
+            return None
+    return total if ok and total > 0 else None
 
 
 _ONES = "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen"
 _TENS = "twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety"
-_HAS_NUMBER = re.compile(rf"\d+(?:\.\d+)?|\bhalf (?:an )?hour\b|\b(?:{_ONES}|{_TENS})\b", re.IGNORECASE)
+_NUMRUN = rf"(?:\d+(?:\.\d+)?|{_ONES}|{_TENS})(?:[\s-]+(?:\d+(?:\.\d+)?|{_ONES}|{_TENS}))*"
+_WELL_TOKEN = re.compile(r"\b[A-Ha-h]\d{1,2}(?:\s*[–-]\s*[A-Ha-h]?\d{1,2})?\b")
+_HOURS = re.compile(
+    rf"\b({_NUMRUN})(?:\s+and\s+a\s+half)?\s+hours?\b"
+    r"|\bhalf\s+(?:an\s+)?hour\b"
+    r"|\ban\s+hour\s+and\s+a\s+half\b"
+    r"|\ban?\s+hour\b",
+    re.IGNORECASE,
+)
 
 
-def drop_ungrounded_timers(tool_calls, text):
-    """Keep set_timer calls only when the text actually mentions an amount (well digits excluded)."""
-    scrubbed = re.sub(r"[A-Ha-h]\d{1,2}", " ", text or "")
-    if _HAS_NUMBER.search(scrubbed):
-        return tool_calls
-    return [c for c in tool_calls if c.get("name") != "set_timer"]
+def _as_num(f: float):
+    return int(f) if float(f).is_integer() else f
+
+
+def find_amounts(text) -> set:
+    """Minute-amounts stated in free text: digits, one..ninety runs,
+    half-hour (30), N-hour(s) (N*60). Well tokens excluded."""
+    t = _WELL_TOKEN.sub(" ", text or "")
+    found: set = set()
+
+    def hm(m):
+        full = m.group(0).lower()
+        if m.group(1) is not None:
+            v = words_to_minutes(m.group(1))
+            if v is not None:
+                found.add(_as_num(v * 60 + (30 if "half" in full else 0)))
+        elif "and a half" in full:
+            found.add(90)
+        elif full.startswith("half"):
+            found.add(30)
+        else:
+            found.add(60)
+        return " "
+
+    t = _HOURS.sub(hm, t)
+    for m in re.finditer(r"\d+(?:\.\d+)?", t):
+        found.add(_as_num(float(m.group(0))))
+    t = re.sub(r"\d+(?:\.\d+)?", " ", t)
+    for m in re.finditer(rf"\b(?:{_ONES}|{_TENS})(?:[\s-]+(?:{_ONES}|{_TENS}))*\b", t, re.IGNORECASE):
+        v = words_to_minutes(m.group(0))
+        if v is not None:
+            found.add(v)
+    return found
+
+
+_TIMEUNIT = r"minutes?|mins?|hours?|hrs?|분|시간"
+
+
+def find_durations(text) -> set:
+    """Numbers with adjacent time units: '30 min', '2 hours', '30분'. Volumes ignored."""
+    t = _WELL_TOKEN.sub(" ", text or "")
+    found: set = set()
+    for m in re.finditer(rf"\b({_NUMRUN})\s*(?:{_TIMEUNIT})(?![a-zA-Z])", t, re.IGNORECASE):
+        v = words_to_minutes(m.group(1))
+        if v is None:
+            continue
+        u = m.group(0).lower()
+        mult = 60 if re.search(r"hours?|hrs?|시간", u) else 1
+        found.add(_as_num(v * mult))
+    if re.search(r"\bhalf\s+(?:an\s+)?hour\b", t, re.IGNORECASE):
+        found.add(30)
+    return found
+
+
+_STOPWORDS = {
+    "a", "an", "the", "set", "start", "new", "begin", "timer", "timers",
+    "min", "mins", "minute", "minutes", "time", "times", "hour", "hours",
+    "hr", "hrs", "for", "please", "to", "my", "on", "of", "and", "or",
+    "it", "its", "this", "that", "with", "by", "at", "in", "is",
+}
+
+
+def _stem(w: str) -> str:
+    w = w.lower()
+    for suf in ("ation", "ate", "ing", "ed", "es", "s"):
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            return w[: -len(suf)]
+    return w
+
+
+def _content_stems(text) -> set[str]:
+    t = _WELL_TOKEN.sub(" ", text or "")
+    t = re.sub(r"\d+(?:\.\d+)?", " ", t)
+    return {
+        _stem(w)
+        for w in re.findall(r"[A-Za-z]+", t)
+        if w.lower() not in _STOPWORDS and len(w) > 1
+    }
+
+
+def relevant_plan_numbers(norm, step_names) -> set:
+    """Durations from steps sharing a content stem with the utterance."""
+    stems = _content_stems(norm)
+    if not stems:
+        return set()
+    out: set = set()
+    for name in step_names or []:
+        if stems & _content_stems(name):
+            out |= find_durations(name)
+    return out
+
+
+def _num_minutes(x):
+    if isinstance(x, bool):
+        return None
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def keep_grounded_timers(tool_calls, allowed: set) -> list:
+    """Keep set_timer calls whose minutes match an allowed amount (±0.01)."""
+    out = []
+    for c in tool_calls:
+        if c.get("name") != "set_timer":
+            out.append(c)
+            continue
+        m = _num_minutes((c.get("args") or {}).get("minutes"))
+        if m is not None and any(abs(m - a) < 0.01 for a in allowed):
+            out.append(c)
+    return out
 
 
 _TIMER_WORD = re.compile(r"\btimer\b", re.IGNORECASE)
+_ASK_VERB = re.compile(r"\b(start|set|new|begin)\b", re.IGNORECASE)
+_NO_ASK = re.compile(r"\b(cancel|stop|extend)\b", re.IGNORECASE)
+
+
+_AFTER_WORD = re.compile(r"\b([A-Za-z]+)\s+after\s*[.!?]*$", re.IGNORECASE)
+_THEN_WORD = re.compile(r"\bthen\s+([A-Za-z]+)", re.IGNORECASE)
+_ON_DONE_SKIP = {
+    "a", "an", "the", "half", "minute", "minutes", "hour", "hours",
+    "second", "seconds", "timer", "timers",
+}
+
+
+def fill_on_done(tool_calls, text):
+    """'wash after' / 'then wash' sets set_timer on_done, over the model's value."""
+    word = None
+    for m in (_AFTER_WORD.search(text or ""), _THEN_WORD.search(text or "")):
+        if m and m.group(1).lower() not in _ON_DONE_SKIP:
+            word = m.group(1)
+            break
+    if word is None:
+        return tool_calls
+    out = []
+    for c in tool_calls:
+        if c.get("name") == "set_timer":
+            args = dict(c.get("args") or {})
+            args["on_done"] = word
+            c = {**c, "args": args}
+        out.append(c)
+    return out
+
+
+_EACH_PHRASE = re.compile(r"\bfor\s+(each|all|every)\b", re.IGNORECASE)
+
+
+def mark_each_timers(tool_calls, text):
+    """One set_timer + 'for each/all/every' → flag it; the app fans out per well."""
+    idx = [i for i, c in enumerate(tool_calls) if c.get("name") == "set_timer"]
+    if len(idx) != 1 or not _EACH_PHRASE.search(text or ""):
+        return tool_calls
+    out = list(tool_calls)
+    c = out[idx[0]]
+    args = dict(c.get("args") or {})
+    args["each"] = True
+    out[idx[0]] = {**c, "args": args}
+    return out
 
 
 def collapse_each_timers(tool_calls, text):
-    """'for each'/'for all' still means one shared timer (app labels it with the range)."""
+    """Model fanout for 'for each' phrases collapses to one call (the app expands it)."""
     timers = [c for c in tool_calls if c.get("name") == "set_timer"]
-    if len(timers) > 1 and re.search(r"\bfor\s+each\b|\bfor\s+all\b", text or "", re.IGNORECASE):
+    if len(timers) > 1 and _EACH_PHRASE.search(text or ""):
         out, kept = [], False
         for c in tool_calls:
             if c.get("name") == "set_timer":
@@ -172,6 +452,17 @@ def collapse_each_timers(tool_calls, text):
             out.append(c)
         return out
     return tool_calls
+
+
+def count_wells(target: str) -> int:
+    """How many wells a target label covers: 'C2–C8' → 7, 'C2, D2' → 2, 'C4' → 1."""
+    t = (target or "").strip()
+    m = re.fullmatch(r"([A-H])(\d{1,2})\s*[–-]\s*([A-H])(\d{1,2})", t)
+    if m and m.group(1) == m.group(3):
+        return abs(int(m.group(4)) - int(m.group(2))) + 1
+    if "," in t:
+        return max(len([p for p in t.split(",") if p.strip()]), 1)
+    return 1
 
 
 def timer_set_reply(tool_calls, state):
@@ -185,33 +476,134 @@ def timer_set_reply(tool_calls, state):
     if not target or isinstance(minutes, bool) or not isinstance(minutes, (int, float)):
         return None
     m = int(minutes) if float(minutes).is_integer() else minutes
+    n = count_wells(target)
+    if n > 1:
+        return f"{n} {m}-minute timers for {target}."
     return f"{m}-minute timer for {target}."
 
 
-def timer_followup(tool_calls, reply, text):
-    """Drop ungrounded set_timer calls; if 'timer' was mentioned but no timer
-    call survived, turn the reply into a minutes follow-up (feeds pending_question)."""
-    calls = drop_ungrounded_timers(collapse_each_timers(tool_calls, text), text)
-    if _TIMER_WORD.search(text or "") and not any(
-        c.get("name") in ("set_timer", "manage_timers") for c in calls
-    ):
-        kept = " ".join(
-            s for s in re.split(r"(?<=[.?!])\s+", reply or "") if not _TIMER_WORD.search(s)
-        ).strip()
-        if kept.endswith("?"):
-            return calls, kept
-        return calls, f"{kept} How many minutes for the timer?".strip()
-    return calls, reply
+def split_ask(tool_calls):
+    """Pull out ask() follow-ups. Returns (question or None, remaining calls)."""
+    rest, q = [], None
+    for c in tool_calls:
+        if c.get("name") == "ask":
+            text = ((c.get("args") or {}).get("question") or "").strip()
+            if text and q is None:
+                q = text if text.endswith("?") else text + "?"
+        else:
+            rest.append(c)
+    return q, rest
 
 
-_STATE_CLAIM = re.compile(
-    r"\b(noted|done|excluded|started|recorded|saved|finished|completed|canceled|cancelled)\b",
-    re.IGNORECASE,
-)
+def filter_timer_calls(tool_calls, text, extra=frozenset()):
+    """Collapse fanout, flag for-each, keep value-grounded set_timer calls."""
+    allowed = find_amounts(text) | set(extra)
+    return keep_grounded_timers(
+        mark_each_timers(collapse_each_timers(tool_calls, text), text), allowed
+    )
 
 
-def honest_reply(tool_calls, reply):
-    """Replies may only claim results the tools actually produced."""
-    if not tool_calls and "?" not in (reply or "") and _STATE_CLAIM.search(reply or ""):
-        return "I didn't record anything."
-    return reply
+def needs_minutes_ask(tool_calls, text):
+    """True when a new timer was asked for but no timer call survived."""
+    return bool(
+        _TIMER_WORD.search(text or "")
+        and _ASK_VERB.search(text or "")
+        and not _NO_ASK.search(text or "")
+        and not any(c.get("name") in ("set_timer", "manage_timers") for c in tool_calls)
+    )
+
+
+def _num(x):
+    if isinstance(x, bool):
+        return None
+    try:
+        f = float(x)
+    except (TypeError, ValueError):
+        return None
+    return int(f) if f.is_integer() else f
+
+
+def timer_who(label):
+    """'wash' → 'the wash timer'; labels already naming a timer pass through."""
+    if not label:
+        return "the timer"
+    if "timer" in label.lower():
+        return label
+    return f"the {label} timer"
+
+
+def wells_label(wells):
+    """Contiguous same-row wells collapse: [C2..C8] → 'C2–C8', else comma-joined."""
+    ws = list(wells or [])
+    if len(ws) == 1:
+        return ws[0]
+    parts = [_split(w) for w in ws]
+    if ws and all(parts) and len({p[0] for p in parts}) == 1:
+        lo = min(p[1] for p in parts)
+        hi = max(p[1] for p in parts)
+        if hi - lo + 1 == len(parts):
+            return f"{parts[0][0]}{lo}–{parts[0][0]}{hi}"
+    return ", ".join(ws)
+
+
+_FILLER = re.compile(r"^(?:um|uh|like)[\s,]+|[\s,]+(?:um|uh|like)$", re.IGNORECASE)
+
+
+def strip_fillers(s: str) -> str:
+    """Trim punctuation, then leading/trailing um/uh/like only. Nothing else changes."""
+    t = (s or "").strip(" \t.,!?;:")
+    while True:
+        n = _FILLER.sub("", t).strip(" \t.,!?;:")
+        if n == t:
+            return n
+        t = n
+
+
+def verbatim_span(transcript: str, body: str) -> str:
+    """Memo text must quote the transcript. Returns the longest original-case
+    token run; ties prefer later body words (framing comes first).
+    Falls back to the full transcript when nothing matches."""
+    t = (transcript or "").strip()
+    b = strip_fillers(body)
+    if t and b:
+        tt = [(m.group(0).lower(), m.start(), m.end()) for m in re.finditer(r"\w+", t)]
+        bw = re.findall(r"\w+", b.lower())
+        for size in range(len(bw), 0, -1):
+            for i in range(len(bw) - size, -1, -1):
+                frag = bw[i:i + size]
+                for j in range(len(tt) - size + 1):
+                    if [x[0] for x in tt[j:j + size]] == frag:
+                        return strip_fillers(t[tt[j][1]:tt[j + size - 1][2]])
+    return strip_fillers(t) if t else strip_fillers(body)
+
+
+def join_wells_ranges(wells) -> str:
+    """Row-major run-join: [C2,C5,C6,C7,C8] → 'C2, C5–C8'. '' when empty."""
+    pts = sorted({_split(w) for w in (wells or []) if _split(w)})
+    runs = []
+    for row, col in pts:
+        if runs and runs[-1][0] == row and col == runs[-1][2] + 1:
+            runs[-1][2] = col
+        else:
+            runs.append([row, col, col])
+    return ", ".join(f"{r}{a}" if a == b else f"{r}{a}–{r}{b}" for r, a, b in runs)
+
+
+def is_failure_message(s: str) -> bool:
+    return (
+        "couldn't" in s
+        or s.startswith("Which timer")
+        or s.startswith("That timer")
+        or s.startswith("Unknown timer action")
+        or s.startswith("Already at the last")
+    )
+
+
+def final_pip_line(successes, failures, server_reply: str) -> str:
+    """Store result wins: failures replace the reply; mixed rounds join into one line."""
+    if not failures:
+        return server_reply
+    if not successes:
+        return " ".join(failures)
+    f = " ".join(x[:1].lower() + x[1:] for x in failures)
+    return ", ".join(successes) + ", but " + f

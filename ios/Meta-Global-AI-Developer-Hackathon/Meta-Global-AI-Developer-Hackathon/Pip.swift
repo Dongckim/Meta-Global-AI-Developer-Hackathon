@@ -17,21 +17,6 @@ enum JSON: Decodable {
     }
 
     var string: String? { if case .string(let s) = self { s } else { nil } }
-    var double: Double? {
-        switch self {
-        case .number(let n): n
-        case .string(let s): Double(s)
-        default: nil
-        }
-    }
-    /// A bare string counts as a one-element list (models sometimes skip the array).
-    var strings: [String]? {
-        switch self {
-        case .array(let a): a.compactMap(\.string)
-        case .string(let s): [s]
-        default: nil
-        }
-    }
 
     var compact: String {
         switch self {
@@ -45,8 +30,8 @@ enum JSON: Decodable {
     }
 }
 
-func fmtMinutes(_ m: Double) -> String {
-    m.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(m)) : String(m)
+func fmtClock(_ s: TimeInterval) -> String {
+    "\(Int(s) / 60):\(String(format: "%02d", Int(s) % 60))"
 }
 
 func msLine(_ ms: [String: Int]) -> String {
@@ -69,22 +54,130 @@ struct PlanGroup: Decodable {
 struct Plan: Decodable {
     var groups: [String: PlanGroup]
     var steps: [PlanStep]
-    var currentStep: Int // 1-based
+    var currentStep: Int?
+}
+
+// MARK: - Record snapshot (server is the single truth; the app renders this)
+
+struct MemoEdit: Decodable, Equatable {
+    var text: String
+    var ts: Double
+}
+
+struct Memo: Decodable, Equatable, Identifiable {
+    var id: String
+    var target: String
+    var text: String
+    var ts: Double
+    var history: [MemoEdit]
+}
+
+struct SavedTip: Decodable, Equatable {
+    var step: String
+    var text: String
+}
+
+struct TimerEntry: Decodable, Equatable, Identifiable {
+    var id: String
+    var label: String
+    var minutes: Double
+    var onDone: String?
+    var started: Date
+    var step: String
+    var wells: String
+
     enum CodingKeys: String, CodingKey {
-        case groups, steps, currentStep = "current_step"
+        case id, label, minutes, onDone = "on_done", started = "started_at", step, wells
+    }
+
+    init(id: String, label: String, minutes: Double, onDone: String? = nil,
+         started: Date = Date(), step: String = "", wells: String = "") {
+        self.id = id
+        self.label = label
+        self.minutes = minutes
+        self.onDone = onDone
+        self.started = started
+        self.step = step
+        self.wells = wells
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        label = try c.decode(String.self, forKey: .label)
+        minutes = try c.decode(Double.self, forKey: .minutes)
+        onDone = try c.decodeIfPresent(String.self, forKey: .onDone)
+        started = Date(timeIntervalSince1970: try c.decode(Double.self, forKey: .started))
+        step = try c.decode(String.self, forKey: .step)
+        wells = try c.decode(String.self, forKey: .wells)
     }
 }
 
-struct PendingItem {
-    let action: Action
-    let question: String
-    let detail: String?
-    let fromCatch: Bool
+func isOver(_ t: TimerEntry, now: Date) -> Bool {
+    now.timeIntervalSince(t.started) >= t.minutes * 60
 }
 
-struct PendingQuestion {
+struct Stamp: Decodable {
+    var source: String
+    var ts: Double
+}
+
+struct ServerCard: Decodable, Equatable, Identifiable {
+    var id: String
+    var kind: String
     var question: String
-    var target: String?
+    var detail: String?
+    var ts: Double
+}
+
+struct RecordSnapshot: Decodable {
+    var version: Int
+    var plan: Plan
+    var stepIndex: Int
+    var done: [String]
+    var excluded: [String: String]
+    var redo: [String: String]
+    var notes: [Memo]
+    var tips: [SavedTip]
+    var timers: [TimerEntry]
+    var stamps: [String: Stamp]
+    var cards: [ServerCard]
+
+    enum CodingKeys: String, CodingKey {
+        case version, plan, stepIndex = "step_index", done, excluded, redo,
+             notes, tips, timers, stamps, cards
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decode(Int.self, forKey: .version)
+        plan = try c.decode(Plan.self, forKey: .plan)
+        stepIndex = try c.decode(Int.self, forKey: .stepIndex)
+        done = try c.decode([String].self, forKey: .done)
+        excluded = try c.decode([String: String].self, forKey: .excluded)
+        redo = try c.decode([String: String].self, forKey: .redo)
+        notes = try c.decode([Memo].self, forKey: .notes)
+        tips = try c.decode([SavedTip].self, forKey: .tips)
+        timers = try c.decode([TimerEntry].self, forKey: .timers)
+        stamps = try c.decode([String: Stamp].self, forKey: .stamps)
+        cards = try c.decode([String: ServerCard].self, forKey: .cards).values.sorted { $0.ts < $1.ts }
+    }
+}
+
+let plateRows = ["A", "B", "C", "D", "E", "F", "G", "H"]
+
+/// show() targets: a letter is a row, a number is a column, both is one well.
+func parseShowTarget(_ raw: String?) -> Set<String> {
+    guard var t = raw?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(), !t.isEmpty else { return [] }
+    for p in ["COLUMN ", "COL ", "ROW ", "WELL "] where t.hasPrefix(p) {
+        t = String(t.dropFirst(p.count)).trimmingCharacters(in: .whitespaces)
+        break
+    }
+    if t.count >= 2, let r = t.first, plateRows.contains(String(r)),
+       let c = Int(t.dropFirst()), (1...12).contains(c) { return ["\(r)\(c)"] }
+    if t.count == 1, plateRows.contains(t) { return Set((1...12).map { "\(t)\($0)" }) }
+    if let c = Int(t), (1...12).contains(c) { return Set(plateRows.map { "\($0)\(c)" }) }
+    return []
 }
 
 /// "C2–C8" for contiguous same-row wells, comma list otherwise, nil when empty.
@@ -107,156 +200,45 @@ func wellRangeLabel(_ wells: [String]) -> String? {
     return rows.sorted().joined(separator: ", ")
 }
 
-/// All wells of the action(s) as one range label, else the first non-well identifier.
-func targetOf(_ argList: [[String: JSON]]) -> String? {
-    var wells: [String] = []
-    for args in argList {
-        if let w = args["well"]?.string { wells.append(w) }
-        if let ws = args["wells"]?.strings { wells.append(contentsOf: ws) }
-    }
-    if !wells.isEmpty { return wellRangeLabel(wells) }
-    for args in argList {
-        if let t = args["target"]?.string { return t }
-        if let s = args["step_id"]?.string { return s }
-        if let l = args["label"]?.string { return l }
-    }
-    return nil
-}
-
-// MARK: - Action
-
-/// One bench action. Mirrors the server's 10 tools.
-enum Action {
-    case markDone(wells: [String])
-    case excludeWell(well: String, reason: String?)
-    case recordRedo(wells: [String], note: String?)
-    case addNote(target: String, text: String)
-    case saveTip(step: String, text: String)
-    case setTimer(label: String, minutes: Double, onDone: String?)
-    case manageTimers(action: String, label: String?)
-    case whereAmI
-    case nextStep
-    case show(view: String, target: String?)
-
-    var needsConfirm: Bool {
-        switch self {
-        case .excludeWell, .recordRedo, .saveTip: true
-        default: false
-        }
-    }
-
-    var question: String? {
-        switch self {
-        case .excludeWell(let w, _): "Exclude \(w)?"
-        case .recordRedo(let wells, _): "Redo \(wells.joined(separator: ", "))?"
-        case .saveTip: "Save this tip?"
-        default: nil
-        }
-    }
-
-    var detail: String? {
-        switch self {
-        case .excludeWell(_, let r): r
-        case .recordRedo(_, let n): n
-        case .saveTip(let step, let text): "[\(step)] \(text)"
-        default: nil
-        }
-    }
-
-    static func fromTool(name: String, args: [String: JSON]) -> Action? {
-        switch name {
-        case "mark_done":
-            guard let w = args["wells"]?.strings else { return nil }
-            return .markDone(wells: w)
-        case "exclude_well":
-            guard let w = args["well"]?.string else { return nil }
-            return .excludeWell(well: w, reason: args["reason"]?.string)
-        case "record_redo":
-            guard let w = args["wells"]?.strings else { return nil }
-            return .recordRedo(wells: w, note: args["note"]?.string)
-        case "add_note":
-            guard let t = args["target"]?.string, let x = args["text"]?.string else { return nil }
-            return .addNote(target: t, text: x)
-        case "save_tip":
-            guard let s = args["step_id"]?.string, let x = args["text"]?.string else { return nil }
-            return .saveTip(step: s, text: x)
-        case "set_timer":
-            guard let l = args["label"]?.string, let m = args["minutes"]?.double else { return nil }
-            return .setTimer(label: l, minutes: m, onDone: args["on_done"]?.string)
-        case "manage_timers":
-            guard let a = args["action"]?.string else { return nil }
-            return .manageTimers(action: a, label: args["label"]?.string)
-        case "where_am_i": return .whereAmI
-        case "next_step": return .nextStep
-        case "show":
-            guard let v = args["view"]?.string else { return nil }
-            return .show(view: v, target: args["target"]?.string)
-        default: return nil
-        }
-    }
-}
-
-// MARK: - Lab state
+// MARK: - Lab state (render model; the server owns the record)
 
 @Observable
 final class LabState {
+    var version = -1
     var planSteps: [PlanStep] = []
     var groups: [String: PlanGroup] = [:]
-    var steps: [String] { planSteps.isEmpty ? ["Prep", "Dispense", "Incubate", "Measure", "Clean up"] : planSteps.map(\.name) }
+    var steps: [String] = ["Prep", "Dispense", "Incubate", "Measure", "Clean up"]
     var stepIndex = 0
     var done: Set<String> = []
     var excluded: [String: String] = [:]
     var redo: [String: String] = [:]
-    var notes: [(target: String, text: String)] = []
-    var tips: [(step: String, text: String)] = []
-    var timers: [(label: String, minutes: Double, onDone: String?)] = []
+    var notes: [Memo] = []
+    var timers: [TimerEntry] = []
+    var cards: [ServerCard] = []
     var lastShown = ""
-    var pending: [PendingItem] = []
+    /// Per-well provenance for the well card: source and last record time.
+    var wellSource: [String: String] = [:]
+    var wellTime: [String: Date] = [:]
+    /// Wells lit by show(), cleared 2 s after the last call.
+    var flashing: Set<String> = []
+    private var flashGen = 0
 
-    /// Reads samples/plan_demo.json from the bundle (once). No-op when absent.
-    func loadPlan() {
-        guard planSteps.isEmpty,
-              let url = Bundle.main.url(forResource: "plan_demo", withExtension: "json"),
-              let data = try? Data(contentsOf: url),
-              let plan = try? JSONDecoder().decode(Plan.self, from: data)
-        else { return }
-        load(plan: plan)
-    }
-
-    func load(plan: Plan) {
-        guard !plan.steps.isEmpty else { return }
-        planSteps = plan.steps
-        groups = plan.groups
-        stepIndex = min(max(plan.currentStep - 1, 0), plan.steps.count - 1)
-    }
-
-    var pendingQuestion: PendingQuestion?
-    var answerTarget: String?
-
-    var serverState: [String: Any] {
-        var s: [String: Any] = ["step": stepIndex, "total": steps.count, "step_name": steps[stepIndex],
-                                "done": done.sorted(), "excluded": excluded.keys.sorted(),
-                                "timers": timers.map { ["label": $0.label, "minutes": $0.minutes] }]
-        if let pq = pendingQuestion {
-            s["pending_question"] = ["question": pq.question, "target": pq.target ?? ""]
-        }
-        return s
-    }
-
-    /// State for the next server call. Attaches a pending question once, then clears it,
-    /// keeping its target for this round's timer labels.
-    func takeState() -> [String: Any] {
-        let s = serverState
-        answerTarget = pendingQuestion?.target
-        pendingQuestion = nil
-        return s
-    }
-
-    /// Remembers a model question (with its target) so the next utterance answers it.
-    func noteQuestion(reply: String, target: String?) {
-        let q = reply.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard q.hasSuffix("?"), pending.isEmpty else { return }
-        pendingQuestion = PendingQuestion(question: reply, target: target)
+    /// Replace everything with a server snapshot. Older versions are ignored.
+    func sync(_ snap: RecordSnapshot) {
+        guard snap.version > version else { return }
+        version = snap.version
+        planSteps = snap.plan.steps
+        groups = snap.plan.groups
+        if !snap.plan.steps.isEmpty { steps = snap.plan.steps.map(\.name) }
+        stepIndex = min(max(snap.stepIndex, 0), steps.count - 1)
+        done = Set(snap.done)
+        excluded = snap.excluded
+        redo = snap.redo
+        notes = snap.notes
+        timers = snap.timers
+        cards = snap.cards
+        wellSource = snap.stamps.mapValues(\.source)
+        wellTime = snap.stamps.mapValues { Date(timeIntervalSince1970: $0.ts) }
     }
 
     /// Per-group usable-done counts: done wells minus excluded ones, vs required n.
@@ -267,139 +249,46 @@ final class LabState {
         }
     }
 
-    /// Applies immediately, or queues when the action needs confirmation. Returns log messages.
-    func enqueue(_ actions: [Action]) -> [String] {
-        var out: [String] = []
-        for a in actions {
-            if case .markDone(let wells) = a, !unplanned(wells).isEmpty {
-                let bad = unplanned(wells)
-                let q = bad.count == 1
-                    ? "\(bad[0]) is not in the step \(stepIndex + 1) plan. Record it anyway?"
-                    : "\(bad.joined(separator: ", ")) are not in the step \(stepIndex + 1) plan. Record them anyway?"
-                pending.append(PendingItem(action: a, question: q, detail: nil, fromCatch: true))
-            } else if a.needsConfirm {
-                pending.append(PendingItem(action: a, question: a.question ?? "", detail: a.detail, fromCatch: false))
-            } else {
-                out.append(apply(a))
-            }
-        }
-        return out
+    func groupOf(_ well: String) -> String? {
+        groups.first { $0.value.wells.contains(well) }?.key
     }
 
-    /// Wells missing from the current step's plan. Decided here in Swift, never by the model.
-    func unplanned(_ wells: [String]) -> [String] {
+    var currentTip: String? {
+        guard !planSteps.isEmpty, stepIndex < planSteps.count else { return nil }
+        return planSteps[stepIndex].tip
+    }
+
+    var currentRange: String? {
+        guard !planSteps.isEmpty, stepIndex < planSteps.count else { return nil }
+        return wellRangeLabel(planSteps[stepIndex].wells)
+    }
+
+    var currentPlanned: Set<String> {
         guard !planSteps.isEmpty, stepIndex < planSteps.count else { return [] }
-        let planned = Set(planSteps[stepIndex].wells)
-        return wells.filter { !planned.contains($0) }
+        return Set(planSteps[stepIndex].wells)
     }
 
-    /// Answers the first pending card. Returns the result message, or nil when declined.
-    func confirmFirst(_ ok: Bool) -> String? {
-        guard !pending.isEmpty else { return nil }
-        let first = pending.removeFirst()
-        return ok ? apply(first.action) : nil
+    func hasNote(_ well: String) -> Bool {
+        notes.contains { $0.target == well }
     }
 
-    func apply(_ action: Action) -> String {
-        switch action {
-        case .markDone(let wells):
-            done.formUnion(wells)
-            return "✓ \(wells.joined(separator: ", ")) done"
-        case .excludeWell(let well, let reason):
-            excluded[well] = reason ?? ""
-            return reason.map { "\(well) excluded (\(trimmed($0, 40)))" } ?? "\(well) excluded"
-        case .recordRedo(let wells, let note):
-            for w in wells { redo[w] = note ?? "" }
-            return note.map { "\(wells.joined(separator: ", ")) marked for redo (\(trimmed($0, 40)))" }
-                ?? "\(wells.joined(separator: ", ")) marked for redo"
-        case .addNote(let target, let text):
-            notes.append((target, text))
-            return "Note saved (\(target))"
-        case .saveTip(let step, let text):
-            tips.append((step, text))
-            return "Tip saved (\(step))"
-        case .setTimer(_, let minutes, let onDone):
-            let finalLabel = answerTarget ?? steps[stepIndex]
-            timers.append((finalLabel, minutes, onDone))
-            return "Timer started: \(finalLabel), \(fmtMinutes(minutes)) min"
-        case .manageTimers(let action, let label):
-            return manageTimers(action: action, label: label)
-        case .whereAmI:
-            return "Step \(stepIndex + 1) of \(steps.count), \(steps[stepIndex]). \(done.count) wells done."
-        case .nextStep:
-            if stepIndex >= steps.count - 1 { return "Already at the last step" }
-            stepIndex += 1
-            return "Next: \(steps[stepIndex])"
-        case .show(let view, let target):
-            lastShown = target.map { "\(view) \($0)" } ?? view
-            return "Viewing: \(lastShown)"
+    func memos(for well: String) -> [Memo] {
+        notes.filter { $0.target == well }
+    }
+
+    /// Timers still shown: active ones plus done ones younger than a minute.
+    func visibleTimers(now: Date) -> [TimerEntry] {
+        timers.filter { now.timeIntervalSince($0.started) < $0.minutes * 60 + 60 }
+    }
+
+    func flash(_ wells: Set<String>) {
+        flashing = wells
+        flashGen += 1
+        let g = flashGen
+        // Fires on the caller's (main) runloop; newer flashes win via the generation.
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+            guard let self, self.flashGen == g else { return }
+            self.flashing = []
         }
-    }
-
-    private func manageTimers(action: String, label: String?) -> String {
-        switch action.lowercased() {
-        case "list":
-            return timers.isEmpty ? "No running timers"
-                : "Timers: " + timers.map { "\($0.label) \(fmtMinutes($0.minutes)) min" }.joined(separator: ", ")
-        case "cancel":
-            guard let label else { return "Which timer should I cancel?" }
-            let before = timers.count
-            timers.removeAll { $0.label == label }
-            return timers.count < before ? "Timer canceled: \(label)" : "No such timer: \(label)"
-        case "extend":
-            guard let label else { return "Which timer should I extend?" }
-            guard let i = timers.firstIndex(where: { $0.label == label }) else { return "No such timer: \(label)" }
-            timers[i].minutes += 5
-            return "+5 min: \(label) (\(fmtMinutes(timers[i].minutes)) min)"
-        default: return "Unknown timer action: \(action)"
-        }
-    }
-
-    private func trimmed(_ s: String, _ n: Int) -> String {
-        s.count > n ? String(s.prefix(n)) + "…" : s
-    }
-}
-
-// MARK: - Local text rules
-
-extension Action {
-    /// Short in-app rules. Returns nil when the text should go to /orchestrate.
-    static func rule(_ text: String) -> Action? {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let low = t.lowercased()
-        if low.contains("next") { return .nextStep }
-        if low.contains("where") { return .whereAmI }
-        if low.contains("show") || low.contains("plate") {
-            return .show(view: "plate", target: findWells(in: t).first)
-        }
-        if low.contains("timer"), let m = findMinutes(in: t) {
-            return .setTimer(label: "Timer", minutes: m, onDone: nil)
-        }
-        let wells = findWells(in: t)
-        if !wells.isEmpty {
-            if low.contains("exclude") { return .excludeWell(well: wells[0], reason: nil) }
-            if low.contains("redo") { return .recordRedo(wells: wells, note: nil) }
-            if low.contains("done") { return .markDone(wells: wells) }
-        }
-        return nil
-    }
-
-    private static func findWells(in text: String) -> [String] {
-        guard let re = try? NSRegularExpression(pattern: "(?i)\\b([A-H])(1[0-2]|[1-9])\\b") else { return [] }
-        let range = NSRange(text.startIndex..., in: text)
-        var out: [String] = []
-        for m in re.matches(in: text, range: range) {
-            let w = String(text[Range(m.range, in: text)!]).uppercased()
-            if !out.contains(w) { out.append(w) }
-        }
-        return out
-    }
-
-    private static func findMinutes(in text: String) -> Double? {
-        guard let re = try? NSRegularExpression(pattern: "(\\d+(?:\\.\\d+)?)\\s*min") else { return nil }
-        let range = NSRange(text.startIndex..., in: text)
-        guard let m = re.matches(in: text, range: range).first,
-              let r = Range(m.range(at: 1), in: text) else { return nil }
-        return Double(text[r])
     }
 }
