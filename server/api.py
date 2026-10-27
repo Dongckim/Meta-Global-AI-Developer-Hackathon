@@ -34,11 +34,14 @@ from server.grammar import (
     needs_minutes_ask,
     normalize_text,
     relevant_plan_numbers,
+    speak_text,
     split_ask,
     timer_set_reply,
     wells_label,
 )
 from server.memory import Memory, SparkChainMemory, SummaryMemory
+from server.screens import IDS as SCREEN_IDS
+from server.screens import canonical as canonical_screen
 from server.store import RecordStore, is_well
 
 import httpx
@@ -191,6 +194,18 @@ TOOLS = [
         "Answer a question. Short text only.",
         {"text": {"type": "string"}},
     ),
+    _tool(
+        "navigate",
+        "Go to a screen.",
+        {"screen": {"type": "string", "enum": SCREEN_IDS,
+                    "description": "Screen id from the registry"}},
+    ),
+    _tool(
+        "open",
+        "Open a well card, or a screen by name.",
+        {"target": {"type": "string", "description": "Well id or screen name"}},
+    ),
+    _tool("back", "Go back to the previous screen.", {}),
 ]
 if WEB_SEARCH_ENABLED:
     TOOLS.append({"type": "web_search", "search_context_size": "low"})
@@ -255,6 +270,9 @@ class OrchestrateIn(BaseModel):
     text: str = Field(min_length=1)
     state: dict = {}
     session: str = "bench"
+    screen: str = "main"
+    selected_well: str = ""
+    open_sheet: str = ""
 
 
 class ConfirmIn(BaseModel):
@@ -491,6 +509,8 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             res["messages"] += res2["messages"]
             res["cards"] += res2["cards"]
             res["outcomes"] += res2["outcomes"]
+            res["ui"] += res2["ui"]
+            res["info"]["ui"] = res["ui"]
             res["info"]["dropped"] += res2["info"]["dropped"]
             res["info"]["drop_reasons"] += res2["info"]["drop_reasons"]
             for k in ("saved_memo", "edited", "robot"):
@@ -534,7 +554,7 @@ async def _lookup_round(client, key, norm, session, source, text, plan_numbers, 
     ordered2 = [c.get("call_id") for c in rc]
     rc, question2, outcomes2, gdrop2, _ = _validate(rc, norm, 2, plan_numbers, memo_numbers)
     _set_ask_pending(session, question2, [])
-    res2: dict = {"messages": [], "cards": [], "outcomes": [],
+    res2: dict = {"messages": [], "cards": [], "outcomes": [], "ui": [],
                   "info": {"dropped": 0, "drop_reasons": []}}
     if rc:
         res2 = store.apply_calls(rc, source, text, "spark", session)
@@ -728,20 +748,31 @@ def _utterance_response(calls, messages, reply, ms, route, cards, info, sources,
         "record_version": version,
         "sources": sources,
     }
-    for k in ("saved_memo", "edited", "robot"):
+    for k in ("saved_memo", "edited", "robot", "ui"):
         if info.get(k):
             out[k] = info[k]
     if info.get("dropped"):
         out["dropped"] = info["dropped"]
+    speak = speak_text(cards[0]["question"] if cards else reply)
+    if speak:
+        out["speak"] = speak
     if extra:
         out.update(extra)
     return out
+
+
+def set_screen(session: dict, screen: str, selected_well: str = "", open_sheet: str = ""):
+    """App-reported screen, validated against the registry. Unknown -> main."""
+    session["screen"] = canonical_screen(screen) or "main"
+    session["selected_well"] = selected_well or ""
+    session["open_sheet"] = open_sheet or ""
 
 
 @app.post("/orchestrate")
 async def orchestrate(body: OrchestrateIn):
     key = _key()
     session = get_session(body.session)
+    set_screen(session, body.screen, body.selected_well, body.open_sheet)
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         out = await run_utterance(client, key, body.text, session, "spark")
     calls, messages, reply, ms, route, cards, info, sources = out
@@ -751,7 +782,9 @@ async def orchestrate(body: OrchestrateIn):
 
 
 @app.post("/voice")
-async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session: str = Form("bench")):
+async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session: str = Form("bench"),
+                screen: str = Form("main"), selected_well: str = Form(""),
+                open_sheet: str = Form("")):
     try:
         state_obj = json.loads(state)
     except json.JSONDecodeError:
@@ -778,6 +811,7 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session:
     }
     total0 = time.perf_counter()
     sess = get_session(session)
+    set_screen(sess, screen, selected_well, open_sheet)
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         t0 = time.perf_counter()
         resp = await _post(

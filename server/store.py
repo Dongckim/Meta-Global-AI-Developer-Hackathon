@@ -18,10 +18,12 @@ from server.grammar import (
     find_durations,
     join_wells_ranges,
     parse_wells,
+    speak_text,
     verbatim_span,
     wells_label,
     where_am_i_reply,
 )
+from server.screens import SCREENS, canonical, parent_of, title_of
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 RECORD_PATH = DATA_DIR / "record.json"
@@ -356,6 +358,10 @@ class RecordStore:
             "excluded": join_wells_ranges(self.r["excluded"]),
             "timers": timers,
             "recent": self.r["recent"][-5:],
+            "current_screen": session.get("screen", "main"),
+            "selected_well": session.get("selected_well", ""),
+            "open_sheet": session.get("open_sheet", ""),
+            "pending_cards": len(self.r["cards"]),
         }
         if session.get("pending"):
             st["pending_question"] = session["pending"]
@@ -405,7 +411,7 @@ class RecordStore:
 
     def _apply_calls_locked(self, calls, source: str, origin: str, route: str, session: dict) -> dict:
         res: dict = {"messages": [], "cards": [], "info": {"dropped": 0, "drop_reasons": []},
-                     "outcomes": []}
+                     "outcomes": [], "ui": []}
         for c in calls:
             m0, c0 = len(res["messages"]), len(res["cards"])
             self._apply_call(c, source, origin, route, session, res, force=False)
@@ -414,7 +420,10 @@ class RecordStore:
             res["outcomes"].append({"messages": res["messages"][m0:], "cards": res["cards"][c0:]})
         if calls:
             self.record_recent(route, calls)
+        res["info"]["ui"] = res["ui"]
         self._commit()
+        for a in res["ui"]:
+            self._broadcast({"kind": "ui", **a})
         return res
 
     def _apply_call(self, call, source, origin, route, session, res, force: bool):
@@ -585,6 +594,42 @@ class RecordStore:
         elif name == "show":
             view = args.get("view", "?")
             res["messages"].append(f"Viewing: {view} {args.get('target')}" if args.get("target") else f"Viewing: {view}")
+        elif name == "navigate":
+            raw = args.get("screen")
+            screen = canonical(raw) if isinstance(raw, str) else None
+            if screen is None:
+                res["messages"].append(
+                    "I couldn't open that: no screen given."
+                    if not isinstance(raw, str) or not raw.strip()
+                    else f"I couldn't open the {raw.strip()} screen: no such screen.")
+                return
+            res["ui"].append({"action": "navigate", "screen": screen})
+            res["messages"].append(f"Showing {title_of(screen)}.")
+        elif name == "open":
+            raw = args.get("target")
+            t = raw.strip() if isinstance(raw, str) else ""
+            if t and is_well(t):
+                res["ui"].append({"action": "open", "target": t.upper(), "sheet": "well_card"})
+                res["messages"].append(f"Opened {t.upper()}.")
+                return
+            screen = canonical(t)
+            if screen is not None:
+                res["ui"].append({"action": "navigate", "screen": screen})
+                res["messages"].append(f"Showing {title_of(screen)}.")
+                return
+            res["messages"].append(
+                "I couldn't open that: no target given." if not t
+                else f"I couldn't open {t}: not a plate well or screen.")
+        elif name == "back":
+            here = session.get("screen", "main")
+            if here not in SCREENS:
+                here = "main"
+            parent = parent_of(here)
+            if parent == here:
+                res["messages"].append("Already on the main screen.")
+                return
+            res["ui"].append({"action": "back", "screen": parent})
+            res["messages"].append(f"Back to {title_of(parent)}.")
         elif name == "make_robot":
             res["messages"].append("Building robot protocol…")
             res["info"]["robot"] = True
@@ -811,10 +856,14 @@ class RecordStore:
             end = t["started_at"] + t["minutes"] * 60
             if not t["warned"] and t["minutes"] * 60 > 300 and now >= end - 300:
                 t["warned"] = True
-                events.append({"kind": "timer_warning", "label": t["label"], "minutes_left": 5})
+                msg = f"{t['label']}: 5 minutes left"
+                events.append({"kind": "timer_warning", "label": t["label"], "minutes_left": 5,
+                               "message": msg, "speak": speak_text(msg)})
             if not t["notified"] and now >= end:
                 t["notified"] = True
-                events.append({"kind": "timer_done", "label": t["label"], "message": timer_done_message(t)})
+                msg = timer_done_message(t)
+                events.append({"kind": "timer_done", "label": t["label"], "message": msg,
+                               "speak": speak_text(msg)})
                 newly_done.append(t)
         if newly_done:
             self._suggest_next_locked(newly_done, now)

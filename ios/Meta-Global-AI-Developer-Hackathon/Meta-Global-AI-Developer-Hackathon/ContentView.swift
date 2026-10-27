@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 struct DebugRun {
@@ -41,6 +42,15 @@ struct ContentView: View {
     @State private var memoFlash: SavedMemo?
     @State private var memoGen = 0
     @State private var robotState = RobotState.idle
+    @State private var ttsOn = SpeechBus.shared.enabled
+    @State private var routeLine = ""
+    private let screens = loadScreens()
+
+    /// Screen the server reasons about. One sheet at a time; robot wins.
+    private var currentScreen: String {
+        if case .idle = robotState {} else { return "robot_preview" }
+        return selectedWell == nil ? "main" : "well_card"
+    }
 
     var body: some View {
         GeometryReader { g in
@@ -58,6 +68,7 @@ struct ContentView: View {
                     TimerList(lab: lab)
                     MemoList(lab: lab) { selectedWell = WellSelect(id: $0) }
                     logSection.frame(maxHeight: .infinity)
+                    hintsBar
                     inputBar
                 }
                 .frame(width: inner - left - 12)
@@ -72,7 +83,10 @@ struct ContentView: View {
                     .allowsHitTesting(false)
             }
         }
-        .onAppear { connect() }
+        .onAppear { connect(); refreshRoute() }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
+            refreshRoute()
+        }
     }
 
     private var robotSheet: Binding<Bool> {
@@ -154,6 +168,9 @@ struct ContentView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
+            if showDebug {
+                Text(routeLine).font(.caption2).foregroundStyle(.secondary)
+            }
             if showDebug, let d = debug {
                 debugPanel(d)
             } else if showDebug {
@@ -224,8 +241,23 @@ struct ContentView: View {
         .padding(.top, 12)
     }
 
+    private var hintsBar: some View {
+        let cmds = screens.first { $0.id == currentScreen }?.commands.prefix(3) ?? []
+        return Text("Try saying: " + cmds.joined(separator: " · "))
+            .font(.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var inputBar: some View {
         HStack(spacing: 8) {
+            Button {
+                ttsOn.toggle()
+                SpeechBus.shared.enabled = ttsOn
+                if !ttsOn { SpeechBus.shared.stop() }
+            } label: {
+                Image(systemName: ttsOn ? "speaker.wave.2.fill" : "speaker.slash.fill")
+            }
+            .buttonStyle(.bordered).controlSize(.small)
             TextField("Type a command", text: $input)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { submit() }
@@ -293,12 +325,70 @@ struct ContentView: View {
         switch ev {
         case .snapshot(let snap):
             lab.sync(snap)
-        case .timerWarning(let label):
-            say("⏰ \(label): 5 minutes left")
-        case .timerDone(let message):
+        case .timerWarning(let message, let speak):
+            say(message)
+            sayAloud(speak)
+        case .timerDone(let message, let speak):
             lastReply = message
             say("Pip: \(message)")
+            sayAloud(speak)
+        case .ui(let act):
+            _ = applyUI(act)
         }
+    }
+
+    private func refreshRoute() {
+        let session = AVAudioSession.sharedInstance()
+        let ins = session.currentRoute.inputs.map(\.portName).joined(separator: ", ")
+        let outs = session.currentRoute.outputs.map(\.portName).joined(separator: ", ")
+        routeLine = "in: \(ins.isEmpty ? "-" : ins) · out: \(outs.isEmpty ? "-" : outs)"
+    }
+
+    /// Speaks unless recording. Card questions arrive pre-selected by the server.
+    private func sayAloud(_ text: String?) {
+        guard !recording else { return }
+        SpeechBus.shared.speak(text)
+    }
+
+    /// Applies one server ui action. False when the app could not do it: says
+    /// so on the spot, in the log, the Pip slot, and aloud.
+    @discardableResult
+    private func applyUI(_ a: UIAction) -> Bool {
+        switch a.action {
+        case "navigate":
+            switch a.screen {
+            case "robot_preview":
+                selectedWell = nil
+                if case .idle = robotState { runRobot() }
+                return true
+            case "main":
+                selectedWell = nil
+                robotState = .idle
+                return true
+            case "well_card":
+                return true // nothing to move without a target; open carries one
+            default:
+                return uiFail("I couldn't open the \(a.screen ?? "?") screen.")
+            }
+        case "open":
+            guard let t = a.target, !t.isEmpty else { return uiFail("I couldn't open that.") }
+            robotState = .idle
+            selectedWell = WellSelect(id: t)
+            return true
+        case "back":
+            selectedWell = nil
+            robotState = .idle
+            return true
+        default:
+            return uiFail("I couldn't do that.")
+        }
+    }
+
+    private func uiFail(_ text: String) -> Bool {
+        lastReply = text
+        say(text)
+        sayAloud(text)
+        return false
     }
 
     private func say(_ s: String) {
@@ -369,16 +459,20 @@ struct ContentView: View {
         busy = true
         defer { busy = false }
         do {
-            let r = try await PipClient.orchestrate(text: text)
+            let r = try await PipClient.orchestrate(text: text, screen: currentScreen,
+                                                    selectedWell: selectedWell?.id ?? "",
+                                                    openSheet: selectedWell == nil ? "" : "well_card")
             handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
                    route: r.route, input: text, sources: r.sources,
-                   savedMemo: r.saved_memo, robot: r.robot == true, dropped: r.dropped ?? 0)
+                   savedMemo: r.saved_memo, robot: r.robot == true, dropped: r.dropped ?? 0,
+                   ui: r.ui, speak: r.speak)
         } catch {
             say("Error: \(error.localizedDescription)")
         }
     }
 
     private func startHold() {
+        SpeechBus.shared.stop()
         pressing = true
         guard !recording, !busy else { return }
         Task {
@@ -422,7 +516,9 @@ struct ContentView: View {
                 return
             }
             guard loud >= 0.001 else { say("No sound reached the mic — on the simulator, check the Mac mic permission and input"); return }
-            let r = try await PipClient.voice(wav: data)
+            let r = try await PipClient.voice(wav: data, screen: currentScreen,
+                                              selectedWell: selectedWell?.id ?? "",
+                                              openSheet: selectedWell == nil ? "" : "well_card")
             say("🎙 \(r.transcript)")
             if !lab.cards.isEmpty, isYesToAll(r.transcript) {
                 answerAll()
@@ -434,7 +530,8 @@ struct ContentView: View {
             }
             handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
                    route: r.route, input: r.transcript, sources: r.sources,
-                   savedMemo: r.saved_memo, robot: r.robot == true, dropped: r.dropped ?? 0)
+                   savedMemo: r.saved_memo, robot: r.robot == true, dropped: r.dropped ?? 0,
+                   ui: r.ui, speak: r.speak)
         } catch {
             say("Error: \(error.localizedDescription)")
         }
@@ -442,12 +539,15 @@ struct ContentView: View {
 
     private func handle(calls: [ToolCall], messages: [String], reply: String, ms: [String: Int],
                         route: String?, input: String, sources: [Source],
-                        savedMemo: SavedMemo?, robot: Bool, dropped: Int) {
+                        savedMemo: SavedMemo?, robot: Bool, dropped: Int,
+                        ui: [UIAction]?, speak: String?) {
         for msg in messages { say(msg) }
         if !reply.isEmpty {
             lastReply = reply
             say("Pip: \(reply)")
         }
+        let uiOk = (ui ?? []).allSatisfy { applyUI($0) }
+        if uiOk { sayAloud(speak) }
         if let show = calls.first(where: { $0.name == "show" }) {
             lab.lastShown = "plate \(show.args["target"]?.string ?? "")"
             lab.flash(parseShowTarget(show.args["target"]?.string))

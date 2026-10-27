@@ -24,6 +24,13 @@ struct Source: Decodable {
     let url: String
 }
 
+struct UIAction: Decodable {
+    let action: String
+    let screen: String?
+    let target: String?
+    let sheet: String?
+}
+
 struct OrchestrateResponse: Decodable {
     let tool_calls: [ToolCall]
     let messages: [String]
@@ -36,6 +43,8 @@ struct OrchestrateResponse: Decodable {
     let saved_memo: SavedMemo?
     let robot: Bool?
     let dropped: Int?
+    let ui: [UIAction]?
+    let speak: String?
 }
 
 struct VoiceResponse: Decodable {
@@ -51,6 +60,8 @@ struct VoiceResponse: Decodable {
     let saved_memo: SavedMemo?
     let robot: Bool?
     let dropped: Int?
+    let ui: [UIAction]?
+    let speak: String?
 }
 
 struct ConfirmResponse: Decodable {
@@ -93,8 +104,9 @@ struct RobotResponse: Decodable {
 
 enum SSEvent {
     case snapshot(RecordSnapshot)
-    case timerWarning(label: String)
-    case timerDone(message: String)
+    case timerWarning(message: String, speak: String?)
+    case timerDone(message: String, speak: String?)
+    case ui(UIAction)
 }
 
 enum PipError: Error, LocalizedError {
@@ -107,25 +119,39 @@ enum PipError: Error, LocalizedError {
 }
 
 enum PipClient {
-    static func orchestrate(text: String) async throws -> OrchestrateResponse {
+    static func orchestrate(text: String, screen: String = "main",
+                            selectedWell: String = "", openSheet: String = "") async throws -> OrchestrateResponse {
         var req = URLRequest(url: Config.baseURL.appending(path: "orchestrate"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "text": text, "screen": screen,
+            "selected_well": selectedWell, "open_sheet": openSheet,
+        ])
         let (data, resp) = try await URLSession.shared.data(for: req)
         try check(resp, data)
         return try JSONDecoder().decode(OrchestrateResponse.self, from: data)
     }
 
-    static func voice(wav: Data) async throws -> VoiceResponse {
+    static func voice(wav: Data, screen: String = "main",
+                      selectedWell: String = "", openSheet: String = "") async throws -> VoiceResponse {
         let boundary = "----pip\(UUID().uuidString)"
         var body = Data()
         func append(_ s: String) { body.append(Data(s.utf8)) }
+        func field(_ name: String, _ value: String) {
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n")
+            append("\(value)\r\n")
+        }
         append("--\(boundary)\r\n")
         append("Content-Disposition: form-data; name=\"audio\"; filename=\"clip.wav\"\r\n")
         append("Content-Type: audio/wav\r\n\r\n")
         body.append(wav)
-        append("\r\n--\(boundary)--\r\n")
+        append("\r\n")
+        field("screen", screen)
+        field("selected_well", selectedWell)
+        field("open_sheet", openSheet)
+        append("--\(boundary)--\r\n")
 
         var req = URLRequest(url: Config.baseURL.appending(path: "voice"))
         req.httpMethod = "POST"
@@ -181,9 +207,16 @@ enum PipClient {
                             cont.yield(.snapshot(snap))
                         }
                     case "timer_warning":
-                        if let label = obj["label"]?.string { cont.yield(.timerWarning(label: label)) }
+                        let msg = obj["message"]?.string ?? "⏰ \(obj["label"]?.string ?? "timer"): 5 minutes left"
+                        cont.yield(.timerWarning(message: msg, speak: obj["speak"]?.string))
                     case "timer_done":
-                        if let msg = obj["message"]?.string { cont.yield(.timerDone(message: msg)) }
+                        if let msg = obj["message"]?.string {
+                            cont.yield(.timerDone(message: msg, speak: obj["speak"]?.string))
+                        }
+                    case "ui":
+                        if let act = try? JSONDecoder().decode(UIAction.self, from: payload) {
+                            cont.yield(.ui(act))
+                        }
                     default: break
                     }
                 }

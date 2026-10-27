@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re
 
+from server.screens import canonical, title_of
+
 # Well letters/digits by sound. Only applied AT well positions, never inside free text.
 LETTER_SOUND = {"see": "C", "sea": "C", "she": "C", "bee": "B", "dee": "D"}
 NUMBER_SOUND = {
@@ -228,6 +230,24 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
             n = int(minutes) if float(minutes).is_integer() else minutes
             who = timer_who(label)
             return [{"name": "manage_timers", "args": args}], f"Extending {who} by {n} minutes."
+    if re.fullmatch(r"\s*back[?!]?\s*", low):
+        return [{"name": "back", "args": {}}], "Back."
+    m = re.fullmatch(r"\s*show\s+([a-h]\d{1,2})[?!]?\s*", low)
+    if m:
+        wells = expand_range(m.group(1).upper())
+        if wells is None:
+            return None
+        return [{"name": "show", "args": {"view": "plate", "target": wells[0]}}], f"Showing {wells[0]}."
+    m = re.fullmatch(r"\s*open\s+(?:the\s+)?(.+?)[?!]?\s*", low)
+    if m:
+        wm = re.fullmatch(r"([a-h]\d{1,2})", m.group(1).strip())
+        if wm:
+            wells = expand_range(wm.group(1).upper())
+            if wells is not None:
+                return [{"name": "open", "args": {"target": wells[0]}}], f"Opening {wells[0]}."
+        sid = canonical(text[m.start(1):m.end(1)].strip(" \t.,!?;:"))
+        if sid is not None:
+            return [{"name": "navigate", "args": {"screen": sid}}], f"Opening {title_of(sid)}."
     return None
 
 
@@ -557,6 +577,29 @@ def strip_fillers(s: str) -> str:
         if n == t:
             return n
         t = n
+
+
+_WELL_SAY_RANGE = re.compile(r"\b([A-H])(\d{1,2})\s*[–—-]\s*([A-H])(\d{1,2})\b")
+_WELL_SAY_ONE = re.compile(r"\b([A-H])(\d{1,2})\b")
+_SPEAK_STRIP = "✓⏰💡↻●○"
+
+
+def spell_wells(text: str) -> str:
+    """Wells for speech: C3 -> 'C 3', C2–C8 -> 'C 2 to C 8'."""
+    s = _WELL_SAY_RANGE.sub(lambda m: f"{m.group(1)} {m.group(2)} to {m.group(3)} {m.group(4)}", text or "")
+    return _WELL_SAY_ONE.sub(lambda m: f"{m.group(1)} {m.group(2)}", s)
+
+
+def speak_text(text: str, limit: int = 140) -> str:
+    """Short spoken form: spelled wells, no glyphs, word-cut at limit."""
+    s = spell_wells(text or "")
+    s = s.translate({ord(c): None for c in _SPEAK_STRIP}).replace("·", ",")
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"\s+,", ",", s).strip(" ,")
+    if len(s) <= limit:
+        return s
+    cut = s[:limit].rsplit(" ", 1)[0]
+    return cut or s[:limit]
 
 
 def verbatim_span(transcript: str, body: str) -> str:

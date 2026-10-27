@@ -292,3 +292,24 @@ final class LabState {
         }
     }
 }
+
+struct ScreenDef: Decodable {
+    var id: String
+    var commands: [String]
+}
+
+/// Screen registry shared with the server (same screens.json). Falls back to
+/// the built-in three when the bundle copy is missing or undecodable.
+func loadScreens() -> [ScreenDef] {
+    if let url = Bundle.main.url(forResource: "screens", withExtension: "json"),
+       let data = try? Data(contentsOf: url),
+       let obj = try? JSONDecoder().decode([String: [ScreenDef]].self, from: data),
+       let list = obj["screens"], !list.isEmpty {
+        return list
+    }
+    return [
+        ScreenDef(id: "main", commands: ["mark C2 done", "start a 5 minute timer", "show C5"]),
+        ScreenDef(id: "well_card", commands: ["note bubbles", "exclude this well", "back"]),
+        ScreenDef(id: "robot_preview", commands: ["make the robot protocol", "back"]),
+    ]
+}

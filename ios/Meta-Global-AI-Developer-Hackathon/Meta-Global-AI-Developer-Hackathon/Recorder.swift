@@ -19,7 +19,8 @@ final class Recorder {
     func start() throws {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default)
+        try session.setCategory(.playAndRecord, mode: .default,
+                                    options: [.allowBluetooth, .allowBluetoothA2DP])
         try session.setActive(true)
         #endif
         let engine = AVAudioEngine()

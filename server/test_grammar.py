@@ -25,6 +25,8 @@ from server.grammar import (
     normalize_text,
     parse_wells,
     relevant_plan_numbers,
+    speak_text,
+    spell_wells,
     split_ask,
     strip_fillers,
     timer_set_reply,
@@ -571,6 +573,42 @@ class PipLineTests(unittest.TestCase):
     def test_failures_detected(self):
         self.assertTrue(is_failure_message("Which timer should I cancel? Running: x."))
         self.assertFalse(is_failure_message("✓ C2 done"))
+
+
+class UIGrammarTests(unittest.TestCase):
+    def test_back(self):
+        calls, _ = match_grammar(normalize_text("back"), ST)
+        self.assertEqual(calls, [{"name": "back", "args": {}}])
+        self.assertIsNone(match_grammar(normalize_text("backup well"), ST))
+
+    def test_show_well(self):
+        calls, _ = match_grammar(normalize_text("show C5"), ST)
+        self.assertEqual(calls, [{"name": "show", "args": {"view": "plate", "target": "C5"}}])
+        self.assertIsNone(match_grammar(normalize_text("show C5 and open it"), ST))
+
+    def test_open_well_first(self):
+        calls, _ = match_grammar(normalize_text("open C5"), ST)
+        self.assertEqual(calls, [{"name": "open", "args": {"target": "C5"}}])
+
+    def test_open_screen_alias(self):
+        calls, _ = match_grammar(normalize_text("open the robot preview"), ST)
+        self.assertEqual(calls, [{"name": "navigate", "args": {"screen": "robot_preview"}}])
+        calls, _ = match_grammar(normalize_text("open main"), ST)
+        self.assertEqual(calls, [{"name": "navigate", "args": {"screen": "main"}}])
+        self.assertIsNone(match_grammar(normalize_text("open the pod bay"), ST))
+
+
+class SpeakTests(unittest.TestCase):
+    def test_spell_wells(self):
+        self.assertEqual(spell_wells("C3"), "C 3")
+        self.assertEqual(spell_wells("C2–C8"), "C 2 to C 8")
+        self.assertEqual(spell_wells("Timer for C2, C3 done"), "Timer for C 2, C 3 done")
+
+    def test_speak_text(self):
+        self.assertEqual(speak_text("✓ C2, C3 done"), "C 2, C 3 done")
+        self.assertEqual(speak_text("drug A · C2–C8 · 30 min"), "drug A, C 2 to C 8, 30 min")
+        self.assertTrue(len(speak_text("x" * 200)) <= 140)
+        self.assertEqual(speak_text(""), "")
 
 
 if __name__ == "__main__":

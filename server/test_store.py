@@ -286,6 +286,45 @@ class StoreTest(unittest.TestCase):
         for t in tools:
             self.assertNotIn(t, seen)
 
+    def test_navigate_open_back(self):
+        r = self.apply([T("navigate", screen="robot_preview")])
+        self.assertEqual(r["messages"], ["Showing Robot preview."])
+        self.assertEqual(r["ui"], [{"action": "navigate", "screen": "robot_preview"}])
+        self.sess["screen"] = "well_card"
+        r = self.apply([T("open", target="C5")])
+        self.assertEqual(r["messages"], ["Opened C5."])
+        self.assertEqual(r["ui"], [{"action": "open", "target": "C5", "sheet": "well_card"}])
+        r = self.apply([T("back")])
+        self.assertEqual(r["messages"], ["Back to Bench."])
+        self.assertEqual(r["ui"], [{"action": "back", "screen": "main"}])
+
+    def test_ui_failures(self):
+        r = self.apply([T("navigate", screen="pod bay")])
+        self.assertEqual(r["messages"], ["I couldn't open the pod bay screen: no such screen."])
+        self.assertEqual(r["ui"], [])
+        r = self.apply([T("open", target="Z9")])
+        self.assertEqual(r["messages"], ["I couldn't open Z9: not a plate well or screen."])
+        r = self.apply([T("open")])
+        self.assertEqual(r["messages"], ["I couldn't open that: no target given."])
+        r = self.apply([T("back")])
+        self.assertEqual(r["messages"], ["Already on the main screen."])
+        self.assertEqual(r["ui"], [])
+
+    def test_model_calls_never_resolve_cards(self):
+        r = self.apply([T("exclude_well", well="C3")])
+        before = set(self.s.r["cards"])
+        self.assertTrue(before)
+        self.apply([
+            T("mark_done", wells=["C2"]), T("exclude_well", well="C4"),
+            T("record_redo", wells=["C9"]), T("add_note", target="C2", text="x"),
+            T("save_tip", step_id="s", text="x"), T("set_timer", label="x", minutes=1),
+            T("manage_timers", action="list"), T("where_am_i"), T("next_step"),
+            T("show", view="plate"), T("make_robot"), T("get_well", well="C2"),
+            T("find_free_wells", near="C2"), T("answer", text="x"),
+            T("navigate", screen="main"), T("open", target="C5"), T("back"),
+        ], origin="x")
+        self.assertTrue(before <= set(self.s.r["cards"]))
+
     def test_propose_plan_is_unknown_now(self):
         r = self.apply([T("propose_plan", steps=[{"label": "x", "calls": []}])])
         d = r["info"]["drop_reasons"][0]
