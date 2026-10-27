@@ -15,6 +15,7 @@ import time
 import uuid
 import wave
 from io import BytesIO
+from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
@@ -191,10 +192,12 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}")):
     try:
         with wave.open(BytesIO(raw), "rb") as w:
             wav_ok = w.getnchannels() == 1 and w.getsampwidth() == 2 and w.getframerate() in (16000, 24000)
-    except (wave.Error, EOFError):
+            dur = w.getnframes() / w.getframerate()
+    except (wave.Error, EOFError, ZeroDivisionError):
         wav_ok = False
     if not wav_ok:
         raise HTTPException(400, "audio must be mono 16-bit PCM WAV at 16kHz or 24kHz")
+    Path("/tmp/last.wav").write_bytes(raw)
     key = _key()
     asr_req = {
         "mode": "PUSH_TO_TALK",  # single-turn voice command; the API default
@@ -220,6 +223,14 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}")):
         asr_ms = int((time.perf_counter() - t0) * 1000)
         _check("asr", resp)
         transcript = resp.json().get("transcript", "")
+        print(f'voice dur={dur:.2f}s transcript="{transcript}"', flush=True)
+        if not transcript.strip():
+            return {
+                "transcript": "",
+                "tool_calls": [],
+                "reply": "못 들었어요. 다시 말해 주세요.",
+                "ms": {"asr": asr_ms, "spark": 0, "total": int((time.perf_counter() - total0) * 1000)},
+            }
         calls, reply, spark_ms = await _call_spark(client, key, transcript, state_obj)
     return {
         "transcript": transcript,

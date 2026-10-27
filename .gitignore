@@ -9,3 +9,4 @@ clips/
 xcuserdata/
 DerivedData/
 .DS_Store
+Secrets.xcconfig
