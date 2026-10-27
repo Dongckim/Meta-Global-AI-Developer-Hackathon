@@ -38,7 +38,7 @@ from server.grammar import (
     timer_set_reply,
     wells_label,
 )
-from server.memory import Memory, SparkChainMemory
+from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.store import RecordStore, is_well
 
 import httpx
@@ -63,6 +63,9 @@ WEB_SEARCH_ENABLED = os.environ.get("WEB_SEARCH_ENABLED", "false").lower() == "t
 CACHE_KEY = "pip-bench-spark"
 CACHE_KEY_SEARCH = "pip-bench-spark-search"
 CACHE_RETENTION = "24h"
+#: False = stateless summary mode (default); True keeps previous_response_id chaining.
+CHAIN_ENABLED = os.environ.get("CHAIN_ENABLED", "false").lower() == "true"
+TURN_HISTORY = 6
 
 SYSTEM = (
     "You are Pip, a bench assistant. Emit tool calls only, never reply text. "
@@ -211,9 +214,23 @@ def get_session(sid: str | None) -> dict:
     sid = sid or "bench"
     s = _SESSIONS.get(sid)
     if s is None:
-        s = {"id": sid, "memory": SparkChainMemory(), "pending": None, "last_web": None}
+        s = {"id": sid, "chained": CHAIN_ENABLED,
+             "memory": SparkChainMemory() if CHAIN_ENABLED else SummaryMemory(),
+             "pending": None, "last_web": None, "turns": []}
         _SESSIONS[sid] = s
     return s
+
+
+def log_turn(session: dict, text: str, calls, messages) -> None:
+    """One line per turn: user words / executed tools and results. Capped."""
+    bits = []
+    for c in calls or []:
+        w = ",".join(call_wells(c))
+        bits.append(f"{c.get('name', '?')}[{w}]" if w else c.get("name", "?"))
+    turns = session.setdefault("turns", [])
+    turns.append({"text": (text or "")[:120], "calls": bits,
+                  "messages": [m[:100] for m in (messages or [])[:4]]})
+    del turns[:-TURN_HISTORY]
 
 
 @asynccontextmanager
@@ -290,7 +307,7 @@ async def _call_spark(
         seed = getattr(mem, "seed", "")
         if seed:
             mem.seed = ""
-        chained = bool(mem.params())
+        chained = "previous_response_id" in mem.params()
         pend = session.get("pending_outputs") or []
         if chained and pend:
             req_input: object = [
@@ -428,7 +445,8 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         session["last_web"] = sentence
     ordered_ids = [c.get("call_id") for c in calls]
     plan_allowed = relevant_plan_numbers(norm, [s.get("name", "") for s in store.r["plan"]["steps"]])
-    calls, question, outcomes, gdrop = _validate(calls, norm, 1, plan_allowed)
+    has_reads = any(c.get("name") in ("get_well", "find_free_wells") and c.get("call_id") for c in calls)
+    calls, question, outcomes, gdrop, blinded = _validate(calls, norm, 1, plan_allowed, blind=has_reads)
     _set_ask_pending(session, question, searches)
     if not calls and not question:
         _store_outputs(session, ordered_ids, outcomes)
@@ -447,7 +465,17 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     res = store.apply_calls(calls, source, text, "spark", session)
     _apply_outcomes(calls, res, outcomes)
     _store_outputs(session, ordered_ids, outcomes)
-    if question is None and any(c.get("name") in ("get_well", "find_free_wells") and c.get("call_id") for c in calls):
+    post_pure_get = bool(calls) and all(c.get("name") == "get_well" for c in calls)
+    fire_lookup = (
+        has_reads and question is None and (not post_pure_get or blinded or gdrop)
+        and any(c.get("name") in ("get_well", "find_free_wells") and c.get("call_id") for c in calls)
+    )
+    if has_reads and question is None and post_pure_get and not fire_lookup:
+        for c in calls:
+            well = (c.get("args") or {}).get("well")
+            if isinstance(well, str) and is_well(well):
+                res["messages"].append(store.describe_well(well))
+    if fire_lookup:
         memo_allowed: set = set()
         for c in calls:
             if c.get("name") == "get_well":
@@ -470,7 +498,10 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
                     res["info"][k] = res2["info"][k]
             if question2 is not None:
                 question = question2
-            gdrop = gdrop or gdrop2
+            if any(m.startswith("Timer started") for m in res2["messages"]):
+                gdrop = gdrop2
+            else:
+                gdrop = gdrop or gdrop2
             _store_outputs(session, ordered2, outcomes2)
     calls = _strip_ids(calls)
     if question is not None:
@@ -501,7 +532,7 @@ async def _lookup_round(client, key, norm, session, source, text, plan_numbers, 
     if cut:
         return ms, None
     ordered2 = [c.get("call_id") for c in rc]
-    rc, question2, outcomes2, gdrop2 = _validate(rc, norm, 2, plan_numbers, memo_numbers)
+    rc, question2, outcomes2, gdrop2, _ = _validate(rc, norm, 2, plan_numbers, memo_numbers)
     _set_ask_pending(session, question2, [])
     res2: dict = {"messages": [], "cards": [], "outcomes": [],
                   "info": {"dropped": 0, "drop_reasons": []}}
@@ -511,10 +542,15 @@ async def _lookup_round(client, key, norm, session, source, text, plan_numbers, 
     return ms, (rc, res2, question2, ordered2, outcomes2, gdrop2)
 
 
-def _validate(calls, norm, depth, plan_numbers=frozenset(), lookup_numbers=frozenset()):
+def _validate(calls, norm, depth, plan_numbers=frozenset(), lookup_numbers=frozenset(),
+              blind: bool = False):
     """expand -> ask/answer partition -> value-grounded timer filter.
-    Returns (calls, question, outcomes, grounded_drop)."""
+    Returns (calls, question, outcomes, grounded_drop, blinded).
+    blind: a lookup round follows, so round-1 answers (written without the
+    looked-up data) are dropped; the lookup round answers instead. blinded
+    reports whether such a drop happened, so the caller still runs round 2."""
     outcomes: dict[str, str] = {}
+    blinded = False
     calls = fill_on_done(calls, norm)
     before, calls = calls, expand_tool_wells(calls)
     _note_lost(outcomes, before, calls, "dropped: no valid wells")
@@ -523,11 +559,14 @@ def _validate(calls, norm, depth, plan_numbers=frozenset(), lookup_numbers=froze
         if c.get("name") == "ask" and c.get("call_id"):
             outcomes[c["call_id"]] = "asked user"
     calls = kept
-    calls, dropped_answers = _partition_answer(calls, question is not None)
+    calls, dropped_answers = _partition_answer(calls, question is not None, blind)
     for c in dropped_answers:
         if c.get("call_id"):
-            outcomes[c["call_id"]] = _result(False, "dropped: action wins")
-            _log_drop(c.get("name"), c.get("args"), "dropped: action wins")
+            pending = blind and question is None
+            blinded = blinded or pending
+            reason = "dropped: lookup pending" if pending else "dropped: action wins"
+            outcomes[c["call_id"]] = _result(False, reason)
+            _log_drop(c.get("name"), c.get("args"), reason)
     if depth >= 2:
         deep = [c for c in calls if c.get("name") in ("get_well", "find_free_wells")]
         calls = [c for c in calls if c.get("name") not in ("get_well", "find_free_wells")]
@@ -547,15 +586,15 @@ def _validate(calls, norm, depth, plan_numbers=frozenset(), lookup_numbers=froze
             _log_drop(c.get("name"), c.get("args"), "dropped: ungrounded minutes")
     before, calls = calls, collapse_each_timers(mark_each_timers(calls, norm), norm)
     _note_lost(outcomes, before, calls, "dropped: duplicate timer")
-    return calls, question, outcomes, grounded_drop
+    return calls, question, outcomes, grounded_drop, blinded
 
 
-def _partition_answer(calls, has_question):
+def _partition_answer(calls, has_question, blind=False):
     answers = [c for c in calls if c.get("name") == "answer"]
     if not answers:
         return calls, []
     rest = [c for c in calls if c.get("name") != "answer"]
-    if has_question or any(c.get("name") != "get_well" for c in rest):
+    if blind or has_question or any(c.get("name") != "get_well" for c in rest):
         return rest, answers
     return calls, []
 
@@ -707,6 +746,7 @@ async def orchestrate(body: OrchestrateIn):
         out = await run_utterance(client, key, body.text, session, "spark")
     calls, messages, reply, ms, route, cards, info, sources = out
     print(f"orch route={route} calls={_call_names(calls)} reply={reply[:80]!r}", flush=True)
+    log_turn(session, body.text, calls, messages or ([reply] if reply else []))
     return _utterance_response(calls, messages, reply, {"spark": ms}, route, cards, info, sources, store.r["version"])
 
 
@@ -767,6 +807,7 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session:
         out = await run_utterance(client, key, transcript, sess, "voice")
     calls, messages, reply, spark_ms, route, cards, info, sources = out
     print(f"orch route={route} calls={_call_names(calls)} reply={reply[:80]!r}", flush=True)
+    log_turn(sess, transcript, calls, messages or ([reply] if reply else []))
     return _utterance_response(
         calls, messages, reply,
         {"asr": asr_ms, "spark": spark_ms, "total": int((time.perf_counter() - total0) * 1000)},
@@ -778,6 +819,7 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session:
 async def confirm(body: ConfirmIn):
     session = get_session(body.session)
     message, new_cards, card = store.confirm(body.card_id, body.ok, "card", session)
+    log_turn(session, "yes" if body.ok else "no", [], [message])
     cid = (card.get("payload") or {}).get("_call_id") if card else None
     if cid:
         _refresh_output(session, cid, body.ok, message)

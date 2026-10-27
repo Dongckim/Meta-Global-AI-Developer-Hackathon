@@ -70,3 +70,40 @@ Same 5 sentences, fresh store + session each, live muse-spark-1.3 minimal. viol 
 | remind me to wash when the timer ends, 10 minutes for C6 | 2014 | 1934 | 1905 | 364 | 0 | set_timer |
 
 after median: ms=1367 in_tok=1928 cached=1905 out_tok=136 viol_total=0
+
+## 10-turn conversation (summary mode, goal: every turn <= 3000ms)
+
+One session, live muse-spark-1.3 minimal. total = HTTP round trip, spark = model time inside it.
+
+| turn | total_ms | spark_ms | route | calls | reply |
+|---|---|---|---|---|---|
+| mark C2 and C3 done please | 1566 | 1453 | spark | mark_done | ✓ C2, C3 done |
+| note C3, big bubbles near the edge | 72 | 0 | grammar | add_note | Note saved (C3) |
+| start a 25 minute timer for C4 | 1954 | 1902 | spark | - | How many minutes for the timer? |
+| how many wells have I finished | 1534 | 1455 | spark | answer | 2 wells finished (C2-C3) |
+| D5 looks cloudy, drop it from the run | 1850 | 1767 | spark | exclude_well | Exclude D5? |
+| yes(confirm) | 6 | 0 | confirm | - | D5 excluded (looks cloudy) |
+| C6 has a bubble, redo it in a backup well | 4187 | 4104 | spark | find_free_wells | I didn't catch a command. |
+| what is on C6 | 1436 | 1347 | spark | get_well | C6 is planned. |
+| cancel the C4 timer | 83 | 0 | grammar | manage_timers | I couldn't find a C4 timer. No timers running. |
+| mark C4 through C8 done | 938 | 885 | spark | mark_done | ✓ C4, C5, C6, C7, C8 done |
+
+all_under_3s: False
+
+## A/B: chain vs summary (5-turn conversation, live)
+
+Same 5 turns, fresh store each arm. (a) previous_response_id chain,
+(b) store:false + recent-6-turn summary injection.
+
+| turn | a ms | a in | a cached | b ms | b in | b cached |
+|---|---|---|---|---|---|---|
+| mark C2 and C3 done | 1588 | 1926 | 1905 | 2066 | 1926 | 1905 |
+| note those, bubbles | 9640 | 2067 | 113 | 1749 | 1997 | 241 |
+| 25 min timer C4 | 10516 | 2240 | 241 | 1914 | 2062 | 241 |
+| how many finished | 8858 | 2424 | 241 | 919 | 2135 | 241 |
+| D5 cloudy, drop it | 11488 | 2558 | 241 | 1221 | 2190 | 369 |
+
+Chain turns 2-5 take 9-11s each (fixed overhead per chained call);
+summary stays under 2.1s with identical outcomes ("those" resolved to
+C2-C3 in both arms). Summary is now the default; chain remains behind
+CHAIN_ENABLED=true.

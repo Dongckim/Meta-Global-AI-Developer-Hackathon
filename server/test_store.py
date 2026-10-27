@@ -163,6 +163,27 @@ class StoreTest(unittest.TestCase):
         r = self.apply([T("next_step")])
         self.assertEqual(r["messages"], ["Already at the last step"])
 
+    def test_describe_well(self):
+        self.apply([T("add_note", target="C6", text="sticky")], origin="note C6, sticky")
+        self.assertEqual(self.s.describe_well("C6"), "C6 is planned. Memos: sticky.")
+        self.assertEqual(self.s.describe_well("C9"), "C9 is empty.")
+        r = self.apply([T("exclude_well", well="C3", reason="dirty")])
+        self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
+        self.assertEqual(self.s.describe_well("C3"), "C3 is excluded (dirty).")
+        r = self.apply([T("record_redo", wells=["C9"], note="spill")])
+        self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
+        self.assertEqual(self.s.describe_well("C9"), "C9 is marked for redo (spill).")
+
+    def test_model_state_summary_turns(self):
+        sess = {"chained": False,
+                "turns": [{"text": "C2 done", "calls": ["mark_done[C2]"], "messages": ["✓ C2 done"]},
+                          {"text": "yes", "calls": [], "messages": ["C3 excluded"]}] * 4}
+        st = self.s.model_state(sess)
+        self.assertEqual(len(st["recent_turns"]), 8)
+        self.assertTrue(st["recent_turns"][0].startswith("C2 done → mark_done[C2]: ✓ C2 done"))
+        self.assertNotIn("recent_turns", self.s.model_state({"chained": True, "turns": sess["turns"]}))
+        self.assertNotIn("recent_turns", self.s.model_state({}))
+
     def test_where_and_show(self):
         r = self.apply([T("where_am_i")])
         self.assertTrue(r["messages"][0].startswith("Step 3 of 5"))

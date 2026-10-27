@@ -359,6 +359,11 @@ class RecordStore:
         }
         if session.get("pending"):
             st["pending_question"] = session["pending"]
+        if session.get("turns") and not session.get("chained", True):
+            st["recent_turns"] = [
+                f"{t['text']} → {', '.join(t['calls'])}: {' | '.join(t['messages']) or '-'}"
+                for t in session["turns"]
+            ]
         return st
 
     def session_summary(self) -> str:
@@ -737,6 +742,18 @@ class RecordStore:
         return " ".join(res["messages"]) or "Done.", res["cards"], card
 
     # --- memos / recent / timers ---
+
+    def describe_well(self, well: str) -> str:
+        """One factual sentence from the record: status plus verbatim memos."""
+        d = self.get_well_data(well)
+        status = {"redo": "marked for redo"}.get(d["status"], d["status"])
+        s = f"{d['well']} is {status}"
+        extra = d["reason"] or d["redo_note"]
+        if extra:
+            s += f" ({extra})"
+        if d["memos"]:
+            s += ". Memos: " + "; ".join(d["memos"])
+        return s + "."
 
     def get_well_data(self, well: str) -> dict:
         up = well.upper() if isinstance(well, str) else ""

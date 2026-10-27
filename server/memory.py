@@ -55,3 +55,28 @@ class SparkChainMemory(Memory):
     @property
     def needs_reanchor(self) -> bool:
         return self._turns >= self.cap
+
+
+class SummaryMemory(Memory):
+    """Stateless: history rides an injected turn summary; nothing stored."""
+
+    def __init__(self):
+        self._turns = 0
+
+    def params(self) -> dict:
+        return {"store": False}
+
+    def note_response(self, response_id: str | None) -> None:
+        if response_id:
+            self._turns += 1
+
+    def reset(self, summary: str = "") -> None:
+        self._turns = 0
+
+    @property
+    def turns(self) -> int:
+        return self._turns
+
+    @property
+    def needs_reanchor(self) -> bool:
+        return False
