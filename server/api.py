@@ -17,6 +17,15 @@ import wave
 from io import BytesIO
 from pathlib import Path
 
+from server.grammar import (
+    honest_reply,
+    match_grammar,
+    normalize_text,
+    timer_followup,
+    timer_set_reply,
+    where_am_i_reply,
+)
+
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -27,11 +36,18 @@ load_dotenv()
 BASE_URL = "https://api.meta.ai/v1"
 SPARK_MODEL = "muse-spark-1.3"
 ASR_MODEL = "muse-voice-transcribe-1.0"
-KEYWORDS = ["B2", "C3", "D8", "aspirate", "Pip", "drug A", "drug B"]
-LANGUAGE_BIAS = ["Korean", "English"]
+WELL_KEYWORDS = [f"{r}{c}" for r in "ABCDEFGH" for c in range(1, 13)]
+KEYWORDS = WELL_KEYWORDS + ["to", "through", "done", "exclude", "redo", "note", "timer", "next", "drug A", "drug B", "pipette", "thirty", "fifteen", "minutes", "wash"]
+LANGUAGE_BIAS = ["English"]
 TIMEOUT = httpx.Timeout(120.0)
 
-SYSTEM = "너는 실험대 조수 Pip이다. 말을 도구 호출로 바꾼다. 도구가 필요 없으면 아무것도 호출하지 않는다."
+SYSTEM = (
+    "You are Pip, a bench assistant. Turn speech into tool calls. Call nothing when no tool fits. "
+    "Reply rules: one sentence, 15 words or fewer, no markdown. "
+    "When calling a state-changing tool (exclude_well, record_redo, save_tip), "
+    "make the reply a confirmation question, e.g. 'Exclude C3?' "
+    "If pending_question is present in the state, this message answers that question."
+)
 
 
 def _tool(name: str, desc: str, props: dict, required: list[str]) -> dict:
@@ -172,12 +188,29 @@ async def _call_spark(client: httpx.AsyncClient, key: str, text: str, state: dic
     return calls, "\n".join(texts), ms
 
 
+async def run_utterance(client: httpx.AsyncClient, key: str, text: str, state: dict):
+    """Grammar first (no model call), else Spark. Returns (calls, reply, ms, route)."""
+    norm = normalize_text(text)
+    g = match_grammar(norm, state)
+    if g is not None:
+        calls, reply = g
+        return calls, reply, 0, "grammar"
+    calls, reply, ms = await _call_spark(client, key, norm, state)
+    if len(calls) == 1 and calls[0]["name"] == "where_am_i":
+        reply = where_am_i_reply(state)
+    calls, reply = timer_followup(calls, reply, norm)
+    r = timer_set_reply(calls, state)
+    if r is not None:
+        reply = r
+    return calls, honest_reply(calls, reply), ms, "spark"
+
+
 @app.post("/orchestrate")
 async def orchestrate(body: OrchestrateIn):
     key = _key()
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        calls, reply, ms = await _call_spark(client, key, body.text, body.state)
-    return {"tool_calls": calls, "reply": reply, "ms": {"spark": ms}}
+        calls, reply, ms, route = await run_utterance(client, key, body.text, body.state)
+    return {"tool_calls": calls, "reply": reply, "ms": {"spark": ms}, "route": route}
 
 
 @app.post("/voice")
@@ -223,18 +256,20 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}")):
         asr_ms = int((time.perf_counter() - t0) * 1000)
         _check("asr", resp)
         transcript = resp.json().get("transcript", "")
-        print(f'voice dur={dur:.2f}s transcript="{transcript}"', flush=True)
-        if not transcript.strip():
+        norm = normalize_text(transcript)
+        print(f'voice dur={dur:.2f}s transcript="{transcript}" norm="{norm}"', flush=True)
+        if not norm.strip(" .?!"):
             return {
                 "transcript": "",
                 "tool_calls": [],
-                "reply": "못 들었어요. 다시 말해 주세요.",
+                "reply": "I didn't catch that, please say it again.",
                 "ms": {"asr": asr_ms, "spark": 0, "total": int((time.perf_counter() - total0) * 1000)},
             }
-        calls, reply, spark_ms = await _call_spark(client, key, transcript, state_obj)
+        calls, reply, spark_ms, route = await run_utterance(client, key, transcript, state_obj)
     return {
         "transcript": transcript,
         "tool_calls": calls,
         "reply": reply,
         "ms": {"asr": asr_ms, "spark": spark_ms, "total": int((time.perf_counter() - total0) * 1000)},
+        "route": route,
     }

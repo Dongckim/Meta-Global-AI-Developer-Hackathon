@@ -3,7 +3,8 @@ import SwiftUI
 struct DebugRun {
     var input: String
     var calls: [(name: String, args: String)]
-    var ms: [(key: String, value: Int)]
+    var ms: [String: Int]
+    var route: String?
 }
 
 /// Reliable press-and-hold: tracks the button's own pressed state, no gesture fights.
@@ -18,7 +19,7 @@ struct HoldStyle: ButtonStyle {
 struct ContentView: View {
     @State private var lab = LabState()
     @State private var input = ""
-    @State private var log: [String] = ["Pip 준비됨 — 말하거나 입력해"]
+    @State private var log: [String] = ["Pip ready — speak or type"]
     @State private var debug: DebugRun?
     @State private var recorder = Recorder()
     @State private var recording = false
@@ -44,8 +45,8 @@ struct ContentView: View {
                         proxy.scrollTo("logBottom", anchor: .bottom)
                     }
                 }
-                if let first = lab.pending.first, let question = first.question {
-                    confirmCard(question: question, detail: first.detail, rest: lab.pending.count - 1)
+                if let first = lab.pending.first {
+                    confirmCard(question: first.question, detail: first.detail, rest: lab.pending.count - 1)
                 }
                 inputBar
             }
@@ -56,22 +57,27 @@ struct ContentView: View {
                     .padding(.bottom, 84)
             }
         }
+        .onAppear { lab.loadPlan() }
     }
 
     // MARK: - Subviews
 
     private var statusView: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("\(lab.stepIndex + 1)/\(lab.steps.count)단계 \(lab.steps[lab.stepIndex])")
+            Text("Step \(lab.stepIndex + 1) of \(lab.steps.count): \(lab.steps[lab.stepIndex])")
                 .font(.title2.bold())
-            Text("완료 \(lab.done.count) · 제외 \(lab.excluded.count) · 다시 \(lab.redo.count) · 메모 \(lab.notes.count) · 팁 \(lab.tips.count)")
+            Text("Done \(lab.done.count) · Excluded \(lab.excluded.count) · Redo \(lab.redo.count) · Notes \(lab.notes.count) · Tips \(lab.tips.count)")
                 .font(.callout).foregroundStyle(.secondary)
+            if !lab.groups.isEmpty {
+                Text(lab.groupProgress().map { "\($0.name) \($0.have)/\($0.need)" }.joined(separator: " · "))
+                    .font(.callout)
+            }
             if !lab.timers.isEmpty {
-                Text("⏲ " + lab.timers.map { "\($0.label) \(fmtMinutes($0.minutes))분" }.joined(separator: " · "))
+                Text("⏲ " + lab.timers.map { "\($0.label) \(fmtMinutes($0.minutes)) min" }.joined(separator: " · "))
                     .font(.callout)
             }
             if !lab.lastShown.isEmpty {
-                Text("🖥 \(lab.lastShown)").font(.callout)
+                Text("Viewing \(lab.lastShown)").font(.callout)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -81,11 +87,11 @@ struct ContentView: View {
         VStack(spacing: 8) {
             Text(question).font(.headline)
             if let detail, !detail.isEmpty { Text(detail).font(.callout).foregroundStyle(.secondary) }
-            if rest > 0 { Text("외 \(rest)개 대기").font(.caption).foregroundStyle(.secondary) }
+            if rest > 0 { Text("\(rest) more waiting").font(.caption).foregroundStyle(.secondary) }
             HStack(spacing: 16) {
-                Button("응") { answer(true) }
+                Button("Yes") { answer(true) }
                     .buttonStyle(.borderedProminent)
-                Button("아니") { answer(false) }
+                Button("No") { answer(false) }
                     .buttonStyle(.bordered)
             }
         }
@@ -97,12 +103,12 @@ struct ContentView: View {
 
     private var inputBar: some View {
         HStack(spacing: 8) {
-            TextField("명령 입력", text: $input)
+            TextField("Type a command", text: $input)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { submit() }
             if recording, let t0 = recordStart {
                 TimelineView(.periodic(from: t0, by: 0.2)) { ctx in
-                    Text(String(format: "%.1f초", ctx.date.timeIntervalSince(t0)))
+                    Text(String(format: "%.1fs", ctx.date.timeIntervalSince(t0)))
                         .font(.callout.monospacedDigit())
                         .foregroundStyle(.red)
                 }
@@ -124,10 +130,11 @@ struct ContentView: View {
     private func debugPanel(_ d: DebugRun) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("“\(d.input)”").font(.caption).lineLimit(2)
+            Text("route: \(d.route ?? "-")").font(.caption2).foregroundStyle(.secondary)
             ForEach(d.calls.indices, id: \.self) { i in
                 Text("\(d.calls[i].name)(\(d.calls[i].args))").font(.caption2.monospaced())
             }
-            Text(d.ms.map { "\($0.key) \($0.value)" }.joined(separator: " · ") + " ms")
+            Text(msLine(d.ms))
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .frame(maxWidth: 320, alignment: .leading)
@@ -146,7 +153,7 @@ struct ContentView: View {
         if let msg = lab.confirmFirst(ok) {
             say(msg)
         } else {
-            say("취소함")
+            say("Canceled")
         }
     }
 
@@ -156,8 +163,8 @@ struct ContentView: View {
         input = ""
         say("> \(text)")
         if !lab.pending.isEmpty {
-            if text == "응" { answer(true) } else if text == "아니" { answer(false) }
-            else { say("먼저 카드에 답해줘 (응/아니)") }
+            if text.lowercased() == "yes" { answer(true) } else if text.lowercased() == "no" { answer(false) }
+            else { say("Answer the card first (yes/no)") }
             return
         }
         if let action = Action.rule(text) {
@@ -171,26 +178,27 @@ struct ContentView: View {
         busy = true
         defer { busy = false }
         do {
-            let r = try await PipClient.orchestrate(text: text, state: lab.serverState)
-            handle(calls: r.tool_calls, reply: r.reply, ms: r.ms, input: text)
+            let r = try await PipClient.orchestrate(text: text, state: lab.takeState())
+            handle(calls: r.tool_calls, reply: r.reply, ms: r.ms, route: r.route, input: text)
         } catch {
-            say("오류: \(error.localizedDescription)")
+            lab.answerTarget = nil
+            say("Error: \(error.localizedDescription)")
         }
     }
 
     private func startHold() {
         pressing = true
         guard !recording, !busy else { return }
-        guard lab.pending.isEmpty else { say("먼저 카드에 답해줘 (응/아니)"); return }
+        guard lab.pending.isEmpty else { say("Answer the card first (yes/no)"); return }
         Task {
-            guard await Recorder.requestPermission() else { say("마이크 권한이 필요해"); return }
+            guard await Recorder.requestPermission() else { say("Microphone permission needed"); return }
             guard pressing else { return } // released before the mic was ready
             do {
                 try recorder.start()
                 recordStart = Date()
                 recording = true
             } catch {
-                say("녹음 시작 실패: \(error.localizedDescription)")
+                say("Recording failed: \(error.localizedDescription)")
             }
         }
     }
@@ -205,7 +213,7 @@ struct ContentView: View {
             let url = try recorder.stop()
             Task { await sendVoice(url, held: held) }
         } catch {
-            say("녹음 저장 실패: \(error.localizedDescription)")
+            say("Couldn't save the recording: \(error.localizedDescription)")
         }
     }
 
@@ -218,30 +226,40 @@ struct ContentView: View {
             let data = try Data(contentsOf: url)
             try? FileManager.default.removeItem(at: url)
             guard dur >= 0.3 else {
-                say(held >= 1 ? "눌렀는데 녹음이 안 됐어 — 시뮬레이터면 오디오 입력을 확인해"
-                    : String(format: "너무 짧아 (%.1f초) — 꾹 누르고 말해줘", dur))
+                say(held >= 1 ? "Held it but nothing recorded — check the simulator audio input"
+                    : String(format: "Too short (%.1fs) — press and hold to speak", dur))
                 return
             }
-            guard loud >= 0.001 else { say("마이크에 아무 소리도 안 들어왔어 — 시뮬레이터면 Mac 마이크 권한·입력을 확인해"); return }
-            let r = try await PipClient.voice(wav: data, state: lab.serverState)
+            guard loud >= 0.001 else { say("No sound reached the mic — on the simulator, check the Mac mic permission and input"); return }
+            let r = try await PipClient.voice(wav: data, state: lab.takeState())
             say("🎙 \(r.transcript)")
-            handle(calls: r.tool_calls, reply: r.reply, ms: r.ms, input: r.transcript)
+            handle(calls: r.tool_calls, reply: r.reply, ms: r.ms, route: r.route, input: r.transcript)
         } catch {
-            say("오류: \(error.localizedDescription)")
+            lab.answerTarget = nil
+            say("Error: \(error.localizedDescription)")
         }
     }
 
-    private func handle(calls: [ToolCall], reply: String, ms: [String: Int], input: String) {
+    private func handle(calls: [ToolCall], reply: String, ms: [String: Int], route: String?, input: String) {
         let actions = calls.compactMap { Action.fromTool(name: $0.name, args: $0.args) }
+        let wasPending = lab.pending.count
         for msg in lab.enqueue(actions) { say(msg) }
-        if !reply.isEmpty { say("Pip: \(reply)") }
+        lab.answerTarget = nil // this round's timer labels are already applied
+        lab.noteQuestion(reply: reply, target: targetOf(calls.map(\.args)))
+        if let q = lab.pending.dropFirst(wasPending).first(where: \.fromCatch)?.question {
+            say("Pip: \(q)")
+        } else if !reply.isEmpty {
+            say("Pip: \(reply)")
+        }
         let dropped = calls.count - actions.count
-        if dropped > 0 { say("적용 못한 호출 \(dropped)개 무시") }
+        if dropped > 0 { say("Ignored \(dropped) bad call(s)") }
         debug = DebugRun(
             input: input,
             calls: calls.map { ($0.name, "{" + $0.args.map { "\"\($0.key)\": \($0.value.compact)" }.sorted().joined(separator: ", ") + "}") },
-            ms: ms.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
+            ms: ms,
+            route: route
         )
+        say("⏱ " + msLine(ms))
     }
 }
 

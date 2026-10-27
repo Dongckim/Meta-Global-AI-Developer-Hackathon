@@ -17,6 +17,7 @@ struct OrchestrateResponse: Decodable {
     let tool_calls: [ToolCall]
     let reply: String
     let ms: [String: Int]
+    let route: String?
 }
 
 struct VoiceResponse: Decodable {
@@ -24,13 +25,14 @@ struct VoiceResponse: Decodable {
     let tool_calls: [ToolCall]
     let reply: String
     let ms: [String: Int]
+    let route: String?
 }
 
 enum PipError: Error, LocalizedError {
     case server(Int, String)
     var errorDescription: String? {
         switch self {
-        case .server(let code, let body): "서버 오류 (\(code)) \(body.prefix(120))"
+        case .server(let code, let body): "Server error (\(code)) \(body.prefix(120))"
         }
     }
 }

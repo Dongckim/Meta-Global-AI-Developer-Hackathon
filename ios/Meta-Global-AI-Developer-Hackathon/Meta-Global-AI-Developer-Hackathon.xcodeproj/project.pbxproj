@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		9A1EC0DE0000000000000004 /* plan_demo.json in Resources */ = {isa = PBXBuildFile; fileRef = 9A1EC0DE0000000000000003 /* plan_demo.json */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		88B6F74830902E5D009723F2 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -29,6 +33,7 @@
 		88B6F75130902E5D009723F2 /* Meta-Global-AI-Developer-HackathonUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Meta-Global-AI-Developer-HackathonUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A1EC0DE0000000000000001 /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; };
 		9A1EC0DE0000000000000002 /* Secrets.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.example.xcconfig; sourceTree = "<group>"; };
+		9A1EC0DE0000000000000003 /* plan_demo.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = plan_demo.json; path = ../../samples/plan_demo.json; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -82,6 +87,7 @@
 				88B6F75430902E5D009723F2 /* Meta-Global-AI-Developer-HackathonUITests */,
 				9A1EC0DE0000000000000001 /* Secrets.xcconfig */,
 				9A1EC0DE0000000000000002 /* Secrets.example.xcconfig */,
+				9A1EC0DE0000000000000003 /* plan_demo.json */,
 				88B6F73930902E5C009723F2 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -216,6 +222,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9A1EC0DE0000000000000004 /* plan_demo.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -407,7 +414,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "실험 음성 명령을 녹음하는 데 사용합니다.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to record bench voice commands.";
 				INFOPLIST_KEY_ServerBaseURL = "$(SERVER_BASE_URL)";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -442,7 +449,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "실험 음성 명령을 녹음하는 데 사용합니다.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to record bench voice commands.";
 				INFOPLIST_KEY_ServerBaseURL = "$(SERVER_BASE_URL)";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

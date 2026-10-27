@@ -49,6 +49,80 @@ func fmtMinutes(_ m: Double) -> String {
     m.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(m)) : String(m)
 }
 
+func msLine(_ ms: [String: Int]) -> String {
+    ms.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: " · ") + " ms"
+}
+
+// MARK: - Plan
+
+struct PlanStep: Decodable {
+    var name: String
+    var wells: [String]
+    var tip: String?
+}
+
+struct PlanGroup: Decodable {
+    var wells: [String]
+    var n: Int
+}
+
+struct Plan: Decodable {
+    var groups: [String: PlanGroup]
+    var steps: [PlanStep]
+    var currentStep: Int // 1-based
+    enum CodingKeys: String, CodingKey {
+        case groups, steps, currentStep = "current_step"
+    }
+}
+
+struct PendingItem {
+    let action: Action
+    let question: String
+    let detail: String?
+    let fromCatch: Bool
+}
+
+struct PendingQuestion {
+    var question: String
+    var target: String?
+}
+
+/// "C2–C8" for contiguous same-row wells, comma list otherwise, nil when empty.
+func wellRangeLabel(_ wells: [String]) -> String? {
+    let rows = Array(Set(wells.map { $0.uppercased() }))
+    guard !rows.isEmpty else { return nil }
+    let parsed: [(String, Int)] = rows.compactMap { w in
+        guard w.count >= 2, let col = Int(w.dropFirst()), (1...12).contains(col) else { return nil }
+        let row = String(w.prefix(1))
+        guard "ABCDEFGH".contains(row) else { return nil }
+        return (row, col)
+    }
+    if parsed.count == rows.count, let first = parsed.first,
+       parsed.allSatisfy({ $0.0 == first.0 }) {
+        let lo = parsed.map(\.1).min()!, hi = parsed.map(\.1).max()!
+        if hi - lo + 1 == parsed.count {
+            return lo == hi ? rows[0] : "\(first.0)\(lo)–\(first.0)\(hi)"
+        }
+    }
+    return rows.sorted().joined(separator: ", ")
+}
+
+/// All wells of the action(s) as one range label, else the first non-well identifier.
+func targetOf(_ argList: [[String: JSON]]) -> String? {
+    var wells: [String] = []
+    for args in argList {
+        if let w = args["well"]?.string { wells.append(w) }
+        if let ws = args["wells"]?.strings { wells.append(contentsOf: ws) }
+    }
+    if !wells.isEmpty { return wellRangeLabel(wells) }
+    for args in argList {
+        if let t = args["target"]?.string { return t }
+        if let s = args["step_id"]?.string { return s }
+        if let l = args["label"]?.string { return l }
+    }
+    return nil
+}
+
 // MARK: - Action
 
 /// One bench action. Mirrors the server's 10 tools.
@@ -73,9 +147,9 @@ enum Action {
 
     var question: String? {
         switch self {
-        case .excludeWell(let w, _): "\(w) 제외할까요?"
-        case .recordRedo(let wells, _): "\(wells.joined(separator: ", ")) 다시 할까요?"
-        case .saveTip: "팁을 저장할까요?"
+        case .excludeWell(let w, _): "Exclude \(w)?"
+        case .recordRedo(let wells, _): "Redo \(wells.joined(separator: ", "))?"
+        case .saveTip: "Save this tip?"
         default: nil
         }
     }
@@ -126,7 +200,9 @@ enum Action {
 
 @Observable
 final class LabState {
-    let steps = ["준비", "분주", "배양", "측정", "정리"]
+    var planSteps: [PlanStep] = []
+    var groups: [String: PlanGroup] = [:]
+    var steps: [String] { planSteps.isEmpty ? ["Prep", "Dispense", "Incubate", "Measure", "Clean up"] : planSteps.map(\.name) }
     var stepIndex = 0
     var done: Set<String> = []
     var excluded: [String: String] = [:]
@@ -135,79 +211,147 @@ final class LabState {
     var tips: [(step: String, text: String)] = []
     var timers: [(label: String, minutes: Double, onDone: String?)] = []
     var lastShown = ""
-    var pending: [Action] = []
+    var pending: [PendingItem] = []
+
+    /// Reads samples/plan_demo.json from the bundle (once). No-op when absent.
+    func loadPlan() {
+        guard planSteps.isEmpty,
+              let url = Bundle.main.url(forResource: "plan_demo", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let plan = try? JSONDecoder().decode(Plan.self, from: data)
+        else { return }
+        load(plan: plan)
+    }
+
+    func load(plan: Plan) {
+        guard !plan.steps.isEmpty else { return }
+        planSteps = plan.steps
+        groups = plan.groups
+        stepIndex = min(max(plan.currentStep - 1, 0), plan.steps.count - 1)
+    }
+
+    var pendingQuestion: PendingQuestion?
+    var answerTarget: String?
 
     var serverState: [String: Any] {
-        ["step": stepIndex, "done": done.sorted(), "excluded": excluded.keys.sorted()]
+        var s: [String: Any] = ["step": stepIndex, "total": steps.count, "step_name": steps[stepIndex],
+                                "done": done.sorted(), "excluded": excluded.keys.sorted(),
+                                "timers": timers.map { ["label": $0.label, "minutes": $0.minutes] }]
+        if let pq = pendingQuestion {
+            s["pending_question"] = ["question": pq.question, "target": pq.target ?? ""]
+        }
+        return s
+    }
+
+    /// State for the next server call. Attaches a pending question once, then clears it,
+    /// keeping its target for this round's timer labels.
+    func takeState() -> [String: Any] {
+        let s = serverState
+        answerTarget = pendingQuestion?.target
+        pendingQuestion = nil
+        return s
+    }
+
+    /// Remembers a model question (with its target) so the next utterance answers it.
+    func noteQuestion(reply: String, target: String?) {
+        let q = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.hasSuffix("?"), pending.isEmpty else { return }
+        pendingQuestion = PendingQuestion(question: reply, target: target)
+    }
+
+    /// Per-group usable-done counts: done wells minus excluded ones, vs required n.
+    func groupProgress() -> [(name: String, have: Int, need: Int)] {
+        let usable = done.subtracting(excluded.keys)
+        return groups.sorted { $0.key < $1.key }.map {
+            (name: $0.key, have: usable.intersection($0.value.wells).count, need: $0.value.n)
+        }
     }
 
     /// Applies immediately, or queues when the action needs confirmation. Returns log messages.
     func enqueue(_ actions: [Action]) -> [String] {
         var out: [String] = []
         for a in actions {
-            if a.needsConfirm { pending.append(a) } else { out.append(apply(a)) }
+            if case .markDone(let wells) = a, !unplanned(wells).isEmpty {
+                let bad = unplanned(wells)
+                let q = bad.count == 1
+                    ? "\(bad[0]) is not in the step \(stepIndex + 1) plan. Record it anyway?"
+                    : "\(bad.joined(separator: ", ")) are not in the step \(stepIndex + 1) plan. Record them anyway?"
+                pending.append(PendingItem(action: a, question: q, detail: nil, fromCatch: true))
+            } else if a.needsConfirm {
+                pending.append(PendingItem(action: a, question: a.question ?? "", detail: a.detail, fromCatch: false))
+            } else {
+                out.append(apply(a))
+            }
         }
         return out
+    }
+
+    /// Wells missing from the current step's plan. Decided here in Swift, never by the model.
+    func unplanned(_ wells: [String]) -> [String] {
+        guard !planSteps.isEmpty, stepIndex < planSteps.count else { return [] }
+        let planned = Set(planSteps[stepIndex].wells)
+        return wells.filter { !planned.contains($0) }
     }
 
     /// Answers the first pending card. Returns the result message, or nil when declined.
     func confirmFirst(_ ok: Bool) -> String? {
         guard !pending.isEmpty else { return nil }
         let first = pending.removeFirst()
-        return ok ? apply(first) : nil
+        return ok ? apply(first.action) : nil
     }
 
     func apply(_ action: Action) -> String {
         switch action {
         case .markDone(let wells):
             done.formUnion(wells)
-            return "✓ \(wells.joined(separator: ", ")) 완료"
+            return "✓ \(wells.joined(separator: ", ")) done"
         case .excludeWell(let well, let reason):
             excluded[well] = reason ?? ""
-            return reason.map { "\(well) 제외함 (\(trimmed($0, 40)))" } ?? "\(well) 제외함"
+            return reason.map { "\(well) excluded (\(trimmed($0, 40)))" } ?? "\(well) excluded"
         case .recordRedo(let wells, let note):
             for w in wells { redo[w] = note ?? "" }
-            return note.map { "\(wells.joined(separator: ", ")) 다시 하기 (\(trimmed($0, 40)))" }
-                ?? "\(wells.joined(separator: ", ")) 다시 하기 기록"
+            return note.map { "\(wells.joined(separator: ", ")) marked for redo (\(trimmed($0, 40)))" }
+                ?? "\(wells.joined(separator: ", ")) marked for redo"
         case .addNote(let target, let text):
             notes.append((target, text))
-            return "메모 저장 (\(target))"
+            return "Note saved (\(target))"
         case .saveTip(let step, let text):
             tips.append((step, text))
-            return "팁 저장 (\(step))"
-        case .setTimer(let label, let minutes, let onDone):
-            timers.append((label, minutes, onDone))
-            return "타이머 시작: \(label) \(fmtMinutes(minutes))분"
+            return "Tip saved (\(step))"
+        case .setTimer(_, let minutes, let onDone):
+            let finalLabel = answerTarget ?? steps[stepIndex]
+            timers.append((finalLabel, minutes, onDone))
+            return "Timer started: \(finalLabel), \(fmtMinutes(minutes)) min"
         case .manageTimers(let action, let label):
             return manageTimers(action: action, label: label)
         case .whereAmI:
-            return "지금 \(stepIndex + 1)/\(steps.count)단계 \(steps[stepIndex]) · 완료 \(done.count)개"
+            return "Step \(stepIndex + 1) of \(steps.count), \(steps[stepIndex]). \(done.count) wells done."
         case .nextStep:
-            if stepIndex >= steps.count - 1 { return "마지막 단계야" }
+            if stepIndex >= steps.count - 1 { return "Already at the last step" }
             stepIndex += 1
-            return "다음: \(steps[stepIndex])"
+            return "Next: \(steps[stepIndex])"
         case .show(let view, let target):
             lastShown = target.map { "\(view) \($0)" } ?? view
-            return "화면: \(lastShown)"
+            return "Viewing: \(lastShown)"
         }
     }
 
     private func manageTimers(action: String, label: String?) -> String {
         switch action.lowercased() {
         case "list":
-            return timers.isEmpty ? "실행 중인 타이머 없음"
-                : "타이머: " + timers.map { "\($0.label) \(fmtMinutes($0.minutes))분" }.joined(separator: ", ")
+            return timers.isEmpty ? "No running timers"
+                : "Timers: " + timers.map { "\($0.label) \(fmtMinutes($0.minutes)) min" }.joined(separator: ", ")
         case "cancel":
-            guard let label else { return "어떤 타이머를 취소할까?" }
+            guard let label else { return "Which timer should I cancel?" }
             let before = timers.count
             timers.removeAll { $0.label == label }
-            return timers.count < before ? "타이머 취소: \(label)" : "그런 타이머 없음: \(label)"
+            return timers.count < before ? "Timer canceled: \(label)" : "No such timer: \(label)"
         case "extend":
-            guard let label else { return "어떤 타이머를 늘릴까?" }
-            guard let i = timers.firstIndex(where: { $0.label == label }) else { return "그런 타이머 없음: \(label)" }
+            guard let label else { return "Which timer should I extend?" }
+            guard let i = timers.firstIndex(where: { $0.label == label }) else { return "No such timer: \(label)" }
             timers[i].minutes += 5
-            return "+\(5)분: \(label) (\(fmtMinutes(timers[i].minutes))분)"
-        default: return "모르는 타이머 동작: \(action)"
+            return "+5 min: \(label) (\(fmtMinutes(timers[i].minutes)) min)"
+        default: return "Unknown timer action: \(action)"
         }
     }
 
@@ -223,19 +367,19 @@ extension Action {
     static func rule(_ text: String) -> Action? {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let low = t.lowercased()
-        if t.contains("다음") { return .nextStep }
-        if t.contains("어디") { return .whereAmI }
-        if t.contains("보여") || low.contains("plate") {
+        if low.contains("next") { return .nextStep }
+        if low.contains("where") { return .whereAmI }
+        if low.contains("show") || low.contains("plate") {
             return .show(view: "plate", target: findWells(in: t).first)
         }
-        if t.contains("타이머"), let m = findMinutes(in: t) {
-            return .setTimer(label: "타이머", minutes: m, onDone: nil)
+        if low.contains("timer"), let m = findMinutes(in: t) {
+            return .setTimer(label: "Timer", minutes: m, onDone: nil)
         }
         let wells = findWells(in: t)
         if !wells.isEmpty {
-            if t.contains("제외") || t.contains("빼") { return .excludeWell(well: wells[0], reason: nil) }
-            if t.contains("다시") { return .recordRedo(wells: wells, note: nil) }
-            if t.contains("끝") || t.contains("완료") || low.contains("done") { return .markDone(wells: wells) }
+            if low.contains("exclude") { return .excludeWell(well: wells[0], reason: nil) }
+            if low.contains("redo") { return .recordRedo(wells: wells, note: nil) }
+            if low.contains("done") { return .markDone(wells: wells) }
         }
         return nil
     }
@@ -252,7 +396,7 @@ extension Action {
     }
 
     private static func findMinutes(in text: String) -> Double? {
-        guard let re = try? NSRegularExpression(pattern: "(\\d+(?:\\.\\d+)?)\\s*분") else { return nil }
+        guard let re = try? NSRegularExpression(pattern: "(\\d+(?:\\.\\d+)?)\\s*min") else { return nil }
         let range = NSRange(text.startIndex..., in: text)
         guard let m = re.matches(in: text, range: range).first,
               let r = Range(m.range(at: 1), in: text) else { return nil }

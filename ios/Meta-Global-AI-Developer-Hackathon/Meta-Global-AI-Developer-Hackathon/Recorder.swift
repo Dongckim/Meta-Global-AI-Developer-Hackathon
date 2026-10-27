@@ -138,9 +138,9 @@ enum RecorderError: Error, LocalizedError {
     case cannotConvert
     var errorDescription: String? {
         switch self {
-        case .noInput: "마이크 입력이 없어 (시뮬레이터면 Mac의 마이크 권한·입력을 확인해)"
-        case .notRecording: "녹음 중이 아니야"
-        case .cannotConvert: "오디오 변환을 준비하지 못했어"
+        case .noInput: "No mic input (on the simulator, check the Mac mic permission and input)"
+        case .notRecording: "Not recording"
+        case .cannotConvert: "Couldn't prepare the audio conversion"
         }
     }
 }
