@@ -59,6 +59,10 @@ KEYWORDS = WELL_KEYWORDS + ["to", "through", "done", "exclude", "redo", "note", 
 LANGUAGE_BIAS = ["English"]
 TIMEOUT = httpx.Timeout(120.0)
 WEB_SEARCH_ENABLED = os.environ.get("WEB_SEARCH_ENABLED", "false").lower() == "true"
+#: Stable per-prefix cache keys (docs: never per-user/per-run) + 24h retention hint.
+CACHE_KEY = "pip-bench-spark"
+CACHE_KEY_SEARCH = "pip-bench-spark-search"
+CACHE_RETENTION = "24h"
 
 SYSTEM = (
     "You are Pip, a bench assistant. Emit tool calls only, never reply text. "
@@ -76,33 +80,47 @@ if WEB_SEARCH_ENABLED:
     SYSTEM += " For factual questions use web_search, then ask(question) offering to attach."
 
 
-def _tool(name: str, desc: str, props: dict, required: list[str]) -> dict:
+def _opt(spec: dict) -> dict:
+    """Optional strict field: required but nullable (Meta accepts type arrays)."""
+    return {**spec, "type": [spec.get("type", "string"), "null"]}
+
+
+def _tool(name: str, desc: str, props: dict) -> dict:
+    """Strict function tool: every prop required, no extras.
+
+    Per dev.meta.ai strict only validates OUR schema; model output is NOT
+    constrained, so server-side validation stays as the real gate.
+    """
     return {
         "type": "function",
         "name": name,
         "description": desc,
-        "parameters": {"type": "object", "properties": props, "required": required},
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": props,
+            "required": sorted(props),
+            "additionalProperties": False,
+        },
     }
 
 
 WELLS = {"type": "string", "description": 'Well range, e.g. "C2-C8" or "C2,C5,C7"'}
 
 TOOLS = [
-    _tool("mark_done", "Mark wells finished.", {"wells": WELLS}, ["wells"]),
+    _tool("mark_done", "Mark wells finished.", {"wells": WELLS}),
     _tool(
         "exclude_well",
         "Exclude one well.",
         {
             "well": {"type": "string", "description": "Well ID"},
-            "reason": {"type": "string", "description": "Why, if stated"},
+            "reason": _opt({"type": "string", "description": "Why, if stated"}),
         },
-        ["well"],
     ),
     _tool(
         "record_redo",
         "Mark wells for redo. Redoing elsewhere: also exclude the damaged well.",
-        {"wells": WELLS, "note": {"type": "string", "description": "What went wrong"}},
-        ["wells"],
+        {"wells": WELLS, "note": _opt({"type": "string", "description": "What went wrong"})},
     ),
     _tool(
         "add_note",
@@ -111,13 +129,11 @@ TOOLS = [
             "target": {"type": "string", "description": "Well, step, or sample"},
             "text": {"type": "string"},
         },
-        ["target", "text"],
     ),
     _tool(
         "save_tip",
         "Save a bench tip for a step.",
         {"step_id": {"type": "string"}, "text": {"type": "string"}},
-        ["step_id", "text"],
     ),
     _tool(
         "set_timer",
@@ -125,59 +141,52 @@ TOOLS = [
         {
             "label": {"type": "string"},
             "minutes": {"type": "number", "description": "Minutes from now"},
-            "on_done": {"type": "string", "description": "Next action, if stated"},
-            "wells": WELLS,
+            "on_done": _opt({"type": "string", "description": "Next action, if stated"}),
+            "wells": _opt(WELLS),
         },
-        ["label", "minutes"],
     ),
     _tool(
         "manage_timers",
         "List, cancel, or extend timers. Extend adds 5 min unless minutes given.",
         {
             "action": {"type": "string", "description": "list, cancel, or extend"},
-            "label": {"type": "string", "description": "Timer label"},
-            "minutes": {"type": "number", "description": "Minutes to add"},
+            "label": _opt({"type": "string", "description": "Timer label"}),
+            "minutes": _opt({"type": "number", "description": "Minutes to add"}),
         },
-        ["action"],
     ),
-    _tool("where_am_i", "Report step and progress.", {}, []),
-    _tool("next_step", "Advance one step.", {}, []),
+    _tool("where_am_i", "Report step and progress.", {}),
+    _tool("next_step", "Advance one step.", {}),
     _tool(
         "show",
         "Highlight on screen.",
         {
             "view": {"type": "string", "description": "plate, timer, protocol"},
-            "target": {"type": "string", "description": "Well/step, if any"},
+            "target": _opt({"type": "string", "description": "Well/step, if any"}),
         },
-        ["view"],
     ),
     _tool(
         "ask",
         "Ask the user a question. Only when you must.",
         {"question": {"type": "string"}},
-        ["question"],
     ),
-    _tool("make_robot", "Build the robot protocol.", {}, []),
+    _tool("make_robot", "Build the robot protocol.", {}),
     _tool(
         "get_well",
         "Look up one well's status and memos.",
         {"well": {"type": "string", "description": "Well ID"}},
-        ["well"],
     ),
     _tool(
         "find_free_wells",
         "List free wells near a well. For another or backup well, take these and propose the first; ask if none.",
         {
             "near": {"type": "string", "description": "Reference well"},
-            "count": {"type": "integer", "description": "How many (default 3)"},
+            "count": _opt({"type": "integer", "description": "How many (default 3)"}),
         },
-        ["near"],
     ),
     _tool(
         "answer",
         "Answer a question. Short text only.",
         {"text": {"type": "string"}},
-        ["text"],
     ),
 ]
 if WEB_SEARCH_ENABLED:
@@ -298,6 +307,8 @@ async def _call_spark(
             "reasoning": {"effort": effort},
             "max_output_tokens": MAX_OUTPUT_TOKENS,
             "tools": TOOLS,
+            "prompt_cache_key": CACHE_KEY_SEARCH if WEB_SEARCH_ENABLED else CACHE_KEY,
+            "prompt_cache_retention": CACHE_RETENTION,
             **mem.params(),
         }
         t0 = time.perf_counter()

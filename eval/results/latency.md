@@ -42,3 +42,31 @@ Same 5 sentences, fresh store + session each, live muse-spark-1.3 minimal.
 | remind me to wash when the timer ends, 10 minutes for C6 | 2369 | 1738 | 0 | 301 | set_timer | d6f3a753 |
 
 flat median: ms=2369 in_tok=1732 cached=0 out_tok=178
+
+## Spark settings (before): cache key+24h, strict tools
+
+Same 5 sentences, fresh store + session each, live muse-spark-1.3 minimal. viol = model args breaking the fixed semantic rule (missing always-required, wrong JSON type, unknown key).
+
+| sentence | ms | in_tok | cached | out_tok | viol | calls |
+|---|---|---|---|---|---|---|
+| mark C2 and C3 done please | 1687 | 1855 | 0 | 130 | 0 | mark_done |
+| D5 looks cloudy, drop it from the run | 1783 | 1857 | 0 | 241 | 0 | exclude_well |
+| start a timer for 25 minutes for C4 | 3305 | 1857 | 113 | 530 | 0 | set_timer |
+| how many wells have I finished | 1284 | 1853 | 0 | 125 | 0 | answer |
+| remind me to wash when the timer ends, 10 minutes for C6 | 2338 | 1863 | 0 | 373 | 0 | set_timer |
+
+before median: ms=1783 in_tok=1857 cached=0 out_tok=241 viol_total=0
+
+## Spark settings (after): cache key+24h, strict tools
+
+Same 5 sentences, fresh store + session each, live muse-spark-1.3 minimal. viol = model args breaking the fixed semantic rule (missing always-required, wrong JSON type, unknown key).
+
+| sentence | ms | in_tok | cached | out_tok | viol | calls |
+|---|---|---|---|---|---|---|
+| mark C2 and C3 done please | 1367 | 1926 | 1905 | 128 | 0 | mark_done |
+| D5 looks cloudy, drop it from the run | 1291 | 1928 | 1905 | 126 | 0 | exclude_well |
+| start a timer for 25 minutes for C4 | 2168 | 1928 | 1905 | 329 | 0 | set_timer |
+| how many wells have I finished | 1145 | 1924 | 1905 | 136 | 0 | answer |
+| remind me to wash when the timer ends, 10 minutes for C6 | 2014 | 1934 | 1905 | 364 | 0 | set_timer |
+
+after median: ms=1367 in_tok=1928 cached=1905 out_tok=136 viol_total=0
