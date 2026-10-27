@@ -6,6 +6,7 @@ then match_grammar() (exact short commands, no model call), else Spark.
 
 from __future__ import annotations
 
+import json
 import re
 
 from server.screens import canonical, title_of
@@ -22,6 +23,11 @@ _LETTER_WORD = "|".join(sorted(LETTER_SOUND, key=len, reverse=True))
 _NUMBER_WORD = "|".join(sorted(NUMBER_SOUND, key=len, reverse=True))
 # What may follow a range word (matched case-insensitively).
 _RANGE_TAIL = rf"(?:[A-Ha-h]\d{{1,2}}|\d{{1,2}}|{_NUMBER_WORD})\b"
+# Uncertain after a well candidate: another number ("C nine nine") or a
+# time/volume unit ("a 5 minute"). Never rewrite into a well there.
+_REPEAT_WORD = "|".join(sorted(set(NUMBER_SOUND) - {"to"}, key=len, reverse=True))
+_UNIT_WORD = r"minutes?|mins?|hours?|hrs?|seconds?|secs?|µl|ul|ml"
+_NO_WELL_AFTER = rf"(?!\s*(?:{_REPEAT_WORD}|\d{{1,2}}|{_UNIT_WORD})\b)"
 
 
 def normalize_text(text: str) -> str:
@@ -35,7 +41,7 @@ def normalize_text(text: str) -> str:
     )
     # Letter-word + number -> well ("see two" -> "C2").
     t = re.sub(
-        rf"\b({_LETTER_WORD})\s+({_NUMBER_WORD}|\d{{1,2}})\b",
+        rf"\b({_LETTER_WORD})\s+({_NUMBER_WORD}|\d{{1,2}})\b{_NO_WELL_AFTER}",
         lambda m: LETTER_SOUND[m.group(1).lower()] + NUMBER_SOUND.get(m.group(2).lower(), m.group(2)),
         t, flags=re.IGNORECASE,
     )
@@ -47,20 +53,21 @@ def normalize_text(text: str) -> str:
     )
     # Bare letter + number-word -> well ("C too" -> "C2").
     t = re.sub(
-        rf"\b([A-Ha-h])\s+({_NUMBER_WORD})\b",
+        rf"\b([A-Ha-h])\s+({_NUMBER_WORD})\b{_NO_WELL_AFTER}",
         lambda m: m.group(1).upper() + NUMBER_SOUND[m.group(2).lower()],
         t, flags=re.IGNORECASE,
     )
     # Join letter + digits ("C 2" -> "C2").
-    t = re.sub(r"\b([A-Ha-h])\s*(\d{1,2})\b", lambda m: m.group(1).upper() + m.group(2), t)
+    t = re.sub(rf"\b([A-Ha-h])\s*(\d{{1,2}})\b{_NO_WELL_AFTER}",
+               lambda m: m.group(1).upper() + m.group(2), t, flags=re.IGNORECASE)
     # Bare end takes the row ("C2 to 8" / "C2 to eight" -> "C2 to C8").
     t = re.sub(
-        rf"\b([A-H])(\d{{1,2}})\s+(to|through)\s+(\d{{1,2}})\b",
+        rf"\b([A-H])(\d{{1,2}})\s+(to|through)\s+(\d{{1,2}})\b{_NO_WELL_AFTER}",
         lambda m: f"{m.group(1)}{m.group(2)} {m.group(3)} {m.group(1)}{m.group(4)}",
         t, flags=re.IGNORECASE,
     )
     t = re.sub(
-        rf"\b([A-H])(\d{{1,2}})\s+(to|through)\s+({_NUMBER_WORD})\b",
+        rf"\b([A-H])(\d{{1,2}})\s+(to|through)\s+({_NUMBER_WORD})\b{_NO_WELL_AFTER}",
         lambda m: f"{m.group(1)}{m.group(2)} {m.group(3)} {m.group(1)}{NUMBER_SOUND[m.group(4).lower()]}",
         t, flags=re.IGNORECASE,
     )
@@ -106,6 +113,26 @@ def parse_wells(s) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def parse_wellref(s) -> list[str]:
+    """The one WellRef parser. 'C5' | 'C2–C8' ('C2-C8', 'C2 to C8',
+    'C2 through C8') | 'C2, C5, C7'. Every well arg (wells, well, near,
+    target, original) parses here. [] when none or invalid; never raises."""
+    try:
+        return parse_wells(s)
+    except Exception:
+        return []
+
+
+def find_well_mentions(text) -> set[str]:
+    """Well IDs mentioned anywhere in free text ('note C3, ok' → {'C3'})."""
+    out = set()
+    for m in re.finditer(r"\b([A-Ha-h])(\d{1,2})\b", text or ""):
+        w = f"{m.group(1).upper()}{m.group(2)}"
+        if _split(w):
+            out.add(w)
+    return out
+
+
 def expand_tool_wells(tool_calls):
     """Expand string wells args to arrays; drop calls left with no valid wells.
 
@@ -116,7 +143,7 @@ def expand_tool_wells(tool_calls):
         if c.get("name") in ("mark_done", "record_redo"):
             args = dict(c.get("args") or {})
             if "wells" in args:
-                wells = parse_wells(args["wells"])
+                wells = parse_wellref(args["wells"])
                 if not wells:
                     continue
                 args["wells"] = wells
@@ -124,7 +151,7 @@ def expand_tool_wells(tool_calls):
         elif c.get("name") == "set_timer":
             args = dict(c.get("args") or {})
             if "wells" in args:
-                wells = parse_wells(args["wells"])
+                wells = parse_wellref(args["wells"])
                 if wells:
                     args["wells"] = wells
                 else:
@@ -139,11 +166,11 @@ def call_wells(call) -> list[str]:
     args = call.get("args") or {}
     out: list[str] = []
     if isinstance(args.get("well"), str):
-        out += parse_wells(args["well"])
+        out += parse_wellref(args["well"])
     if "wells" in args:
-        out += parse_wells(args["wells"])
+        out += parse_wellref(args["wells"])
     if isinstance(args.get("target"), str):
-        out += parse_wells(args["target"])
+        out += parse_wellref(args["target"])
     return list(dict.fromkeys(out))
 
 
@@ -167,12 +194,51 @@ def where_am_i_reply(state: dict) -> str:
     return out
 
 
+def what_step_reply(state: dict) -> str:
+    step = state.get("step", 0)
+    if not isinstance(step, int):
+        step = 0
+    total = state.get("total")
+    name = state.get("step_name", "")
+    s = f"Step {step + 1}"
+    if isinstance(total, int):
+        s += f" of {total}"
+    return f"{s}, {name}." if name else f"{s}."
+
+
+def whats_next_reply(state: dict) -> str:
+    nxt = state.get("next_step", "")
+    return f"Next: {nxt}." if nxt else "Already at the last step."
+
+
+_CARD_YES = {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "do it", "confirm"}
+_CARD_NO = {"no", "nope", "nah", "don't", "dont"}
+_CARD_CANCEL = {"cancel", "never mind", "nevermind", "forget it"}
+_CARD_ALL = {"yes to all", "yes all", "approve all"}
+
+
+def match_card_answer(text: str) -> str | None:
+    """Bare card answers only: yes/no/cancel/all. Anything else is a new command."""
+    t = re.sub(r"\s+", " ", (text or "").lower()).strip(" \t.,!?;:")
+    if t in _CARD_ALL:
+        return "all"
+    if t in _CARD_YES:
+        return "yes"
+    if t in _CARD_NO:
+        return "no"
+    if t in _CARD_CANCEL:
+        return "cancel"
+    return None
+
+
 def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
-    """Exact short commands. Structure matches on scrubbed text; reason/body sliced verbatim.
+    """Exact short commands. Normalizes internally (certain rewrites only);
+    structure matches on scrubbed text; reason/body sliced from normalized text.
 
     The scrub (, . : -> space) and lower() are length-preserving, so match spans
-    index the original text for verbatim extraction.
+    index the normalized text for extraction.
     """
+    text = normalize_text(text)
     low = re.sub(r"[,.:]", " ", text.lower())
     m = re.fullmatch(r"\s*([a-h]\d{1,2})(?:\s+(?:to|through)\s+([a-h]\d{1,2}))?\s+done[?!]?\s*", low)
     if m:
@@ -187,6 +253,13 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
         return [{"name": "where_am_i", "args": {}}], where_am_i_reply(state)
     if re.search(r"\b(how many|what(?:'s|s| is)?|which)\b[^?.!]{0,25}\b(left|remaining)\b", low):
         return [{"name": "where_am_i", "args": {}}], where_am_i_reply(state)
+    if re.fullmatch(r"\s*what(?:'s|s| is)?\s+next(\s+step)?[?!]?\s*", low):
+        return [{"name": "where_am_i", "args": {"about": "next"}}], whats_next_reply(state)
+    if re.fullmatch(r"\s*(what|which)\s+step(\s+is\s+it|\s+are\s+we\s+on)?[?!]?\s*|\s*current\s+step[?!]?\s*", low):
+        return [{"name": "where_am_i", "args": {"about": "step"}}], what_step_reply(state)
+    if re.fullmatch(r"\s*(can you |could you |please )?(hand|pass|give|bring|fetch|hold|carry)\b.*\b(me|my)\b.*", low) \
+            and not re.search(r"\b(timer|note|tip|step|well|protocol)\b", low):
+        return [], "cant_do_physical"
     m = re.fullmatch(r"\s*exclude\s+([a-h]\d{1,2})\s*(.*)", low)
     if m:
         wells = expand_range(m.group(1).upper())
@@ -271,8 +344,11 @@ def words_to_minutes(s: str) -> int | float | None:
         return int(f) if f.is_integer() else f
     if re.fullmatch(r"half (?:an )?hour", t):
         return 30
-    total, ok = 0, False
+    total, ok, prev = 0, False, None
     for w in re.split(r"[\s-]+", t):
+        if w == prev:
+            continue  # stuttered repeat ("two two" heard once)
+        prev = w
         if w in _ONES_MAP:
             total += _ONES_MAP[w]
             ok = True
@@ -389,24 +465,94 @@ def relevant_plan_numbers(norm, step_names) -> set:
     return out
 
 
-def _num_minutes(x):
-    if isinstance(x, bool):
-        return None
+def build_evidence(utterance="", summary="", plan_numbers=frozenset(), reads_text=""):
+    """The one evidence pool every value check grounds against."""
+    return {
+        "utterance": utterance or "",
+        "summary": summary or "",
+        "plan_numbers": set(plan_numbers or ()),
+        "reads_text": reads_text or "",
+    }
+
+
+def read_text_numbers(data) -> set:
+    """Minute-amounts from READ-result text fields only (text/reason/redo_note/
+    label/name/memos). Structural ids (well lists, step numbers, counts) never
+    count — a timer needs a stated duration, not an id."""
+    texts: list[str] = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k in ("text", "reason", "redo_note", "label", "name"):
+                    if isinstance(v, str):
+                        texts.append(v)
+                elif k == "memos" and isinstance(v, list):
+                    texts.extend(x for x in v if isinstance(x, str))
+                elif k in ("near", "ago"):
+                    pass
+                elif k in ("wells", "free") and isinstance(v, list) and all(
+                        isinstance(x, str) for x in v):
+                    pass  # well-id lists; dict entries still walked
+                else:
+                    walk(v)
+        elif isinstance(o, list):
+            for x in o:
+                walk(x)
+
     try:
-        return float(x)
-    except (TypeError, ValueError):
-        return None
+        parsed = json.loads(data) if isinstance(data, str) else data
+    except ValueError:
+        return set()
+    walk(parsed if isinstance(parsed, (dict, list)) else {})
+    return find_amounts(" ".join(texts))
 
 
-def keep_grounded_timers(tool_calls, allowed: set) -> list:
-    """Keep set_timer calls whose minutes match an allowed amount (±0.01)."""
+def evidence_numbers(evidence) -> set:
+    """All minute-amounts the evidence pool states."""
+    return (
+        find_amounts(evidence.get("utterance", ""))
+        | find_amounts(evidence.get("summary", ""))
+        | set(evidence.get("plan_numbers") or ())
+        | read_text_numbers(evidence.get("reads_text", ""))
+    )
+
+
+def evidence_summary(turns) -> str:
+    """Recent conversation as grounding text: words, calls, results, asked.
+
+    asked lives one turn: only the previous turn's open question grounds
+    this one. Answered or ignored, it expires after a single turn.
+    """
+    lines = []
+    turns = turns or []
+    for i, t in enumerate(turns):
+        line = f"{t.get('text', '')} → {', '.join(t.get('calls') or [])}: " \
+            f"{' | '.join(t.get('messages') or []) or '-'}"
+        asked = t.get("asked") or {}
+        if asked.get("question") and i == len(turns) - 1:
+            line += f" | asked: {asked['question']}"
+            if asked.get("target"):
+                line += f" for {asked['target']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def keep_grounded_timers(tool_calls, evidence) -> list:
+    """Keep set_timer calls whose minutes ground in the evidence pool."""
     out = []
     for c in tool_calls:
         if c.get("name") != "set_timer":
             out.append(c)
             continue
-        m = _num_minutes((c.get("args") or {}).get("minutes"))
-        if m is not None and any(abs(m - a) < 0.01 for a in allowed):
+        m = (c.get("args") or {}).get("minutes")
+        if isinstance(m, str):
+            try:
+                m = float(m)
+            except ValueError:
+                continue
+        ok, _ = grounded(m, evidence)
+        if ok:
             out.append(c)
     return out
 
@@ -489,7 +635,7 @@ def timer_set_reply(tool_calls, state):
     """Canonical reply when a single timer answers a ranged follow-up. None = keep model's."""
     if len(tool_calls) != 1 or tool_calls[0].get("name") != "set_timer":
         return None
-    pq = state.get("pending_question")
+    pq = state.get("last_asked")
     target = pq.get("target") if isinstance(pq, dict) else None
     args = tool_calls[0].get("args")
     minutes = args.get("minutes") if isinstance(args, dict) else None
@@ -517,9 +663,9 @@ def split_ask(tool_calls):
 
 def filter_timer_calls(tool_calls, text, extra=frozenset()):
     """Collapse fanout, flag for-each, keep value-grounded set_timer calls."""
-    allowed = find_amounts(text) | set(extra)
+    evidence = build_evidence(text, "", frozenset(extra), "")
     return keep_grounded_timers(
-        mark_each_timers(collapse_each_timers(tool_calls, text), text), allowed
+        mark_each_timers(collapse_each_timers(tool_calls, text), text), evidence
     )
 
 
@@ -602,22 +748,54 @@ def speak_text(text: str, limit: int = 140) -> str:
     return cut or s[:limit]
 
 
-def verbatim_span(transcript: str, body: str) -> str:
-    """Memo text must quote the transcript. Returns the longest original-case
-    token run; ties prefer later body words (framing comes first).
-    Falls back to the full transcript when nothing matches."""
-    t = (transcript or "").strip()
-    b = strip_fillers(body)
-    if t and b:
-        tt = [(m.group(0).lower(), m.start(), m.end()) for m in re.finditer(r"\w+", t)]
-        bw = re.findall(r"\w+", b.lower())
-        for size in range(len(bw), 0, -1):
-            for i in range(len(bw) - size, -1, -1):
-                frag = bw[i:i + size]
-                for j in range(len(tt) - size + 1):
-                    if [x[0] for x in tt[j:j + size]] == frag:
-                        return strip_fillers(t[tt[j][1]:tt[j + size - 1][2]])
-    return strip_fillers(t) if t else strip_fillers(body)
+_SPAN_STOPWORDS = {"a", "an", "the"}
+
+
+def grounded(value, evidence):
+    """The one value check: every stated value grounds in the evidence pool.
+    Returns (ok, source) with source in utterance/read/conversation/plan/none.
+    Numbers (±0.01) match the strongest pool first; text must add no new facts
+    (amounts, wells) beyond the pool and carry a content word. Callers decide:
+    utterance/read apply now, conversation/plan ask to confirm, none re-asks —
+    an ungrounded value is never approved."""
+    if value is None or isinstance(value, bool):
+        return False, "none"
+    num = None
+    if isinstance(value, (int, float)):
+        num = float(value)
+    elif isinstance(value, str):
+        try:
+            num = float(value)
+        except ValueError:
+            pass
+    if num is not None:
+        pools = (
+            ("utterance", find_amounts(evidence.get("utterance", ""))),
+            ("read", read_text_numbers(evidence.get("reads_text", ""))),
+            ("conversation", find_amounts(evidence.get("summary", ""))),
+            ("plan", set(evidence.get("plan_numbers") or ())),
+        )
+        for source, amounts in pools:
+            if any(abs(num - a) < 0.01 for a in amounts):
+                return True, source
+        return False, "none"
+    body = value if isinstance(value, str) else ""
+    if not [w for w in re.findall(r"\w+", body.lower()) if w not in _SPAN_STOPWORDS]:
+        return False, "none"
+    pool = " ".join(
+        p for p in (
+            evidence.get("utterance", ""),
+            evidence.get("summary", ""),
+            evidence.get("reads_text", ""),
+        ) if p
+    )
+    if not pool:
+        return True, "utterance"  # empty pool (confirm replay): keep stored text
+    new_numbers = find_amounts(body) - find_amounts(pool)
+    new_wells = find_well_mentions(body) - find_well_mentions(pool)
+    if new_numbers or new_wells:
+        return False, "none"
+    return True, "utterance"
 
 
 def join_wells_ranges(wells) -> str:
@@ -630,6 +808,20 @@ def join_wells_ranges(wells) -> str:
         else:
             runs.append([row, col, col])
     return ", ".join(f"{r}{a}" if a == b else f"{r}{a}–{r}{b}" for r, a, b in runs)
+
+
+_STATE_CLAIM = re.compile(
+    r"\b(noted|done|excluded|started|recorded|saved|finished|completed|canceled|cancelled"
+    r"|logged|moved)\b",
+    re.IGNORECASE,
+)
+
+
+def honest_reply(tool_calls, reply, fallback="I didn't record anything."):
+    """Replies may only claim results the tools actually produced."""
+    if not tool_calls and "?" not in (reply or "") and _STATE_CLAIM.search(reply or ""):
+        return fallback
+    return reply
 
 
 def is_failure_message(s: str) -> bool:

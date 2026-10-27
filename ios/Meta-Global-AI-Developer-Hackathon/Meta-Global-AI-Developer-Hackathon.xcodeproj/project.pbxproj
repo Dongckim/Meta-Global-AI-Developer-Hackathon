@@ -38,9 +38,22 @@
 		9A1EC0DE0000000000000005 /* screens.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = screens.json; path = ../../shared/schemas/screens.json; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		88B6F859309143AC009723F2 /* Exceptions for "Meta-Global-AI-Developer-Hackathon" folder in "Meta-Global-AI-Developer-Hackathon" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 88B6F73730902E5C009723F2 /* Meta-Global-AI-Developer-Hackathon */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		88B6F73A30902E5C009723F2 /* Meta-Global-AI-Developer-Hackathon */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				88B6F859309143AC009723F2 /* Exceptions for "Meta-Global-AI-Developer-Hackathon" folder in "Meta-Global-AI-Developer-Hackathon" target */,
+			);
 			path = "Meta-Global-AI-Developer-Hackathon";
 			sourceTree = "<group>";
 		};
@@ -417,7 +430,9 @@
 				DEVELOPMENT_TEAM = QJRKWRZ65U;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Meta-Global-AI-Developer-Hackathon/Info.plist";
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connects to the Glassistant server on your local network.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to record bench voice commands.";
 				INFOPLIST_KEY_ServerBaseURL = "$(SERVER_BASE_URL)";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -425,6 +440,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.3.2;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -452,7 +468,9 @@
 				DEVELOPMENT_TEAM = QJRKWRZ65U;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Meta-Global-AI-Developer-Hackathon/Info.plist";
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connects to the Glassistant server on your local network.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to record bench voice commands.";
 				INFOPLIST_KEY_ServerBaseURL = "$(SERVER_BASE_URL)";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -460,6 +478,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.3.2;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

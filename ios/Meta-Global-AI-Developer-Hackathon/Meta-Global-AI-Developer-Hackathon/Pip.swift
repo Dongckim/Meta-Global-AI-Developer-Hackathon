@@ -68,6 +68,7 @@ struct Memo: Decodable, Equatable, Identifiable {
     var id: String
     var target: String
     var text: String
+    var raw: String?
     var ts: Double
     var history: [MemoEdit]
 }
@@ -160,7 +161,7 @@ struct RecordSnapshot: Decodable {
         tips = try c.decode([SavedTip].self, forKey: .tips)
         timers = try c.decode([TimerEntry].self, forKey: .timers)
         stamps = try c.decode([String: Stamp].self, forKey: .stamps)
-        cards = try c.decode([String: ServerCard].self, forKey: .cards).values.sorted { $0.ts < $1.ts }
+        cards = try c.decode([String: ServerCard].self, forKey: .cards).values.sorted { $0.ts > $1.ts }
     }
 }
 

@@ -32,14 +32,21 @@ def run(protocol: protocol_api.ProtocolContext):
 _WELL = re.compile(r"\b([A-H])(1[0-2]|[1-9])\b")
 
 
+def _q(s) -> str:
+    return '"{}"'.format(str(s or "").replace('"', '""'))
+
+
 def export_csv(store) -> str:
-    lines = ["well,status,detail"]
+    lines = ["well,status,detail,raw"]
     for w in sorted(store.r["done"]):
-        lines.append(f"{w},done,")
+        lines.append(f"{w},done,,")
     for w, reason in sorted(store.r["excluded"].items()):
-        lines.append(f'{w},excluded,"{reason}"')
+        lines.append(f'{w},excluded,"{reason}",')
     for w, note in sorted(store.r["redo"].items()):
-        lines.append(f'{w},redo,"{note}"')
+        lines.append(f'{w},redo,"{note}",')
+    for m in store.r["notes"]:
+        w = (m.get("wells") or [m.get("target", "")])[0]
+        lines.append(f"{w},memo,{_q(m.get('text', ''))},{_q(m.get('raw', ''))}")
     return "\n".join(lines) + "\n"
 
 

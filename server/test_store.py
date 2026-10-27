@@ -31,34 +31,34 @@ class StoreTest(unittest.TestCase):
 
     def test_mark_planned(self):
         r = self.apply([T("mark_done", wells=["C2", "C3"])])
-        self.assertEqual(r["messages"], ["✓ C2, C3 done"])
+        self.assertEqual(r["messages"], ["Nice, C2–C3 are in."])
         self.assertEqual(r["cards"], [])
         self.assertEqual(self.s.r["done"], ["C2", "C3"])
 
     def test_catch_and_confirm(self):
         r = self.apply([T("mark_done", wells=["A1"])])
         self.assertEqual(r["messages"], [])
-        self.assertEqual(r["cards"][0]["question"], "A1 is not in the step 3 plan. Record it anyway?")
+        self.assertEqual(r["cards"][0]["question"], "Wait — A1 isn't in this step. Still log it?")
         self.assertEqual(self.s.r["done"], [])
         msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
-        self.assertEqual(msg, "✓ A1 done")
+        self.assertEqual(msg, "Nice, A1 are in.")
         self.assertEqual(self.s.r["done"], ["A1"])
 
     def test_catch_plural_and_decline(self):
         r = self.apply([T("mark_done", wells=["A1", "A2"])])
-        self.assertIn("are not in the step 3 plan. Record them anyway?", r["cards"][0]["question"])
+        self.assertIn("isn't in this step. Still log it?", r["cards"][0]["question"])
         msg, _, _ = self.s.confirm(r["cards"][0]["id"], False, "card", self.sess)
         self.assertEqual(msg, "Canceled.")
         self.assertEqual(self.s.r["done"], [])
 
     def test_mark_invalid(self):
         r = self.apply([T("mark_done", wells=["Z9"])])
-        self.assertEqual(r["messages"], ["I couldn't record Z9: not a plate well."])
+        self.assertEqual(r["messages"], ["Z9 isn't on the plate. Which well did you mean?"])
         self.assertEqual(r["cards"], [])
 
     def test_exclude_card_roundtrip(self):
         r = self.apply([T("exclude_well", well="C3", reason="contaminated")])
-        self.assertEqual(r["cards"][0]["question"], "Exclude C3?")
+        self.assertEqual(r["cards"][0]["question"], "Drop C3?")
         self.assertEqual(r["cards"][0]["detail"], "contaminated")
         msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
         self.assertEqual(msg, "C3 excluded (contaminated)")
@@ -66,7 +66,7 @@ class StoreTest(unittest.TestCase):
 
     def test_exclude_invalid(self):
         r = self.apply([T("exclude_well", well="Z9")])
-        self.assertEqual(r["messages"], ["I couldn't record Z9: not a plate well."])
+        self.assertEqual(r["messages"], ["Z9 isn't on the plate. Which well did you mean?"])
 
     def test_redo_roundtrip(self):
         r = self.apply([T("record_redo", wells=["D7", "D8"], note="spill")])
@@ -74,16 +74,22 @@ class StoreTest(unittest.TestCase):
         msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
         self.assertEqual(msg, "D7, D8 marked for redo (spill)")
 
-    def test_note_verbatim_and_provenance(self):
+    def test_note_text_and_provenance(self):
         r = self.apply([T("add_note", target="C3", text="BIG BUBBLES EVERYWHERE")],
                        origin="note C3, big bubbles everywhere", route="grammar")
-        self.assertEqual(r["messages"], ["Note saved (C3)"])
+        self.assertEqual(r["messages"], ["Noted on C3."])
         memo = self.s.r["notes"][-1]
-        self.assertEqual(memo["text"], "big bubbles everywhere")
-        self.assertEqual(memo["transcript"], "note C3, big bubbles everywhere")
+        self.assertEqual(memo["text"], "BIG BUBBLES EVERYWHERE")
+        self.assertEqual(memo["raw"], "note C3, big bubbles everywhere")
         self.assertEqual(memo["route"], "grammar")
         self.assertEqual(memo["wells"], ["C3"])
-        self.assertEqual(r["info"]["saved_memo"]["text"], "big bubbles everywhere")
+        self.assertEqual(r["info"]["saved_memo"]["text"], "BIG BUBBLES EVERYWHERE")
+
+    def test_note_single_stopword_falls_back(self):
+        r = self.apply([T("add_note", target="C3", text="a")], origin="note C3, take a look")
+        self.assertEqual(self.s.r["notes"][-1]["text"], "note C3, take a look")
+        self.assertEqual(self.s.describe_well("C3"),
+                         "C3 is planned. Memos: note C3, take a look.")
 
     def test_edit_note_history(self):
         r = self.apply([T("edit_note", text="x")])
@@ -92,9 +98,26 @@ class StoreTest(unittest.TestCase):
         r = self.apply([T("edit_note", text="NO BUBBLES ACTUALLY")], origin="edit last note, no bubbles actually")
         self.assertEqual(r["messages"], ["Note updated."])
         memo = self.s.r["notes"][-1]
-        self.assertEqual(memo["text"], "no bubbles actually")
+        self.assertEqual(memo["text"], "NO BUBBLES ACTUALLY")
         self.assertEqual(memo["history"], [{"text": "bubbles", "ts": memo["history"][0]["ts"]}])
         self.assertEqual(r["info"]["edited"], {"id": memo["id"], "target": "C3"})
+
+    def test_edit_note_by_well(self):
+        self.apply([T("add_note", target="C3", text="bubbles")], origin="note C3 bubbles")
+        self.apply([T("add_note", target="C5", text="sticky")], origin="note C5 sticky")
+        r = self.apply([T("edit_note", well="C3", text="NO BUBBLES")],
+                       origin="change C3 memo, no bubbles")
+        self.assertEqual(r["messages"], ["Note updated."])
+        self.assertEqual(self.s.r["notes"][0]["text"], "NO BUBBLES")
+        self.assertEqual(self.s.r["notes"][1]["text"], "sticky")
+        self.assertEqual(len(self.s.r["notes"][0]["history"]), 1)
+
+    def test_edit_note_well_without_note(self):
+        self.apply([T("add_note", target="C3", text="bubbles")], origin="note C3 bubbles")
+        r = self.apply([T("edit_note", well="C5", text="x")])
+        self.assertEqual(r["messages"], ["No note on C5 yet."])
+        r = self.apply([T("edit_note", well="Z9", text="x")])
+        self.assertEqual(r["messages"], ["Z9 isn't on the plate. Which well did you mean?"])
 
     def test_manual_edit(self):
         self.apply([T("add_note", target="C3", text="bubbles")], origin="note C3 bubbles")
@@ -112,36 +135,38 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(msg, "Tip saved (s1)")
 
     def test_tip_attach_uses_candidate(self):
-        self.sess["pending"] = {"kind": "attach", "candidate": "Incubate 30 minutes. (Source: X)"}
+        self.sess["last_web"] = "Incubate 30 minutes. (Source: X)"
+        self.sess["turns"] = [{"text": "usual incubation?", "calls": [], "messages": [],
+                               "asked": {"question": "Attach to step 3?", "target": ""}}]
         r = self.apply([T("save_tip", step_id="s3", text="incubate 30 minutes")], origin="yes")
-        self.assertEqual(r["cards"][0]["detail"], "[s3] Incubate 30 minutes")
+        self.assertEqual(r["cards"][0]["detail"], "[s3] incubate 30 minutes")
         msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
         self.assertEqual(msg, "Tip saved (s3)")
-        self.assertEqual(self.s.r["tips"][-1]["text"], "Incubate 30 minutes")
+        self.assertEqual(self.s.r["tips"][-1]["text"], "incubate 30 minutes")
 
     def test_timer_fanout_and_dup(self):
         r = self.apply([T("set_timer", label="x", minutes=30, wells=["C2", "C3"])])
-        self.assertEqual(r["messages"], ["Timer started: drug A · C2 · 30 min", "Timer started: drug A · C3 · 30 min"])
+        self.assertEqual(r["messages"], ["30 minutes on C2. I'll ping you.", "Timer's on: 30 minutes for C3."])
         r = self.apply([T("set_timer", label="x", minutes=30, wells=["C2"])])
         self.assertTrue(r["cards"][0]["question"].startswith("A drug A · C2 timer is already running ("))
         msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
-        self.assertEqual(msg, "Timer started: drug A · C2 · 30 min")
+        self.assertEqual(msg, "Got it — 30 minutes on C2.")
 
     def test_timer_unscoped_and_each(self):
         r = self.apply([T("set_timer", label="x", minutes=5)])
-        self.assertEqual(r["messages"], ["Timer started: drug A · 5 min"])
+        self.assertEqual(r["messages"], ["5 minutes. I'll ping you."])
         r = self.apply([T("set_timer", label="x", minutes=5, each=True)])
         self.assertEqual(len(self.s.r["timers"]), 8)
 
     def test_cancel_extend_list(self):
         r = self.apply([T("manage_timers", action="cancel", label="wash")])
-        self.assertEqual(r["messages"], ["I couldn't find a wash timer. No timers running."])
+        self.assertEqual(r["messages"], ["Hmm, I don't see a wash timer. Want me to start one? No timers running."])
         self.apply([T("set_timer", label="x", minutes=5, wells=["C1"])])
         self.apply([T("set_timer", label="x", minutes=5, wells=["C10"])])
         r = self.apply([T("manage_timers", action="cancel")])
         self.assertTrue(r["messages"][0].startswith("Which timer should I cancel?"))
         r = self.apply([T("manage_timers", action="cancel", label="C1")])
-        self.assertEqual(r["messages"], ["Timer canceled: drug A · C1 · 5 min"])
+        self.assertEqual(r["messages"], ["Okay, C1 timer's off."])
         self.assertEqual(len(self.s.r["timers"]), 1)
         r = self.apply([T("manage_timers", action="extend", label="C10")])
         self.assertEqual(r["messages"], ["+5 min: drug A · C10 · 5 min (10 min)"])
@@ -156,7 +181,7 @@ class StoreTest(unittest.TestCase):
     def test_next_card_and_last(self):
         r = self.apply([T("next_step")])
         self.assertEqual(len(r["cards"]), 1)
-        self.assertTrue(r["cards"][0]["question"].startswith("Move to step 4 ("))
+        self.assertTrue(r["cards"][0]["question"], "Ready for step 4?")
         msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
         self.assertTrue(msg.startswith("Next: "))
         self.s.r["step_index"] = 4
@@ -181,7 +206,7 @@ class StoreTest(unittest.TestCase):
         st = self.s.model_state(sess)
         self.assertEqual(len(st["recent_turns"]), 8)
         self.assertTrue(st["recent_turns"][0].startswith("C2 done → mark_done[C2]: ✓ C2 done"))
-        self.assertNotIn("recent_turns", self.s.model_state({"chained": True, "turns": sess["turns"]}))
+        self.assertIn("recent_turns", self.s.model_state({"chained": True, "turns": sess["turns"]}))
         self.assertNotIn("recent_turns", self.s.model_state({}))
 
     def test_where_and_show(self):
@@ -253,7 +278,7 @@ class StoreTest(unittest.TestCase):
     def test_multi_card_turn_queues_in_order(self):
         r = self.apply([T("exclude_well", well="C3", reason="bubble"),
                         T("record_redo", wells=["C4"], note="backup")])
-        self.assertEqual([c["question"] for c in r["cards"]], ["Exclude C3?", "Redo C4?"])
+        self.assertEqual([c["question"] for c in r["cards"]], ["Drop C3?", "Redo C4?"])
 
     def test_drop_reasons_carry_raw_args(self):
         r = self.apply([T("add_note", target="C3", text=5)])
@@ -266,7 +291,7 @@ class StoreTest(unittest.TestCase):
     def test_user_text_names_no_tool(self):
         tools = ["mark_done", "exclude_well", "record_redo", "add_note", "save_tip",
                  "set_timer", "manage_timers", "where_am_i", "next_step", "show",
-                 "ask", "make_robot", "get_well", "find_free_wells", "answer",
+                 "ask", "make_robot", "read_record", "find_free_wells", "answer",
                  "propose_plan"]
         r = self.apply([
             T("mark_done", wells=["Z9"]),
@@ -276,7 +301,7 @@ class StoreTest(unittest.TestCase):
             T("save_tip", step_id="s1", text=5),
             T("set_timer", label="x"),
             T("manage_timers", action="frobnicate"),
-            T("get_well", well="Z9"),
+            T("read_record", kind="bogus"),
             T("find_free_wells", near="Z9"),
             T("answer", text="  "),
             T("nope"),
@@ -285,6 +310,29 @@ class StoreTest(unittest.TestCase):
                         + [d["reason"] for d in r["info"]["drop_reasons"]])
         for t in tools:
             self.assertNotIn(t, seen)
+
+    def test_read_record_kinds(self):
+        self.apply([T("add_note", target="C6", text="sticky")], origin="note C6, sticky")
+        d = self.s.read_record("wells", "C6")
+        self.assertEqual(d["wells"][0]["memos"], ["sticky"])
+        d = self.s.read_record("notes", "C6")
+        self.assertEqual([(m["target"], m["text"]) for m in d["notes"]], [("C6", "sticky")])
+        d = self.s.read_record("notes", "drug_A")
+        self.assertTrue(all(m["target"].startswith("C") for m in d["notes"]))
+        d = self.s.read_record("steps", "current")
+        self.assertEqual(len(d["steps"]), 1)
+        self.assertTrue(d["steps"][0]["current"])
+        d = self.s.read_record("timers", "")
+        self.assertEqual(d, {"timers": []})
+        d = self.s.read_record("history", "", 2)
+        self.assertTrue(len(d["history"]) <= 2)
+        d = self.s.read_record("wells", "C2-C8", 2)
+        self.assertEqual(len(d["wells"]), 2)
+        d = self.s.read_record("wells", "bogus")
+        self.assertEqual(d, {"wells": []})
+        self.assertIn("error", self.s.read_record("bogus", ""))
+        r = self.apply([T("read_record", kind="wells", filter="C6")])
+        self.assertEqual(r["messages"], [])
 
     def test_navigate_open_back(self):
         r = self.apply([T("navigate", screen="robot_preview")])
@@ -319,7 +367,7 @@ class StoreTest(unittest.TestCase):
             T("record_redo", wells=["C9"]), T("add_note", target="C2", text="x"),
             T("save_tip", step_id="s", text="x"), T("set_timer", label="x", minutes=1),
             T("manage_timers", action="list"), T("where_am_i"), T("next_step"),
-            T("show", view="plate"), T("make_robot"), T("get_well", well="C2"),
+            T("show", view="plate"), T("make_robot"), T("read_record", kind="wells", filter="C2"),
             T("find_free_wells", near="C2"), T("answer", text="x"),
             T("navigate", screen="main"), T("open", target="C5"), T("back"),
         ], origin="x")
@@ -347,7 +395,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual([e["kind"] for e in evs], ["timer_done", "timer_done"])
         cards = [c for c in self.s.r["cards"].values() if c["kind"] == "suggest_next"]
         self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0]["question"], "2 timers done: C2–C3. Move to step 4?")
+        self.assertEqual(cards[0]["question"], "Ready for step 4?")
 
     def test_suggest_fold_in(self):
         self._expired_timer("C2", "drug A · C2 · 5 min")
@@ -357,7 +405,7 @@ class StoreTest(unittest.TestCase):
         self.s.check_timers(time.time())
         cards = [c for c in self.s.r["cards"].values() if c["kind"] == "suggest_next"]
         self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0]["question"], "3 timers done: C2, C5–C6. Move to step 4?")
+        self.assertEqual(cards[0]["question"], "Ready for step 4?")
 
     def test_stale_step_cards_dropped(self):
         self._expired_timer("C2", "drug A · C2 · 5 min")
@@ -402,7 +450,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(sorted(m["text"] for m in self.s.r["notes"]),
                          ["note 0", "note 1", "note 2", "note 3"])
         for r in results:
-            self.assertEqual(r["messages"], ["Note saved (C5)"])
+            self.assertEqual(r["messages"], ["Noted on C5."])
         cards = [c for c in self.s.r["cards"].values() if c["kind"] == "suggest_next"]
         self.assertEqual(len(cards), 1)
 
@@ -410,7 +458,7 @@ class StoreTest(unittest.TestCase):
         r = self.apply([{"name": "mark_done", "args": {"wells": ["C2"]}, "call_id": "c1"},
                         {"name": "exclude_well", "args": {"well": "C3"}, "call_id": "c2"}])
         self.assertEqual(len(r["outcomes"]), 2)
-        self.assertEqual(r["outcomes"][0]["messages"], ["✓ C2 done"])
+        self.assertEqual(r["outcomes"][0]["messages"], ["Nice, C2 are in."])
         self.assertEqual(r["outcomes"][0]["cards"], [])
         self.assertEqual(r["outcomes"][1]["cards"][0]["payload"]["_call_id"], "c2")
         msg, _, card = self.s.confirm(r["outcomes"][1]["cards"][0]["id"], True, "card", self.sess)
@@ -431,11 +479,11 @@ class StoreTest(unittest.TestCase):
         evs = self.s.check_timers(now)
         kinds = [e["kind"] for e in evs]
         self.assertEqual(kinds, ["timer_warning", "timer_done"])
-        self.assertEqual(evs[1]["message"], "drug A on C3: 1 minutes done.")
+        self.assertEqual(evs[1]["message"], "Heads up! 1 minutes are up on C3.")
         self.assertNotIn("card", evs[1])
         cards = [c for c in self.s.r["cards"].values() if c["kind"] == "suggest_next"]
         self.assertEqual(len(cards), 1)
-        self.assertIn("Move to step 4?", cards[0]["question"])
+        self.assertEqual(cards[0]["question"], "Ready for step 4?")
         self.assertEqual(sorted(t["id"] for t in self.s.r["timers"]), ["a", "b"])
 
     def test_plan_times(self):
@@ -452,14 +500,17 @@ class StoreTest(unittest.TestCase):
         for k in ("step", "total", "step_name", "done", "excluded", "step_wells",
                   "remaining", "timers", "recent"):
             self.assertIn(k, st)
-        self.assertEqual(self.s.prompt_state({"pending": {"question": "Q?"}})["pending_question"],
-                         {"question": "Q?"})
+        sess = {"turns": [{"text": "t", "calls": [], "messages": [],
+                            "asked": {"question": "Q?", "target": "C2"}}]}
+        self.assertEqual(self.s.prompt_state(sess)["last_asked"],
+                         {"question": "Q?", "target": "C2"})
+        self.assertNotIn("last_asked", self.s.prompt_state({"turns": []}))
 
     def test_persistence_and_broadcast(self):
         seen = []
         self.s.subscribe(seen.append)
         self.apply([T("mark_done", wells=["C2"])])
-        self.assertTrue(seen and seen[-1]["kind"] == "snapshot")
+        self.assertTrue(any(m.get("kind") == "snapshot" for m in seen))
         again = RecordStore(path=Path(self.tmp.name) / "r.json")
         self.assertEqual(again.r["done"], ["C2"])
 

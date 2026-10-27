@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 @testable import Meta_Global_AI_Developer_Hackathon
@@ -67,6 +68,14 @@ struct PipTests {
         lab.sync(Self.snapshot())
         #expect(lab.visibleTimers(now: Date(timeIntervalSince1970: 1100)).count == 1)
         #expect(lab.visibleTimers(now: Date(timeIntervalSince1970: 100000)).isEmpty)
+    }
+
+    @Test func voiceRankPrefersAvaPremium() {
+        #expect(SpeechBus.rank(name: "Ava", quality: .premium) == 0)
+        #expect(SpeechBus.rank(name: "Ava", quality: .enhanced) == 1)
+        #expect(SpeechBus.rank(name: "Samantha", quality: .premium) == 2)
+        #expect(SpeechBus.rank(name: "Samantha", quality: .enhanced) == 3)
+        #expect(SpeechBus.rank(name: "Samantha", quality: .default) == 4)
     }
 
     @Test @MainActor func showAndRangeHelpers() {

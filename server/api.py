@@ -13,6 +13,8 @@ import asyncio
 import hashlib
 import json
 import os
+import re
+import subprocess
 import time
 import uuid
 import wave
@@ -21,18 +23,23 @@ from io import BytesIO
 from pathlib import Path
 
 from server.grammar import (
+    build_evidence,
     call_wells,
     collapse_each_timers,
+    evidence_summary,
     expand_tool_wells,
     fill_on_done,
     final_pip_line,
-    find_amounts,
+    find_well_mentions,
+    grounded,
+    honest_reply,
     is_failure_message,
-    keep_grounded_timers,
     mark_each_timers,
+    match_card_answer,
     match_grammar,
     needs_minutes_ask,
     normalize_text,
+    parse_wellref,
     relevant_plan_numbers,
     speak_text,
     split_ask,
@@ -42,7 +49,9 @@ from server.grammar import (
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
 from server.screens import canonical as canonical_screen
-from server.store import RecordStore, is_well
+from server.store import RecordStore
+from server.tone import keys as tone_keys
+from server.tone import say
 
 import httpx
 from dotenv import load_dotenv
@@ -71,15 +80,24 @@ CHAIN_ENABLED = os.environ.get("CHAIN_ENABLED", "false").lower() == "true"
 TURN_HISTORY = 6
 
 SYSTEM = (
-    "You are Pip, a bench assistant. Emit tool calls only, never reply text. "
-    "Wells go as range strings (\"C2-C8\"). \"Those\" and \"it\" refer to recent wells. "
+    "You're Pip, a friendly lab buddy at the bench. "
+    "Short, warm, casual (Got it / Nice / Heads up / Hmm). "
+    "Never claim anything the record doesn't show. "
+    "Record only reported facts (done, finished, added, saw, looks). "
+    "Bench instructions (wash, add, do, start the next) are not records: "
+    "do the Pip-side part (timer, guidance) or ask. "
+    "If no tool fits (thanks, greeting), answer in one short sentence. "
+    "Text beside tool calls is ignored. "
+    "Wells are WellRefs (\"C2-C8\"). \"Those\" and \"it\" refer to recent wells. "
     "One set_timer per distinct duration; the server fans each out per well. "
-    "Use only minutes stated in the message or plan. "
-    "Answer questions with answer(text); use get_well only for memo text, never for counts. "
+    "Ground every value in this message, the plan, or read results. "
+    "For questions about the record, call read_record once, then answer(text) briefly for speech. "
+    "If the list is long, navigate to show it all and summarize aloud. "
+    "After a write, the screen updates itself; never call open to confirm. "
     "Ask the user with ask(question) only when you must. "
-    "pending_question means this message answers it. "
+    "asked: is your last question; this message may answer it. "
     "Emit direct calls in run order; if a later step needs an earlier result, do only the first step now. "
-    "For another or backup well, call find_free_wells first and propose the first candidate; redoing elsewhere always pairs exclude_well with record_redo; redo targets must be free. "
+    "For another or backup well, call find_free_wells first, then act on the first candidate at once (redo: exclude_well + record_redo); the server confirms via cards. "
     "Robot protocol: make_robot."
 )
 if WEB_SEARCH_ENABLED:
@@ -111,101 +129,163 @@ def _tool(name: str, desc: str, props: dict) -> dict:
     }
 
 
-WELLS = {"type": "string", "description": 'Well range, e.g. "C2-C8" or "C2,C5,C7"'}
+WELLREF = {"type": "string", "description": 'WellRef: "C5" | "C2-C8" | "C2,C5,C7"'}
 
 TOOLS = [
-    _tool("mark_done", "Mark wells finished.", {"wells": WELLS}),
+    _tool("mark_done",
+          "Use when the user REPORTS wells finished (done, finished, added, I put, washed). "
+          "Don't use for instructions about bench work to do ('wash the remaining', 'add drug A') "
+          "— record nothing; guide or ask instead. "
+          "Example: 'C2 to C8 done'.",
+          {"wells": WELLREF}),
     _tool(
         "exclude_well",
-        "Exclude one well.",
+        "Use when the user drops a well from the run. "
+        "Don't use for redo (use record_redo), done (use mark_done), "
+        "or bench instructions ('wash C6'). "
+        "Example: 'C3 looks cloudy, drop it'.",
         {
-            "well": {"type": "string", "description": "Well ID"},
+            "well": WELLREF,
             "reason": _opt({"type": "string", "description": "Why, if stated"}),
         },
     ),
     _tool(
         "record_redo",
-        "Mark wells for redo. Redoing elsewhere: also exclude the damaged well.",
-        {"wells": WELLS, "note": _opt({"type": "string", "description": "What went wrong"})},
+        "Use when the user reports damage needing a rerun. "
+        "Don't use without excluding the damaged well when redoing elsewhere. "
+        "Don't use for run-ahead instructions ('run the next ones'). "
+        "Example: 'C3 has a bubble, redo it in a backup well'.",
+        {"wells": WELLREF, "note": _opt({"type": "string", "description": "What went wrong"})},
     ),
     _tool(
         "add_note",
-        "Note a target. Quote the speaker exactly.",
+        "Use when the user states an observation to record on a well or step. "
+        "Don't use when there is nothing to write ('I want to make notes on C8') — "
+        "ask what to write instead. "
+        "Example: 'Note C8, sticky edges'.",
         {
-            "target": {"type": "string", "description": "Well, step, or sample"},
-            "text": {"type": "string"},
+            "target": {"type": "string", "description": 'WellRef, or a step/sample name. "C8"'},
+            "text": {"type": "string", "description": "Clean one-line memo of what was said"},
+        },
+    ),
+    _tool(
+        "edit_note",
+        "Use when the user corrects a note. "
+        "Don't use for new notes (use add_note). "
+        "Example: 'change C5's memo, no longer sticky'.",
+        {
+            "well": _opt({"type": "string", "description": 'WellRef, if stated. "C5"'}),
+            "text": {"type": "string", "description": "Replacement memo text"},
         },
     ),
     _tool(
         "save_tip",
-        "Save a bench tip for a step.",
+        "Use when the user states a bench tip for a step, or confirms attaching a searched answer. "
+        "Don't use for well observations (use add_note). "
+        "Example: 'attach it to step 3'.",
         {"step_id": {"type": "string"}, "text": {"type": "string"}},
     ),
     _tool(
         "set_timer",
-        "Start a countdown.",
+        "Use when the user starts a countdown with stated minutes. "
+        "Don't use without minutes — ask instead. "
+        "Don't use to cancel or extend (use manage_timers). "
+        "Example: 'two minutes for C7'.",
         {
             "label": {"type": "string"},
             "minutes": {"type": "number", "description": "Minutes from now"},
             "on_done": _opt({"type": "string", "description": "Next action, if stated"}),
-            "wells": _opt(WELLS),
+            "wells": _opt(WELLREF),
         },
     ),
     _tool(
         "manage_timers",
-        "List, cancel, or extend timers. Extend adds 5 min unless minutes given.",
+        "Use to list, cancel, or extend timers. Extend adds 5 min unless minutes given. "
+        "Don't use to start one (use set_timer). "
+        "Example: 'cancel the wash timer'.",
         {
             "action": {"type": "string", "description": "list, cancel, or extend"},
             "label": _opt({"type": "string", "description": "Timer label"}),
             "minutes": _opt({"type": "number", "description": "Minutes to add"}),
         },
     ),
-    _tool("where_am_i", "Report step and progress.", {}),
-    _tool("next_step", "Advance one step.", {}),
+    _tool("next_step",
+          "Use when the user moves to the next step. "
+          "Don't use to ask what the next step is (read steps instead). "
+          "Don't use for the next physical action ('do the next wash'). "
+          "Example: 'move to step 4'.", {}),
     _tool(
         "show",
-        "Highlight on screen.",
+        "Use when the user wants something highlighted on screen. "
+        "Don't use after a write — the screen updates itself. "
+        "Example: 'show column 8'.",
         {
             "view": {"type": "string", "description": "plate, timer, protocol"},
-            "target": _opt({"type": "string", "description": "Well/step, if any"}),
+            "target": _opt({"type": "string", "description": 'WellRef/step, if any. "C8"'}),
         },
     ),
     _tool(
         "ask",
-        "Ask the user a question. Only when you must.",
+        "Use when you must ask the user something to proceed. "
+        "Don't use when you can act or answer already. "
+        "Example: 'Which well?'.",
         {"question": {"type": "string"}},
     ),
-    _tool("make_robot", "Build the robot protocol.", {}),
+    _tool("make_robot",
+          "Use when the user wants the robot protocol built. "
+          "Don't use for anything else. "
+          "Example: 'make the robot protocol'.", {}),
     _tool(
-        "get_well",
-        "Look up one well's status and memos.",
-        {"well": {"type": "string", "description": "Well ID"}},
+        "read_record",
+        "Use when you need record facts to answer or decide. "
+        "Don't use when the state you have already answers it. "
+        "Example: 'what is on C6'.",
+        {
+            "kind": {"type": "string", "enum": ["wells", "notes", "timers", "steps", "history"]},
+            "filter": _opt({"type": "string",
+                            "description": "WellRef, group, step, or label; blank for the natural scope"}),
+            "limit": _opt({"type": "integer", "description": "Max entries (default 10)"}),
+        },
     ),
     _tool(
         "find_free_wells",
-        "List free wells near a well. For another or backup well, take these and propose the first; ask if none.",
+        "Use when the user wants another or backup well. "
+        "After the lookup, act on the first candidate at once (redo: exclude_well + record_redo); "
+        "the server confirms via cards, so don't ask which candidate. Ask only if none. "
+        "A range near searches past its end. Don't guess free wells yourself. "
+        "Example: 'redo it in a backup well'.",
         {
-            "near": {"type": "string", "description": "Reference well"},
+            "near": {"type": "string", "description": 'Reference WellRef. "C3"'},
             "count": _opt({"type": "integer", "description": "How many (default 3)"}),
         },
     ),
     _tool(
         "answer",
-        "Answer a question. Short text only.",
+        "Use to answer the user's question briefly after reading. "
+        "Don't use beside a write — the write wins. "
+        "Don't use to narrate tool calls. "
+        "Example: 'Yes, 6 of 5 left.'.",
         {"text": {"type": "string"}},
     ),
     _tool(
         "navigate",
-        "Go to a screen.",
+        "Use when the user asks to go somewhere (go to). "
+        "Don't use to confirm a write — the screen updates itself. "
+        "Example: 'go to the robot preview'.",
         {"screen": {"type": "string", "enum": SCREEN_IDS,
                     "description": "Screen id from the registry"}},
     ),
     _tool(
         "open",
-        "Open a well card, or a screen by name.",
-        {"target": {"type": "string", "description": "Well id or screen name"}},
+        "Use when the user asks to view something (open, show, let me see). "
+        "Don't use after a write — the screen shows it. "
+        "Example: 'open C8'.",
+        {"target": {"type": "string", "description": "WellRef or screen name"}},
     ),
-    _tool("back", "Go back to the previous screen.", {}),
+    _tool("back",
+          "Use when the user says back. "
+          "Don't use after other actions in the same turn. "
+          "Example: 'back'.", {}),
 ]
 if WEB_SEARCH_ENABLED:
     TOOLS.append({"type": "web_search", "search_context_size": "low"})
@@ -231,25 +311,47 @@ def get_session(sid: str | None) -> dict:
     if s is None:
         s = {"id": sid, "chained": CHAIN_ENABLED,
              "memory": SparkChainMemory() if CHAIN_ENABLED else SummaryMemory(),
-             "pending": None, "last_web": None, "turns": []}
+             "last_web": None, "turns": []}
         _SESSIONS[sid] = s
     return s
 
 
-def log_turn(session: dict, text: str, calls, messages) -> None:
-    """One line per turn: user words / executed tools and results. Capped."""
+def log_turn(session: dict, text: str, calls, messages, asked=None) -> None:
+    """One line per turn: user words / tools and results / Pip's question. Capped."""
     bits = []
     for c in calls or []:
         w = ",".join(call_wells(c))
         bits.append(f"{c.get('name', '?')}[{w}]" if w else c.get("name", "?"))
     turns = session.setdefault("turns", [])
     turns.append({"text": (text or "")[:120], "calls": bits,
-                  "messages": [m[:100] for m in (messages or [])[:4]]})
+                  "messages": [m[:100] for m in (messages or [])[:4]],
+                  "asked": asked or {}})
     del turns[:-TURN_HISTORY]
+
+
+_COMMIT: str | None = None
+
+
+def git_commit() -> str:
+    """Running code's commit hash (cached). 'unknown' when git is unavailable."""
+    global _COMMIT
+    if _COMMIT is None:
+        try:
+            r = subprocess.run(
+                ["git", "rev-parse", "--short=12", "HEAD"],
+                cwd=Path(__file__).resolve().parent.parent,
+                capture_output=True, text=True, timeout=5)
+            _COMMIT = r.stdout.strip() or "unknown"
+        except Exception:
+            _COMMIT = "unknown"
+    return _COMMIT
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print(f"pip-server commit={git_commit()} tools={len(TOOLS)} "
+          f"ph={prefix_hash()} memory={'chain' if CHAIN_ENABLED else 'summary'}", flush=True)
+
     async def watch():
         while True:
             try:
@@ -281,6 +383,16 @@ class ConfirmIn(BaseModel):
     session: str = "bench"
 
 
+class InputIn(BaseModel):
+    text: str = ""
+    card_id: str = ""
+    answer: str = ""
+    session: str = "bench"
+    screen: str = "main"
+    selected_well: str = ""
+    open_sheet: str = ""
+
+
 class EditNoteIn(BaseModel):
     id: str = Field(min_length=1)
     text: str = Field(min_length=1)
@@ -308,13 +420,16 @@ async def _post(client: httpx.AsyncClient, name: str, *a, **k) -> httpx.Response
 
 async def _call_spark(
     client: httpx.AsyncClient, key: str, text: str, state: dict, session: dict,
-    model: str = SPARK_MODEL, effort: str = REASONING_EFFORT,
+    model: str = SPARK_MODEL, effort: str = REASONING_EFFORT, lookup: bool = False,
+    echo_calls: list | None = None,
 ) -> tuple[list, str, int, bool, dict, list]:
     """Returns (calls, text, ms, truncated, usage, web_searches).
 
     Chained turns carry function_call_outputs for the previous turn's calls.
-    Any 4xx on a chained call drops the chain and retries once fresh with a
-    recent-actions summary; a second failure answers sorry instead of a 502.
+    Lookup rounds replay round 1 inline (question, calls, outputs) so the
+    second round answers from bound tool results instead of guessing.
+    Any 4xx on a chained call drops the chain and retries once fresh with
+    a recent-actions summary; a second failure answers sorry instead of a 502.
     """
     mem: Memory = session["memory"]
     if isinstance(mem, SparkChainMemory) and mem.needs_reanchor:
@@ -327,11 +442,31 @@ async def _call_spark(
             mem.seed = ""
         chained = "previous_response_id" in mem.params()
         pend = session.get("pending_outputs") or []
-        if chained and pend:
+        if pend and chained:
             req_input: object = [
                 {"type": "function_call_output", "call_id": p["call_id"], "output": p["output"]}
                 for p in pend
             ] + [{"role": "user", "content": text}]
+        elif pend and lookup:
+            # Summary mode stores nothing, so round 1 is replayed inline:
+            # question, calls, bound outputs, continue nudge. A bare
+            # repeated question restarts the lookup; text-only results
+            # don't bind. Outputs without a call are dropped (unbound
+            # outputs 400).
+            outs = {p["call_id"]: p["output"] for p in pend if p.get("call_id")}
+            req_input = [{"role": "user", "content": text}]
+            for c in echo_calls or []:
+                cid = c.get("call_id")
+                if not cid or cid not in outs:
+                    continue
+                req_input.append({
+                    "type": "function_call", "name": c.get("name"),
+                    "arguments": json.dumps(c.get("args") or {}), "call_id": cid})
+                req_input.append({"type": "function_call_output", "call_id": cid,
+                                  "output": outs.pop(cid)})
+            for cid, output in outs.items():
+                print(f"spark lookup: dropping unbound output {cid}", flush=True)
+            req_input.append({"role": "user", "content": CONTINUE_TEXT})
         else:
             req_input = text
         body = {
@@ -377,6 +512,10 @@ async def _call_spark(
               f"in_tok={in_tok} cached={cached} out_tok={out_tok} reason_tok={reason_tok} "
               f"ph={prefix_hash()}", flush=True)
         if payload.get("status") == "incomplete":
+            reason = (payload.get("incomplete_details") or {}).get("reason", "?")
+            print(f"spark incomplete: reason={reason} attempt={attempt}", flush=True)
+            if attempt == 0:
+                continue  # one retry, same effort and tools
             return [], "Sorry, say that again?", ms, True, usage, []
         calls, texts, searches = [], [], []
         for item in payload.get("output", []):
@@ -435,76 +574,129 @@ def recent_target() -> str | None:
     return wells_label(wells) if wells else None
 
 
+#: Lookup-round nudge, mirroring the chained shape inline.
 CONTINUE_TEXT = "Continue with the looked-up data."
 
 
+def _short_text(t: str) -> str:
+    """Model's conversational line: collapsed, first two sentences, capped."""
+    t = " ".join((t or "").split())
+    t = " ".join(re.split(r"(?<=[.!?])\s+", t, maxsplit=2)[:2])
+    return t if len(t) <= 280 else t[:277].rstrip() + "…"
+
+
+def _which_one(pool: list) -> str:
+    """Disambiguation over pending cards, newest first, no resolution."""
+    qs = []
+    for c in pool[:3]:
+        q = (c.get("question") or "that").strip().rstrip("?")
+        qs.append(q[:1].lower() + q[1:] if q else "that")
+    if len(qs) == 2:
+        return f"Which one — {qs[0]}, or {qs[1]}?"
+    return "Which one — " + ", ".join(qs[:-1]) + f", or {qs[-1]}?"
+
+
+def _answer_cards(ans: str, session: dict):
+    """Resolve open cards without a model call. Returns the run_utterance tuple.
+
+    A bare yes/no/cancel answers what Pip asked last (still pending); when
+    that is unclear the turn asks which one instead of guessing.
+    """
+    cards = sorted(store.r["cards"].values(), key=lambda c: c["ts"], reverse=True)
+    if ans == "all":
+        targets = [(c["id"], True) for c in cards]
+    else:  # yes / no / cancel
+        last = session.get("last_asked_cards") or []
+        pool = [c for c in cards if c["id"] in last] or cards
+        if len(pool) > 1:
+            reply = _which_one(pool)
+            return [], [reply], reply, 0, "card", [], {"dropped": 0, "drop_reasons": []}, []
+        targets = [(pool[0]["id"], ans == "yes")]
+    messages, new_cards = [], []
+    for cid, ok in targets:
+        message, fresh, card = store.confirm(cid, ok, "card", session)
+        messages.append(message)
+        new_cards += fresh
+        call_id = (card.get("payload") or {}).get("_call_id") if card else None
+        if call_id:
+            _refresh_output(session, call_id, ok, message)
+    reply = " ".join(messages) or "Done."
+    return [], messages, reply, 0, "card", new_cards, {"dropped": 0, "drop_reasons": []}, []
+
+
 async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session: dict, source: str):
-    """Grammar first (no model call), else Spark with at most one lookup round.
+    """Cards first (no model call), then grammar, else Spark with one lookup round.
+    The model hears the raw transcript; normalization lives inside grammar only.
     Returns (calls, messages, reply, ms, route, cards, info, sources)."""
-    old_pending = session.get("pending")
-    norm = normalize_text(text)
-    g = match_grammar(norm, store.prompt_state(session))
+    if store.r["cards"]:
+        ans = match_card_answer(text)
+        if ans is not None:
+            return _answer_cards(ans, session)
+    g = match_grammar(text, store.prompt_state(session))
     if g is not None:
-        calls, _ = g
+        calls, gtext = g
+        if not calls:
+            reply = say(gtext, session) if gtext in tone_keys() else gtext
+            return [], [], reply, 0, "grammar", [], {"dropped": 0, "drop_reasons": []}, []
         calls = expand_tool_wells(calls)
         res = store.apply_calls(calls, source, text, "grammar", session)
-        reply = _compose_reply(calls, res, store.prompt_state(session))
+        reply = _compose_reply(calls, res, store.prompt_state(session), session)
         if res["info"].get("edited"):
             reply = f"Note updated ({res['info']['edited']['target']})."
-        _clear_pending(session, old_pending)
         return calls, res["messages"], reply, 0, "grammar", res["cards"], res["info"], []
-    calls, _, ms, cut, _, searches = await _call_spark(
-        client, key, norm, store.model_state(session), session)
+    summary = evidence_summary(session.get("turns"))
+    calls, texts, ms, cut, _, searches = await _call_spark(
+        client, key, text, store.model_state(session), session)
     if cut:
-        _clear_pending(session, old_pending)
-        return [], [], "Sorry, say that again?", ms, "spark", [], {"dropped": 0, "drop_reasons": []}, []
+        return [], [], say("didnt_catch", session), ms, "spark", [], {"dropped": 0, "drop_reasons": []}, []
     sentence, sources = web_answer(searches) if searches else ("", [])
     if sentence:
         session["last_web"] = sentence
     ordered_ids = [c.get("call_id") for c in calls]
-    plan_allowed = relevant_plan_numbers(norm, [s.get("name", "") for s in store.r["plan"]["steps"]])
-    has_reads = any(c.get("name") in ("get_well", "find_free_wells") and c.get("call_id") for c in calls)
-    calls, question, outcomes, gdrop, blinded = _validate(calls, norm, 1, plan_allowed, blind=has_reads)
-    _set_ask_pending(session, question, searches)
+    r1raw = [dict(c) for c in calls]
+    plan_allowed = relevant_plan_numbers(text, [s.get("name", "") for s in store.r["plan"]["steps"]])
+    has_reads = any(c.get("name") in ("read_record", "find_free_wells") and c.get("call_id") for c in calls)
+    pre_all_reads = bool(calls) and all(c.get("name") in ("read_record", "find_free_wells") for c in calls)
+    calls, question, outcomes, gdrop = _validate(calls, text, 1, plan_allowed, summary=summary,
+                                                 blind=has_reads)
     if not calls and not question:
         _store_outputs(session, ordered_ids, outcomes)
-        if needs_minutes_ask(calls, norm) or gdrop:
-            session["pending"] = {
-                "question": "How many minutes for the timer?",
-                "kind": "minutes",
-                "target": recent_target(),
-            }
-            return [], [], "How many minutes for the timer?", ms, "spark", [], {"dropped": 0, "drop_reasons": []}, sources
+        if needs_minutes_ask(calls, text) or gdrop:
+            q = say("ask_minutes", session)
+            asked = {"question": q, "target": recent_target() or ""}
+            info = {"dropped": 0, "drop_reasons": [], "asked": asked}
+            return [], [], q, ms, "spark", [], info, sources
         if sentence:
-            _clear_pending(session, old_pending)
             return [], [], sentence, ms, "spark", [], {"dropped": 0, "drop_reasons": []}, sources
-        _clear_pending(session, old_pending)
-        return [], [], "I didn't catch a command.", ms, "spark", [], {"dropped": 0, "drop_reasons": []}, sources
+        if texts.strip():
+            t = _short_text(texts)
+            if honest_reply([], t) != t:
+                return _didnt_act(text, ms, session, sources)
+            return [], [], t, ms, "spark", [], {"dropped": 0, "drop_reasons": []}, sources
+        dropped = _dropped_replies(r1raw, outcomes)
+        if dropped:
+            return [], [], dropped, ms, "spark", [], {"dropped": 0, "drop_reasons": []}, sources
+        print(f"spark empty: no calls, no text for {text[:60]!r}", flush=True)
+        return _didnt_act(text, ms, session, sources)
     res = store.apply_calls(calls, source, text, "spark", session)
     _apply_outcomes(calls, res, outcomes)
+    read_lines = _render_r1_reads(calls, outcomes)
     _store_outputs(session, ordered_ids, outcomes)
-    post_pure_get = bool(calls) and all(c.get("name") == "get_well" for c in calls)
     fire_lookup = (
-        has_reads and question is None and (not post_pure_get or blinded or gdrop)
-        and any(c.get("name") in ("get_well", "find_free_wells") and c.get("call_id") for c in calls)
+        has_reads and question is None
+        and any(c.get("name") in ("read_record", "find_free_wells") and c.get("call_id") for c in calls)
     )
-    if has_reads and question is None and post_pure_get and not fire_lookup:
-        for c in calls:
-            well = (c.get("args") or {}).get("well")
-            if isinstance(well, str) and is_well(well):
-                res["messages"].append(store.describe_well(well))
     if fire_lookup:
-        memo_allowed: set = set()
-        for c in calls:
-            if c.get("name") == "get_well":
-                well = (c.get("args") or {}).get("well")
-                if isinstance(well, str) and is_well(well):
-                    d = store.get_well_data(well)
-                    memo_allowed |= find_amounts(" ".join(d["memos"] + [d["reason"], d["redo_note"]]))
-        ms2, more = await _lookup_round(client, key, norm, session, source, text, plan_allowed, memo_allowed)
+        reads_text = " ".join(
+            outcomes[cid] for c in calls
+            if c.get("name") in ("read_record", "find_free_wells")
+            and (cid := c.get("call_id")) and cid in outcomes
+        )
+        ms2, more = await _lookup_round(client, key, text, session, source, plan_allowed, reads_text,
+                                        summary, r1raw)
         ms += ms2
         if more is not None:
-            rc, res2, question2, ordered2, outcomes2, gdrop2 = more
+            rc, res2, question2, ordered2, outcomes2, gdrop2, t2 = more
             calls = calls + rc
             res["messages"] += res2["messages"]
             res["cards"] += res2["cards"]
@@ -518,60 +710,104 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
                     res["info"][k] = res2["info"][k]
             if question2 is not None:
                 question = question2
-            if any(m.startswith("Timer started") for m in res2["messages"]):
+            if res2["info"].get("timer_started"):
                 gdrop = gdrop2
             else:
                 gdrop = gdrop or gdrop2
             _store_outputs(session, ordered2, outcomes2)
+            if question is None and pre_all_reads and not rc and not res2["messages"] and not res2["cards"]:
+                if t2.strip():
+                    res["messages"].append(_short_text(t2))
+                else:
+                    for c in calls:
+                        if c.get("name") == "read_record" and (c.get("args") or {}).get("kind") == "wells":
+                            filt = (c.get("args") or {}).get("filter") or ""
+                            for w in store.filter_wells(filt if isinstance(filt, str) else "")[:4]:
+                                res["messages"].append(store.describe_well(w))
     calls = _strip_ids(calls)
+    asked: dict = {}
     if question is not None:
         reply = question
+        is_attach = bool(searches) and "attach" in question.lower() and session.get("last_web")
+        asked = {"question": question, "target": "" if is_attach else (recent_target() or "")}
     elif gdrop:
-        session["pending"] = {
-            "question": "How many minutes for the timer?",
-            "kind": "minutes",
-            "target": recent_target(),
-        }
-        base = _compose_reply(calls, res, store.prompt_state(session))
-        reply = "How many minutes for the timer?" if base in ("I didn't catch a command.", "") else base + " How many minutes for the timer?"
+        base = _compose_reply(calls, res, store.prompt_state(session), session)
+        q = say("ask_minutes", session)
+        reply = q if not base else base + " " + q
+        asked = {"question": q, "target": recent_target() or ""}
     else:
-        reply = _compose_reply(calls, res, store.prompt_state(session))
-        if sentence and sources and reply in ("I didn't catch a command.", ""):
+        reply = _compose_reply(calls, res, store.prompt_state(session), session)
+        if sentence and sources and not reply:
             reply = sentence
+        if not reply:
+            reply = _executed_reply(calls, read_lines, session)
+        if not reply:
+            print(f"ORPHAN REPLY: {sorted({c.get('name') for c in calls})} produced nothing",
+                  flush=True)
+            reply = say("found_empty", session)
     for m in res["messages"]:
         if m.startswith("Note updated.") and res["info"].get("edited"):
             reply = f"Note updated ({res['info']['edited']['target']})."
-    _clear_pending(session, old_pending)
+    if asked:
+        res["info"]["asked"] = asked
     return calls, res["messages"], reply, ms, "spark", res["cards"], res["info"], sources
 
 
-async def _lookup_round(client, key, norm, session, source, text, plan_numbers, memo_numbers):
-    """Second spark round chained with lookup outputs. Returns (ms, None-or-tuple)."""
-    rc, _, ms, cut, _, _ = await _call_spark(
-        client, key, CONTINUE_TEXT, store.model_state(session), session)
+async def _lookup_round(client, key, text, session, source, plan_numbers, reads_text, summary,
+                      r1raw):
+    """Second spark round replaying round 1 inline (question, calls, outputs).
+
+    A bare repeated question restarts the lookup; outputs without their
+    calls don't bind. The replay mirrors the chained shape without storing.
+    Returns (ms, None-or-tuple).
+    """
+    rc, t2, ms, cut, _, _ = await _call_spark(
+        client, key, text, store.model_state(session), session, lookup=True, echo_calls=r1raw)
     if cut:
         return ms, None
     ordered2 = [c.get("call_id") for c in rc]
-    rc, question2, outcomes2, gdrop2, _ = _validate(rc, norm, 2, plan_numbers, memo_numbers)
-    _set_ask_pending(session, question2, [])
+    rc, question2, outcomes2, gdrop2 = _validate(rc, text, 2, plan_numbers, reads_text, summary)
     res2: dict = {"messages": [], "cards": [], "outcomes": [], "ui": [],
                   "info": {"dropped": 0, "drop_reasons": []}}
     if rc:
-        res2 = store.apply_calls(rc, source, text, "spark", session)
+        res2 = store.apply_calls(rc, source, text, "spark", session, reads_text)
         _apply_outcomes(rc, res2, outcomes2)
-    return ms, (rc, res2, question2, ordered2, outcomes2, gdrop2)
+    return ms, (rc, res2, question2, ordered2, outcomes2, gdrop2, t2)
 
 
-def _validate(calls, norm, depth, plan_numbers=frozenset(), lookup_numbers=frozenset(),
-              blind: bool = False):
-    """expand -> ask/answer partition -> value-grounded timer filter.
-    Returns (calls, question, outcomes, grounded_drop, blinded).
+def _tag_timer_sources(tool_calls, evidence):
+    """Direct (utterance/read) passes; conversation/plan rides tagged for a
+    confirm card; ungrounded drops. An ungrounded value is never approved."""
+    out = []
+    for c in tool_calls:
+        if c.get("name") != "set_timer":
+            out.append(c)
+            continue
+        m = (c.get("args") or {}).get("minutes")
+        if isinstance(m, str):
+            try:
+                m = float(m)
+            except ValueError:
+                continue
+        ok, src = grounded(m, evidence)
+        if not ok:
+            continue
+        if src in ("conversation", "plan"):
+            args = dict(c.get("args") or {})
+            args["_source"] = src
+            c = {**c, "args": args}
+        out.append(c)
+    return out
+
+
+def _validate(calls, text, depth, plan_numbers=frozenset(), reads_text="",
+              summary="", blind: bool = False):
+    """expand -> ask/answer partition -> evidence-graded timer filter.
+    Returns (calls, question, outcomes, grounded_drop).
     blind: a lookup round follows, so round-1 answers (written without the
-    looked-up data) are dropped; the lookup round answers instead. blinded
-    reports whether such a drop happened, so the caller still runs round 2."""
+    looked-up data) are dropped; the lookup round answers instead."""
     outcomes: dict[str, str] = {}
-    blinded = False
-    calls = fill_on_done(calls, norm)
+    calls = fill_on_done(calls, text)
     before, calls = calls, expand_tool_wells(calls)
     _note_lost(outcomes, before, calls, "dropped: no valid wells")
     question, kept = split_ask(calls)
@@ -583,19 +819,18 @@ def _validate(calls, norm, depth, plan_numbers=frozenset(), lookup_numbers=froze
     for c in dropped_answers:
         if c.get("call_id"):
             pending = blind and question is None
-            blinded = blinded or pending
             reason = "dropped: lookup pending" if pending else "dropped: action wins"
             outcomes[c["call_id"]] = _result(False, reason)
             _log_drop(c.get("name"), c.get("args"), reason)
     if depth >= 2:
-        deep = [c for c in calls if c.get("name") in ("get_well", "find_free_wells")]
-        calls = [c for c in calls if c.get("name") not in ("get_well", "find_free_wells")]
+        deep = [c for c in calls if c.get("name") in ("read_record", "find_free_wells")]
+        calls = [c for c in calls if c.get("name") not in ("read_record", "find_free_wells")]
         for c in deep:
             if c.get("call_id"):
                 outcomes[c["call_id"]] = _result(False, "lookup depth exceeded")
                 _log_drop(c.get("name"), c.get("args"), "lookup depth exceeded")
-    allowed = find_amounts(norm) | set(plan_numbers) | set(lookup_numbers)
-    before, calls = calls, keep_grounded_timers(calls, allowed)
+    evidence = build_evidence(text, summary, plan_numbers, reads_text)
+    before, calls = calls, _tag_timer_sources(calls, evidence)
     grounded_drop = False
     after_ids = {c.get("call_id") for c in calls}
     for c in before:
@@ -604,9 +839,21 @@ def _validate(calls, norm, depth, plan_numbers=frozenset(), lookup_numbers=froze
             grounded_drop = True
             outcomes[cid] = _result(False, "dropped: ungrounded minutes")
             _log_drop(c.get("name"), c.get("args"), "dropped: ungrounded minutes")
-    before, calls = calls, collapse_each_timers(mark_each_timers(calls, norm), norm)
+    if blind and question is None:
+        # Reads are in flight: a weakly-evidenced round-1 timer is re-decided
+        # in round 2 with read evidence instead of carding twice.
+        kept = []
+        for c in calls:
+            if c.get("name") == "set_timer" and (c.get("args") or {}).get("_source") in ("conversation", "plan"):
+                if c.get("call_id"):
+                    outcomes[c["call_id"]] = _result(False, "dropped: lookup pending")
+                    _log_drop(c.get("name"), c.get("args"), "dropped: lookup pending")
+            else:
+                kept.append(c)
+        calls = kept
+    before, calls = calls, collapse_each_timers(mark_each_timers(calls, text), text)
     _note_lost(outcomes, before, calls, "dropped: duplicate timer")
-    return calls, question, outcomes, grounded_drop, blinded
+    return calls, question, outcomes, grounded_drop
 
 
 def _partition_answer(calls, has_question, blind=False):
@@ -614,22 +861,10 @@ def _partition_answer(calls, has_question, blind=False):
     if not answers:
         return calls, []
     rest = [c for c in calls if c.get("name") != "answer"]
-    if blind or has_question or any(c.get("name") != "get_well" for c in rest):
+    non_competing = ("read_record", "find_free_wells", "navigate", "open", "back", "show")
+    if blind or has_question or any(c.get("name") not in non_competing for c in rest):
         return rest, answers
     return calls, []
-
-
-def _set_ask_pending(session, question, searches):
-    if question is None:
-        return
-    pending: dict = {"question": question}
-    if searches and "attach" in question.lower() and session.get("last_web"):
-        pending["kind"] = "attach"
-        pending["candidate"] = session["last_web"]
-    else:
-        pending["kind"] = "ask"
-        pending["target"] = recent_target()
-    session["pending"] = pending
 
 
 def _apply_outcomes(calls, res, outcomes):
@@ -637,17 +872,20 @@ def _apply_outcomes(calls, res, outcomes):
         cid = c.get("call_id")
         if not cid or cid in outcomes:
             continue
-        if c.get("name") == "get_well":
-            well = (c.get("args") or {}).get("well")
-            if isinstance(well, str) and is_well(well):
-                outcomes[cid] = json.dumps(store.get_well_data(well), ensure_ascii=False)
+        if c.get("name") == "read_record":
+            a = c.get("args") or {}
+            if a.get("kind") in store.READ_KINDS:
+                outcomes[cid] = json.dumps(
+                    store.read_record(a["kind"], a.get("filter", ""), a.get("limit", 10)),
+                    ensure_ascii=False)
                 continue
         if c.get("name") == "find_free_wells":
             a = c.get("args") or {}
             near = a.get("near")
-            if isinstance(near, str) and is_well(near):
+            if isinstance(near, str) and parse_wellref(near):
                 outcomes[cid] = json.dumps(
-                    {"near": near.upper(), "free": store.find_free_wells(near, a.get("count", 3))},
+                    {"near": near.strip().upper(),
+                     "free": store.find_free_wells(near, a.get("count", 3))},
                     ensure_ascii=False)
                 continue
         oc = res["outcomes"][i]
@@ -658,11 +896,6 @@ def _apply_outcomes(calls, res, outcomes):
             outcomes[cid] = _result(ok, "; ".join(oc["messages"]))
         else:
             outcomes[cid] = _result(False, "dropped")
-
-
-def _clear_pending(session: dict, old):
-    if session.get("pending") is old:
-        session["pending"] = None
 
 
 def _result(ok: bool, message: str) -> str:
@@ -691,7 +924,9 @@ def _store_outputs(session: dict, ordered_ids: list, outcomes: dict):
 
 
 def _strip_ids(calls: list) -> list:
-    return [{"name": c.get("name"), "args": c.get("args") or {}} for c in calls]
+    return [{"name": c.get("name"),
+             "args": {k: v for k, v in (c.get("args") or {}).items() if not k.startswith("_")}}
+            for c in calls]
 
 
 def _refresh_output(session: dict, cid: str, ok: bool, message: str):
@@ -700,8 +935,92 @@ def _refresh_output(session: dict, cid: str, ok: bool, message: str):
             p["output"] = _result(ok, message if ok else "declined by user")
 
 
-def _compose_reply(calls, res, state) -> str:
-    """Reply purely from store results: messages, card questions, drop reasons."""
+def _didnt_act(text: str, ms: int, session: dict, sources: list):
+    """Claimed action without tools (or nothing at all): honest + answerable."""
+    reply = say("didnt_act", session)
+    wells = sorted(find_well_mentions(text or ""))
+    asked = {"question": reply, "target": wells_label(wells) if wells else ""}
+    info = {"dropped": 0, "drop_reasons": [], "asked": asked}
+    return [], [], reply, ms, "spark", [], info, sources
+
+
+def _dropped_replies(r1raw: list, outcomes: dict) -> str:
+    """Honest couldn't-lines for validation drops (branch 1 never applied)."""
+    names = {c.get("call_id"): c.get("name") for c in r1raw or []}
+    parts = []
+    for cid, out in (outcomes or {}).items():
+        try:
+            msg = (json.loads(out) or {}).get("message", "")
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        if isinstance(msg, str) and msg.startswith("dropped:"):
+            parts.append(_couldnt(names.get(cid, "?"), msg[len("dropped: "):]))
+    return " ".join(parts)
+
+
+def _render_record(kind: str, data: dict) -> list[str]:
+    """One short line per read hit, period-free (the found template punctuates)."""
+    if not isinstance(data, dict):
+        return []
+    if kind == "wells":
+        return [store.describe_well(w.get("well", "")).rstrip(".")
+                for w in (data.get("wells") or [])[:3] if w.get("well")]
+    if kind == "notes":
+        return [f"{m.get('target', '?')}: {(m.get('text') or '')[:120]}"
+                for m in (data.get("notes") or [])[:3]]
+    if kind == "timers":
+        return [f"{t.get('label', '?')} ({t.get('minutes_left', '?')}m left)"
+                for t in (data.get("timers") or [])[:3]]
+    if kind == "steps":
+        return [f"Step {s.get('i')}: {s.get('name')}"
+                + (" (current)" if s.get("current") else "")
+                for s in (data.get("steps") or [])[:3]]
+    if kind == "history":
+        return [f"{e.get('action')} {','.join(e.get('wells') or [])} {e.get('ago')} ago"
+                for e in (data.get("history") or [])[:3]]
+    return []
+
+
+def _render_r1_reads(calls: list, outcomes: dict) -> list[str]:
+    """Render round-1 read outcomes for the speechless fallback."""
+    lines = []
+    for c in calls:
+        cid = c.get("call_id")
+        if not cid or cid not in outcomes:
+            continue
+        try:
+            data = json.loads(outcomes[cid])
+        except json.JSONDecodeError:
+            continue
+        if c.get("name") == "read_record":
+            lines += _render_record((c.get("args") or {}).get("kind"), data)
+        elif c.get("name") == "find_free_wells" and isinstance(data, dict):
+            free = data.get("free") or []
+            if free:
+                lines.append(f"Free near {data.get('near', '')}: {', '.join(free[:4])}")
+    return lines
+
+
+#: Executed-but-speechless tools speak their result key (UI shows the rest).
+_EXECUTED_VOICE = {"show": "opened", "open": "opened", "navigate": "opened", "back": "opened"}
+
+
+def _executed_reply(calls: list, read_lines: list, session: dict) -> str:
+    """Executed tools speak from what ran: UI actions opened, reads found data."""
+    for c in calls:
+        key = _EXECUTED_VOICE.get(c.get("name") or "")
+        if key:
+            return say(key, session)
+    if read_lines:
+        return say("found", session, detail=": " + "; ".join(read_lines[:3]) + ".")
+    if any(c.get("name") in ("read_record", "find_free_wells") for c in calls):
+        return say("found_empty", session)
+    return ""
+
+
+def _compose_reply(calls, res, state, session) -> str:
+    """Reply purely from store results: messages, card questions, drop reasons.
+    Empty when nothing resulted; run_utterance resolves via _executed_reply."""
     msgs = res["messages"]
     fails = [m for m in msgs if is_failure_message(m)]
     if fails:
@@ -715,7 +1034,7 @@ def _compose_reply(calls, res, state) -> str:
     for d in res["info"].get("drop_reasons", []):
         _log_drop(d["call"], d.get("args"), d["reason"])
         parts.append(_couldnt(d["call"], d["reason"]))
-    return " ".join(parts) if parts else "I didn't catch a command."
+    return " ".join(parts)
 
 
 #: Human verbs per tool. User-visible text never names a tool.
@@ -768,17 +1087,50 @@ def set_screen(session: dict, screen: str, selected_well: str = "", open_sheet: 
     session["open_sheet"] = open_sheet or ""
 
 
-@app.post("/orchestrate")
-async def orchestrate(body: OrchestrateIn):
+async def _handle_text(text: str, session: dict, source: str):
+    """Shared text path for /input and the /orchestrate alias."""
     key = _key()
-    session = get_session(body.session)
-    set_screen(session, body.screen, body.selected_well, body.open_sheet)
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        out = await run_utterance(client, key, body.text, session, "spark")
+        out = await run_utterance(client, key, text, session, source)
     calls, messages, reply, ms, route, cards, info, sources = out
     print(f"orch route={route} calls={_call_names(calls)} reply={reply[:80]!r}", flush=True)
-    log_turn(session, body.text, calls, messages or ([reply] if reply else []))
-    return _utterance_response(calls, messages, reply, {"spark": ms}, route, cards, info, sources, store.r["version"])
+    session["last_asked_cards"] = [c["id"] for c in cards]
+    log_turn(session, text, calls, messages or ([reply] if reply else []),
+             asked=info.get("asked"))
+    return _utterance_response(calls, messages, reply, {"spark": ms}, route, cards, info, sources,
+                               store.r["version"])
+
+
+def _resolve_card(card_id: str, answer: str, session: dict):
+    """Shared card path for /input and the /confirm alias."""
+    ok = answer.strip().lower() not in ("no", "cancel", "false", "0", "dismiss")
+    message, new_cards, card = store.confirm(card_id, ok, "card", session)
+    cid = (card.get("payload") or {}).get("_call_id") if card else None
+    if cid:
+        _refresh_output(session, cid, ok, message)
+    return message, new_cards
+
+
+@app.post("/input")
+async def input_entry(body: InputIn):
+    session = get_session(body.session)
+    set_screen(session, body.screen, body.selected_well, body.open_sheet)
+    if body.card_id:
+        message, new_cards = _resolve_card(body.card_id, body.answer or "yes", session)
+        log_turn(session, f"card:{body.card_id} {body.answer or 'yes'}", [], [message])
+        return _utterance_response([], [message], message, {"spark": 0}, "card", new_cards,
+                                   {"dropped": 0, "drop_reasons": []}, [], store.r["version"])
+    if not body.text.strip():
+        raise HTTPException(400, "text or card_id required")
+    return await _handle_text(body.text, session, "input")
+
+
+@app.post("/orchestrate")
+async def orchestrate(body: OrchestrateIn):
+    """Alias: forwards into /input's text path (same shapes)."""
+    session = get_session(body.session)
+    set_screen(session, body.screen, body.selected_well, body.open_sheet)
+    return await _handle_text(body.text, session, "spark")
 
 
 @app.post("/voice")
@@ -835,13 +1187,15 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session:
                 "transcript": "",
                 "tool_calls": [],
                 "messages": [],
-                "reply": "I didn't catch that, please say it again.",
+                "reply": say("didnt_catch", sess),
                 "ms": {"asr": asr_ms, "spark": 0, "total": int((time.perf_counter() - total0) * 1000)},
             }
         out = await run_utterance(client, key, transcript, sess, "voice")
     calls, messages, reply, spark_ms, route, cards, info, sources = out
     print(f"orch route={route} calls={_call_names(calls)} reply={reply[:80]!r}", flush=True)
-    log_turn(sess, transcript, calls, messages or ([reply] if reply else []))
+    sess["last_asked_cards"] = [c["id"] for c in cards]
+    log_turn(sess, transcript, calls, messages or ([reply] if reply else []),
+             asked=info.get("asked"))
     return _utterance_response(
         calls, messages, reply,
         {"asr": asr_ms, "spark": spark_ms, "total": int((time.perf_counter() - total0) * 1000)},
@@ -851,12 +1205,10 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session:
 
 @app.post("/confirm")
 async def confirm(body: ConfirmIn):
+    """Alias: forwards into /input's card path (same shapes)."""
     session = get_session(body.session)
-    message, new_cards, card = store.confirm(body.card_id, body.ok, "card", session)
+    message, new_cards = _resolve_card(body.card_id, "yes" if body.ok else "no", session)
     log_turn(session, "yes" if body.ok else "no", [], [message])
-    cid = (card.get("payload") or {}).get("_call_id") if card else None
-    if cid:
-        _refresh_output(session, cid, body.ok, message)
     return {"message": message, "cards": new_cards, "record_version": store.r["version"]}
 
 
@@ -864,6 +1216,13 @@ async def confirm(body: ConfirmIn):
 async def notes_edit(body: EditNoteIn):
     message = store.edit_note_manual(body.id, body.text)
     return {"message": message, "record_version": store.r["version"]}
+
+
+@app.get("/health")
+async def health():
+    return {"ok": True, "commit": git_commit(), "tools": len(TOOLS),
+            "prompt_hash": prefix_hash(),
+            "memory": "chain" if CHAIN_ENABLED else "summary"}
 
 
 @app.get("/record")

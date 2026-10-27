@@ -1,0 +1,92 @@
+{
+  "_note": "Pip's voice. Eunbi-editable: change sentences freely, keep {placeholders} as-is. Server picks a different variant from last time.",
+  "mark_done": [
+    "Nice, {wells_spoken} are in.",
+    "Got it — {wells_spoken} done.",
+    "{wells_spoken} logged. Nice work."
+  ],
+  "timer_start": [
+    "{minutes} minutes on {wells_spoken}. I'll ping you.",
+    "Timer's on: {minutes} minutes for {wells_spoken}.",
+    "Got it — {minutes} minutes on {wells_spoken}."
+  ],
+  "timer_cancel": [
+    "Okay, {wells_spoken} timer's off.",
+    "Cancelled the {wells_spoken} timer.",
+    "Done — {wells_spoken} timer off."
+  ],
+  "timer_done": [
+    "Heads up! {minutes} minutes are up on {wells_spoken}.",
+    "Ding — {wells_spoken} hit {minutes} minutes.",
+    "{wells_spoken} timer done. {minutes} minutes."
+  ],
+  "note_saved": [
+    "Noted on {wells_spoken}.",
+    "Got it — noted on {wells_spoken}.",
+    "Written down for {wells_spoken}."
+  ],
+  "ask_minutes": [
+    "Sure — how long?",
+    "How many minutes?",
+    "For how long?"
+  ],
+  "confirm_exclude": [
+    "Drop {wells_spoken}?",
+    "Exclude {wells_spoken}?",
+    "Take {wells_spoken} out?"
+  ],
+  "catch_off_plan": [
+    "Wait — {wells_spoken} isn't in this step. Still log it?",
+    "Hmm, {wells_spoken} isn't planned here. Log it anyway?"
+  ],
+  "not_found_timer": [
+    "Hmm, I don't see a {label} timer. Want me to start one?",
+    "No {label} timer running. Start one?"
+  ],
+  "invalid_well": [
+    "{target} isn't on the plate. Which well did you mean?",
+    "Hmm, {target} isn't a valid well. Which one?"
+  ],
+  "cant_do_physical": [
+    "I can't hand things over, but I can log it or set a timer.",
+    "Hands are yours — I can log it or set a timer though."
+  ],
+  "didnt_catch": [
+    "Sorry, say that again?",
+    "Didn't catch that — once more?"
+  ],
+  "didnt_act": [
+    "I didn't log anything — want me to?",
+    "Hmm, I didn't record that — should I?",
+    "Nothing logged yet — want me to log it?"
+  ],
+  "opened": [
+    "Opened.",
+    "Showing it now.",
+    "On screen."
+  ],
+  "found": [
+    "Here's what I found{detail}",
+    "Found it{detail}"
+  ],
+  "found_empty": [
+    "Nothing there yet.",
+    "The record's empty on that."
+  ],
+  "step_move": [
+    "Ready for step {step}?",
+    "Move to step {step}?"
+  ],
+  "confirm_reuse": [
+    "{minutes} minutes on {wells_spoken}, like before?",
+    "Same as before — {minutes} minutes on {wells_spoken}?"
+  ],
+  "confirm_plan": [
+    "{minutes} minutes on {wells_spoken}, as planned?",
+    "The plan calls for {minutes} minutes on {wells_spoken}. Start it?"
+  ],
+  "confirm_minutes": [
+    "{minutes} minutes on {wells_spoken}?",
+    "Start {minutes} minutes on {wells_spoken}?"
+  ]
+}

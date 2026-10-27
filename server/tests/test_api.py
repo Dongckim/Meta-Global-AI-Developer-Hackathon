@@ -87,8 +87,8 @@ with patch("httpx.AsyncClient", FakeClient):
     assert r.status_code == 200, r.text
     j = r.json()
     assert j["tool_calls"] == [{"name": "mark_done", "args": {"wells": ["C3"]}}], j
-    assert j["messages"] == ["✓ C3 done"], j
-    assert j["reply"] == "✓ C3 done", j
+    assert j["messages"] == ["Nice, C3 are in."], j
+    assert j["reply"] == "Nice, C3 are in.", j
     assert j["route"] == "spark", j
     assert j["cards"] == [] and j["record_version"] >= 1, j
     assert "C3" in api.store.r["done"], api.store.r["done"]
@@ -102,7 +102,8 @@ with patch("httpx.AsyncClient", FakeClient):
     assert len(body["tools"]) == 18, len(body["tools"])
     assert not [t for t in body["tools"] if t.get("type") == "web_search"], "flag off by default"
     names = [t.get("name") for t in body["tools"] if t.get("type") == "function"]
-    assert "get_well" in names and "find_free_wells" in names, names
+    assert "read_record" in names and "find_free_wells" in names, names
+    assert "get_well" not in names and "where_am_i" not in names, names
     assert "propose_plan" not in names, names
     assert {"navigate", "open", "back"} <= set(names), names
     assert "answer_card" not in names and "confirm" not in names, names
@@ -119,32 +120,33 @@ with patch("httpx.AsyncClient", FakeClient):
     assert body["prompt_cache_retention"] == "24h", body
     assert "store" not in body, "chain mode stores responses"
     assert "previous_response_id" not in body, body
-    assert body["instructions"].startswith("You are Pip"), body["instructions"][:40]
-    assert "tool calls only" in body["instructions"] and "ask(question)" in body["instructions"]
-    assert "pending_question" in body["instructions"] and '"recent"' in body["instructions"]
-    assert "propose the first candidate" in body["instructions"] and "first step" in body["instructions"]
+    assert body["instructions"].startswith("You're Pip"), body["instructions"][:40]
+    assert "Record only reported facts" in body["instructions"] and "ask(question)" in body["instructions"]
+    assert "one short sentence" in body["instructions"] and "Text beside tool calls" in body["instructions"]
+    assert "asked:" in body["instructions"] and '"recent"' in body["instructions"]
+    assert "act on the first candidate at once" in body["instructions"] and "first step" in body["instructions"]
     assert '"step": 99' not in body["instructions"], "client state ignored; record is truth"
     assert '"step": "3/5' in body["instructions"]
     assert '"groups": "ctrl' in body["instructions"]
     assert '"plan_times": "5: 30m"' in body["instructions"]
     assert '"step_wells": "C2–C8"' in body["instructions"], body["instructions"]
     assert body["input"] == "C3 all set"
-    print("1 ok: /orchestrate applies + record truth + 18 tools")
+    print("1 ok: /orchestrate applies + record truth + 17 tools")
 
     # 2. /orchestrate validation
     assert c.post("/orchestrate", json={"text": ""}).status_code == 422
     assert c.post("/orchestrate", json={"state": {}}).status_code == 422
     print("2 ok: /orchestrate 422s")
 
-    # 3. no-tool reply
+    # 3. no-tool reply: model text alone is a conversational answer, spoken as-is
     FakeClient.spark_payload = {"id": "resp_x", "output": [
         {"type": "message", "content": [{"type": "output_text", "text": "네"}]}]}
     r = c.post("/orchestrate", json={"text": "고마워", "session": "s3"})
     FakeClient.spark_payload = SPARK_OK
     j = r.json()
     assert j["tool_calls"] == [] and j["messages"] == [], j
-    assert j["reply"] == "I didn't catch a command." and j["route"] == "spark", j
-    print("3 ok: empty tool_calls")
+    assert j["reply"] == "네" and j["route"] == "spark", j
+    print("3 ok: conversational text reply")
 
     # 4. /voice happy path
     wav = make_wav()
@@ -154,8 +156,8 @@ with patch("httpx.AsyncClient", FakeClient):
     j = r.json()
     assert j["transcript"] == "C3 분주 끝", j
     assert j["tool_calls"] == [{"name": "mark_done", "args": {"wells": ["C3"]}}], j
-    assert j["messages"] == ["✓ C3 done"], j
-    assert j["reply"] == "✓ C3 done" and j["route"] == "spark", j
+    assert j["messages"] == ["Nice, C3 are in."], j
+    assert j["reply"] == "Nice, C3 are in." and j["route"] == "spark", j
     assert set(j["ms"]) == {"asr", "spark", "total"}, j
     aurl, akw = calls[-2]
     assert aurl == "https://api.meta.ai/v1/asr/transcribe", aurl
@@ -216,7 +218,7 @@ with patch("httpx.AsyncClient", FakeClient):
     FakeClient.asr_payload = ASR_OK
     j = r.json()
     assert j["transcript"] == "" and j["tool_calls"] == [] and j["messages"] == [], j
-    assert j["reply"] == "I didn't catch that, please say it again.", j
+    assert j["reply"] == "Sorry, say that again?", j
     assert all(not u.endswith("/responses") for u, _ in calls[n_before:])
     assert _Path("/tmp/last.wav").read_bytes() == wav
     assert 'dur=0.25s transcript="  " norm=""' in buf.getvalue(), buf.getvalue()
@@ -229,15 +231,15 @@ with patch("httpx.AsyncClient", FakeClient):
     assert j["route"] == "grammar", j
     assert j["tool_calls"] == [{"name": "mark_done",
         "args": {"wells": ["C4", "C5", "C6"]}}], j
-    assert j["messages"] == ["✓ C4, C5, C6 done"], j
-    assert j["reply"] == "✓ C4, C5, C6 done", j
+    assert j["messages"] == ["Nice, C4–C6 are in."], j
+    assert j["reply"] == "Nice, C4–C6 are in.", j
     assert j["ms"] == {"spark": 0}, j
     r = c.post("/orchestrate", json={"text": "how many left", "session": "s10"})
     assert r.json()["route"] == "grammar", r.json()
     assert r.json()["reply"].endswith("left: C2, C7, C8."), r.json()
     r = c.post("/orchestrate", json={"text": "exclude C7, contaminated", "session": "s10"})
     j = r.json()
-    assert j["route"] == "grammar" and j["reply"] == "Exclude C7?", j
+    assert j["route"] == "grammar" and j["reply"] == "Drop C7?", j
     assert j["cards"] and j["cards"][0]["detail"] == "contaminated", j
     assert "C7" not in api.store.r["excluded"]
     r = c.post("/orchestrate", json={"text": "note C3, I see bubbles", "session": "s10"})
@@ -249,7 +251,7 @@ with patch("httpx.AsyncClient", FakeClient):
     r = c.post("/orchestrate", json={"text": "next", "session": "s10"})
     j = r.json()
     assert len(j["cards"]) == 1 and j["cards"][0]["kind"] == "next_step", j
-    assert j["reply"].startswith("Move to step 4 ("), j
+    assert j["reply"]== "Ready for step 4?", j
     assert all(not u.endswith("/responses") for u, _ in calls[n_before:]), calls[n_before:]
     print("10 ok: grammar applies, cards, no spark")
 
@@ -284,7 +286,7 @@ with patch("httpx.AsyncClient", FakeClient):
 
     with patch("httpx.AsyncClient", SeqClient):
         r = c.post("/orchestrate", json={"text": "retry me", "session": "mem2"})
-    assert r.status_code == 200 and r.json()["messages"] == ["✓ C3 done"], r.text
+    assert r.status_code == 200 and r.json()["messages"] == ["Got it — C3 done."], r.text
     assert SeqClient.n == 2
     first, second = calls[-2][1]["json"], calls[-1][1]["json"]
     assert first["previous_response_id"] == "resp_1"
@@ -297,17 +299,19 @@ with patch("httpx.AsyncClient", FakeClient):
         {"type": "function_call", "name": "set_timer",
          "arguments": '{"label": "x", "minutes": 5}', "call_id": "c1", "status": "completed"}]}
     r = c.post("/orchestrate", json={"text": "set a timer", "session": "s13"})
-    assert r.json()["reply"] == "How many minutes for the timer?", r.json()
-    assert api._SESSIONS["s13"]["pending"]["kind"] == "minutes"
-    assert api._SESSIONS["s13"]["pending"]["target"], api._SESSIONS["s13"]["pending"]
+    assert r.json()["reply"] == "Sure — how long?", r.json()
+    asked13 = api._SESSIONS["s13"]["turns"][-1]["asked"]
+    assert asked13["question"] == "Sure — how long?", asked13
+    assert asked13["target"], asked13
     r = c.post("/orchestrate", json={"text": "timer 5 minutes", "session": "s13"})
     assert len(r.json()["tool_calls"]) == 1, r.json()
-    assert r.json()["messages"] == ["Timer started: drug A · 5 min"], r.json()
-    assert api._SESSIONS["s13"]["pending"] is None
+    assert r.json()["messages"] == ["5 minutes. I'll ping you."], r.json()
+    assert api._SESSIONS["s13"]["turns"][-1]["asked"] == {}
     FakeClient.spark_payload = SPARK_OK
     print("13 ok: minutes ask + pending lifecycle")
 
     # 14. web_search answer + attach flow
+    api.store.r["cards"].clear()
     FakeClient.spark_payload = {"id": "resp_w", "output": [
         {"type": "web_search_call",
          "results": [{"title": "Drug X guide", "url": "https://ex.test/x", "snippet": "Incubate 30 minutes at room temp"}]},
@@ -318,13 +322,14 @@ with patch("httpx.AsyncClient", FakeClient):
     j = r.json()
     assert j["reply"] == "Attach to step 3?", j
     assert j["sources"] == [{"title": "Drug X guide", "url": "https://ex.test/x"}], j
-    assert api._SESSIONS["s14"]["pending"]["kind"] == "attach", api._SESSIONS["s14"]["pending"]
+    asked14 = api._SESSIONS["s14"]["turns"][-1]["asked"]
+    assert asked14["question"] == "Attach to step 3?", asked14
     FakeClient.spark_payload = {"id": "resp_w2", "output": [
         {"type": "function_call", "name": "save_tip",
          "arguments": '{"step_id": "s3", "text": "incubate 30 minutes"}', "call_id": "c1", "status": "completed"}]}
     r = c.post("/orchestrate", json={"text": "yes", "session": "s14"})
     j = r.json()
-    assert j["cards"] and j["cards"][0]["detail"] == "[s3] Incubate 30 minutes", j
+    assert j["cards"] and j["cards"][0]["detail"] == "[s3] incubate 30 minutes", j
     FakeClient.spark_payload = SPARK_OK
     print("14 ok: web answer + attach pending")
 
@@ -382,8 +387,8 @@ with patch("httpx.AsyncClient", FakeClient):
     FakeClient.spark_payload = SPARK_OK
     j = r.json()
     assert "plan" not in j, j
-    assert [c["question"] for c in j["cards"]] == ["Exclude C4?", "Redo C9?"], j
-    assert j["reply"] == "Exclude C4? Redo C9?", j
+    assert [c["question"] for c in j["cards"]] == ["Drop C4?", "Redo C9?"], j
+    assert j["reply"] == "Drop C4? Redo C9?", j
     r = c.post("/confirm", json={"card_id": j["cards"][0]["id"], "ok": True})
     assert r.json()["message"] == "C4 excluded (bubble)", r.json()
     r = c.post("/confirm", json={"card_id": j["cards"][1]["id"], "ok": False})
@@ -420,7 +425,7 @@ with patch("httpx.AsyncClient", FakeClient):
          "arguments": '{"wells": ["C5"]}', "call_id": "cb", "status": "completed"}]}
     r = c.post("/orchestrate", json={"text": "C5 then", "session": "s21"})
     FakeClient.spark_payload = SPARK_OK
-    assert r.json()["messages"] == ["✓ C5 done"], r.json()
+    assert r.json()["messages"] == ["Nice, C5 are in."], r.json()
     assert r.json()["tool_calls"] == [{"name": "mark_done", "args": {"wells": ["C5"]}}], r.json()
     body = calls[-1][1]["json"]
     assert body["previous_response_id"] == "resp_a", body
@@ -459,11 +464,11 @@ with patch("httpx.AsyncClient", FakeClient):
     assert "previous_response_id" not in bodies[0] and bodies[0]["input"] == "t0 alpha"
     assert bodies[1]["previous_response_id"] == "r1"
     assert bodies[1]["input"][0] == {"type": "function_call_output", "call_id": "c1",
-        "output": '{"ok": true, "message": "✓ C6 done"}'}, bodies[1]["input"]
+        "output": '{"ok": true, "message": "Nice, C6 are in."}'}, bodies[1]["input"]
     assert bodies[2]["input"][0]["output"] == "asked user", bodies[2]["input"]
     assert bodies[3]["input"][0] == {"type": "function_call_output", "call_id": "c3",
         "output": '{"ok": false, "message": "pending confirmation"}'}, bodies[3]["input"]
-    assert json.loads(bodies[4]["input"][0]["output"]) == {"ok": True, "message": "✓ C7 done"}
+    assert json.loads(bodies[4]["input"][0]["output"]) == {"ok": True, "message": "Got it — C7 done."}
     assert bodies[4]["input"][-1] == {"role": "user", "content": "t4 alpha"}
     assert {"C6", "C7", "C8"} <= set(api.store.r["done"])
     print("22 ok: five-turn outputs chain")
@@ -480,20 +485,10 @@ with patch("httpx.AsyncClient", FakeClient):
     assert j["dropped"] == 1, j
     print("23b ok: dropped note is honest")
 
-    # 24. lone get_well answers from the record; exactly one model call
+    # 24. read in round 1, model answers in round 2; memos never in state
     r = c.post("/orchestrate", json={"text": "note C6, sticky residue", "session": "s24"})
     assert r.json()["route"] == "grammar", r.json()
-    n_before = len(calls)
-    FakeClient.spark_payload = {"id": "g1", "output": [fc("get_well", '{"well": "C6"}', "g1c")]}
-    r = c.post("/orchestrate", json={"text": "what is on C6", "session": "s24"})
-    FakeClient.spark_payload = SPARK_OK
-    j = r.json()
-    assert j["reply"] == "C6 is done. Memos: sticky residue.", j
-    assert j["messages"] == ["C6 is done. Memos: sticky residue."], j
-    assert len([1 for u, _ in calls[n_before:] if u.endswith("/responses")]) == 1, "no round 2"
-    print("24 ok: direct record answer, one call")
 
-    # 24b. round-1 answer beside a lookup is dropped blind; round 2 answers
     class GWClient(FakeClient):
         queue = []
 
@@ -504,7 +499,27 @@ with patch("httpx.AsyncClient", FakeClient):
             return FakeResp(FakeClient.asr_payload)
 
     GWClient.queue = [
-        {"id": "g1", "output": [fc("get_well", '{"well": "C6"}', "g1c"),
+        {"id": "g1", "output": [fc("read_record", '{"kind": "wells", "filter": "C6"}', "g1c")]},
+        {"id": "g2", "output": [fc("answer", '{"text": "C6 has sticky residue."}', "g2c")]},
+    ]
+    with patch("httpx.AsyncClient", GWClient):
+        r = c.post("/orchestrate", json={"text": "what is on C6", "session": "s24"})
+    j = r.json()
+    assert j["reply"] == "C6 has sticky residue.", j
+    first, second = calls[-2][1]["json"], calls[-1][1]["json"]
+    # Recent utterances are conversation evidence by design; the record lookup
+    # still happens in round 2 (function_call_output below).
+    assert second["previous_response_id"] == "g1"
+    out = second["input"][0]
+    assert out["type"] == "function_call_output" and out["call_id"] == "g1c", second["input"]
+    data = json.loads(out["output"])
+    assert data["wells"][0]["memos"] == ["sticky residue"], data
+    assert second["input"][-1] == {"role": "user", "content": "what is on C6"}, second["input"]
+    print("24 ok: read then model answers")
+
+    # 24b. round-1 answer beside a read is dropped blind; round 2 answers
+    GWClient.queue = [
+        {"id": "g1", "output": [fc("read_record", '{"kind": "wells", "filter": "C6"}', "g1c"),
                                 fc("answer", '{"text": "BLIND GUESS"}', "g1a")]},
         {"id": "g2", "output": [fc("answer", '{"text": "C6 has sticky residue."}', "g2c")]},
     ]
@@ -513,15 +528,18 @@ with patch("httpx.AsyncClient", FakeClient):
     j = r.json()
     assert j["reply"] == "C6 has sticky residue.", j
     assert "BLIND" not in " ".join(j["messages"]), j
-    first, second = calls[-2][1]["json"], calls[-1][1]["json"]
-    assert "sticky residue" not in first["instructions"], "lookup needed"
-    assert second["previous_response_id"] == "g1"
-    out = second["input"][0]
-    assert out["type"] == "function_call_output" and out["call_id"] == "g1c", second["input"]
-    data = json.loads(out["output"])
-    assert data["well"] == "C6" and data["memos"] == ["sticky residue"], data
-    assert second["input"][-1] == {"role": "user", "content": "Continue with the looked-up data."}
     print("24b ok: blind dropped, informed answers")
+
+    # 24c. silent round 2 falls back to server sentences for well reads
+    GWClient.queue = [
+        {"id": "g1", "output": [fc("read_record", '{"kind": "wells", "filter": "C6"}', "g1c")]},
+        {"id": "g2", "output": []},
+    ]
+    with patch("httpx.AsyncClient", GWClient):
+        r = c.post("/orchestrate", json={"text": "what is on C6", "session": "s24c"})
+    j = r.json()
+    assert j["reply"] == "C6 is done. Memos: sticky residue.", j
+    print("24c ok: silent round 2 falls back")
 
     # 25. direct answer passes through
     FakeClient.spark_payload = {"id": "resp_ans", "output": [
@@ -541,7 +559,7 @@ with patch("httpx.AsyncClient", FakeClient):
     r = c.post("/orchestrate", json={"text": "mark C2 done and confirm", "session": "s26"})
     FakeClient.spark_payload = SPARK_OK
     j = r.json()
-    assert j["reply"] == "✓ C2 done", j
+    assert j["reply"] == "Nice, C2 are in.", j
     assert j["tool_calls"] == [{"name": "mark_done", "args": {"wells": ["C2"]}}], j
     print("26 ok: action wins over answer")
 
@@ -558,8 +576,12 @@ with patch("httpx.AsyncClient", FakeClient):
     FakeClient.spark_payload = SPARK_OK
     api.store.r["plan"], api.store.r["step_index"] = saved_plan, saved_idx
     j = r.json()
-    assert j["messages"] == ["Timer started: incubate 30 min · 30 min"], j
-    print("27 ok: plan-time grounded timer")
+    assert j["messages"] == [], j
+    assert len(j["cards"]) == 1, j
+    assert j["cards"][0]["question"] == "30 minutes, as planned?", j
+    r = c.post("/confirm", json={"card_id": j["cards"][0]["id"], "ok": True, "session": "s27"})
+    assert r.json()["message"] == "30 minutes. I'll ping you.", r.json()
+    print("27 ok: plan-time timer asks to confirm")
 
     # 28. round-2 memo grounding: mixed round 1, clean reply, no stale ask
     r = c.post("/orchestrate", json={"text": "note C7, wait 20 min", "session": "s28"})
@@ -575,29 +597,30 @@ with patch("httpx.AsyncClient", FakeClient):
             return FakeResp(FakeClient.asr_payload)
 
     GW2Client.queue = [
-        {"id": "h1", "output": [fc("get_well", '{"well": "C7"}', "h1c"),
+        {"id": "h1", "output": [fc("read_record", '{"kind": "wells", "filter": "C7"}', "h1c"),
                                 fc("set_timer", '{"label": "x", "minutes": 20}', "h1t")]},
         {"id": "h2", "output": [fc("set_timer", '{"label": "x", "minutes": 20}', "h2c")]},
     ]
     with patch("httpx.AsyncClient", GW2Client):
         r = c.post("/orchestrate", json={"text": "start the C7 timer", "session": "s28"})
     j = r.json()
-    assert j["messages"] == ["Timer started: drug A · 20 min"], j
-    assert j["reply"] == "Timer started: drug A · 20 min", j
-    assert api._SESSIONS["s28"]["pending"] is None, api._SESSIONS["s28"]["pending"]
+    assert j["messages"] == ["20 minutes. I'll ping you."], j
+    assert j["reply"] == "20 minutes. I'll ping you.", j
+    assert api._SESSIONS["s28"]["turns"][-1]["asked"] == {}, api._SESSIONS["s28"]["turns"][-1]
     print("28 ok: memo-grounded round-2 timer")
 
     # 29. round-2 ungrounded number is refused with a minutes ask
     GW2Client.queue = [
-        {"id": "k1", "output": [fc("get_well", '{"well": "C6"}', "k1c"),
+        {"id": "k1", "output": [fc("read_record", '{"kind": "wells", "filter": "C6"}', "k1c"),
                                 fc("set_timer", '{"label": "x", "minutes": 45}', "k1t")]},
         {"id": "k2", "output": [fc("set_timer", '{"label": "x", "minutes": 45}', "k2c")]},
     ]
     with patch("httpx.AsyncClient", GW2Client):
         r = c.post("/orchestrate", json={"text": "start the C6 timer", "session": "s29"})
     j = r.json()
-    assert j["reply"] == "How many minutes for the timer?", j
-    assert api._SESSIONS["s29"]["pending"]["kind"] == "minutes", api._SESSIONS["s29"]["pending"]
+    assert j["reply"] == "Sure — how long?", j
+    asked29 = api._SESSIONS["s29"]["turns"][-1]["asked"]
+    assert asked29["question"] == "Sure — how long?", asked29
     print("29 ok: ungrounded round-2 refused")
 
     # 30. round-1 value mismatch is refused too
@@ -606,7 +629,7 @@ with patch("httpx.AsyncClient", FakeClient):
          "arguments": '{"label": "x", "minutes": 45}', "call_id": "cm", "status": "completed"}]}
     r = c.post("/orchestrate", json={"text": "set a 10 minute timer", "session": "s30"})
     FakeClient.spark_payload = SPARK_OK
-    assert r.json()["reply"] == "How many minutes for the timer?", r.json()
+    assert r.json()["reply"] == "Sure — how long?", r.json()
     print("30 ok: mismatched round-1 refused")
 
     # 23. failed retry answers sorry, not 502
@@ -671,13 +694,14 @@ with patch("httpx.AsyncClient", FakeClient):
     out = second["input"][0]
     assert out["type"] == "function_call_output" and out["call_id"] == "f1c", second["input"]
     assert json.loads(out["output"])["free"][:2] == ["C9", "C10"], out["output"]
-    assert second["input"][-1] == {"role": "user", "content": "Continue with the looked-up data."}
+    assert second["input"][-1] == {"role": "user",
+                                           "content": "C3 has a bubble, redo it in a backup well"}, second["input"]
     print("32 ok: backup candidates ride round 2")
 
     # 33. summary mode: store:false, no chain, turns injected
     api.CHAIN_ENABLED = False
     r = c.post("/orchestrate", json={"text": "C3 all set", "session": "s33"})
-    assert r.json()["messages"] == ["✓ C3 done"], r.json()
+    assert r.json()["messages"] == ["Nice, C3 are in."], r.json()
     body = calls[-1][1]["json"]
     assert body["store"] is False and "previous_response_id" not in body, body
     assert '"recent_turns"' not in body["instructions"], "first turn has no history"
@@ -712,15 +736,17 @@ with patch("httpx.AsyncClient", FakeClient):
     assert '"current_screen": "main"' in calls[-1][1]["json"]["instructions"]
     print("34 ok: ui echo + speak + screen state")
 
-    # 35. text answers never resolve cards; only /confirm does
+    # 35. voice "yes" resolves the card with no model call
+    api.store.r["cards"].clear()
     r = c.post("/orchestrate", json={"text": "exclude D7", "session": "s35"})
     card_id = r.json()["cards"][0]["id"]
+    n_before = len(calls)
     r = c.post("/orchestrate", json={"text": "yes", "session": "s35"})
-    assert r.json()["reply"] == "✓ C3 done", r.json()
-    assert card_id in api.store.r["cards"], "model turn must not resolve cards"
-    r = c.post("/confirm", json={"card_id": card_id, "ok": True, "session": "s35"})
-    assert r.json()["message"] == "D7 excluded", r.json()
+    j = r.json()
+    assert len(calls) == n_before, "card answer must not call the model"
+    assert j["route"] == "card" and j["ms"] == {"spark": 0}, j
+    assert j["reply"] == "D7 excluded", j
     assert card_id not in api.store.r["cards"]
-    print("35 ok: cards need explicit confirm")
+    print("35 ok: voice yes resolves cards, no model call")
 
 print("ALL PASS")

@@ -29,6 +29,8 @@ struct UIAction: Decodable {
     let screen: String?
     let target: String?
     let sheet: String?
+    let wells: [String]?
+    let seconds: Double?
 }
 
 struct OrchestrateResponse: Decodable {

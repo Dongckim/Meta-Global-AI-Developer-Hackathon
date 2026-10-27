@@ -6,7 +6,10 @@
 import unittest
 
 from server.grammar import (
+    build_evidence,
     call_wells,
+    evidence_summary,
+    grounded,
     collapse_each_timers,
     count_wells,
     expand_range,
@@ -14,15 +17,18 @@ from server.grammar import (
     fill_on_done,
     filter_timer_calls,
     final_pip_line,
+    honest_reply,
     find_amounts,
     find_durations,
     is_failure_message,
     join_wells_ranges,
     keep_grounded_timers,
     mark_each_timers,
+    match_card_answer,
     match_grammar,
     needs_minutes_ask,
     normalize_text,
+    parse_wellref,
     parse_wells,
     relevant_plan_numbers,
     speak_text,
@@ -30,7 +36,8 @@ from server.grammar import (
     split_ask,
     strip_fillers,
     timer_set_reply,
-    verbatim_span,
+    what_step_reply,
+    whats_next_reply,
     where_am_i_reply,
     words_to_minutes,
 )
@@ -273,15 +280,77 @@ class TimerGroundingTests(unittest.TestCase):
         return {"name": "set_timer", "args": {"label": "x", "minutes": minutes}}
 
     def test_value_match(self):
-        self.assertEqual(keep_grounded_timers([self.T(5)], {5}), [self.T(5)])
-        self.assertEqual(keep_grounded_timers([self.T(30)], {30.0}), [self.T(30)])
-        self.assertEqual(keep_grounded_timers([self.T(5)], {10}), [])
-        self.assertEqual(keep_grounded_timers([self.T(None)], {5}), [])
-        self.assertEqual(keep_grounded_timers([self.T(True)], {1}), [])
+        ev = lambda s: build_evidence("", "", set(s), "")
+        self.assertEqual(keep_grounded_timers([self.T(5)], ev({5})), [self.T(5)])
+        self.assertEqual(keep_grounded_timers([self.T(30)], ev({30.0})), [self.T(30)])
+        self.assertEqual(keep_grounded_timers([self.T(5)], ev({10})), [])
+        self.assertEqual(keep_grounded_timers([self.T(None)], ev({5})), [])
+        self.assertEqual(keep_grounded_timers([self.T(True)], ev({1})), [])
 
     def test_others_kept(self):
         calls = [self.T(5), {"name": "next_step", "args": {}}]
-        self.assertEqual(keep_grounded_timers(calls, set()), [calls[1]])
+        self.assertEqual(keep_grounded_timers(calls, build_evidence()), [calls[1]])
+
+
+class GroundedTests(unittest.TestCase):
+    def test_number_from_utterance(self):
+        ev = build_evidence("set a two minute timer")
+        self.assertEqual(grounded(2, ev), (True, "utterance"))
+        self.assertEqual(grounded(5, ev), (False, "none"))
+
+    def test_stutter_collapses(self):
+        self.assertEqual(words_to_minutes("two two"), 2)
+        self.assertEqual(words_to_minutes("twenty twenty"), 20)
+        ev = build_evidence("set a two two minute timer")
+        self.assertEqual(grounded(2, ev), (True, "utterance"))
+        self.assertEqual(grounded(4, ev)[0], False)
+
+    def test_number_from_reads(self):
+        ev = build_evidence("set the timer", "",
+                            reads_text='{"memos": ["wait 20 min"]}')
+        self.assertEqual(grounded(20, ev), (True, "read"))
+
+    def test_number_from_conversation(self):
+        summ = evidence_summary([{"text": "start a timer", "calls": ["set_timer"],
+                                  "messages": ["3 minutes on C5"], "asked": {}}])
+        ev = build_evidence("set the timer", summ)
+        self.assertEqual(grounded(3, ev), (True, "conversation"))
+
+    def test_number_from_plan(self):
+        ev = build_evidence("set the timer", "", {30})
+        self.assertEqual(grounded(30, ev), (True, "plan"))
+
+    def test_utterance_beats_plan(self):
+        ev = build_evidence("set a 5 minute timer", "", {30})
+        self.assertEqual(grounded(5, ev), (True, "utterance"))
+
+    def test_read_ids_not_numbers(self):
+        ev = build_evidence("set the timer", "",
+                            reads_text='{"step": 2, "wells": ["C6", "C7"]}')
+        self.assertEqual(grounded(2, ev)[0], False)
+
+    def test_text_no_new_facts(self):
+        ev = build_evidence("note C3, I see bubbles")
+        self.assertEqual(grounded("I see bubbles", ev), (True, "utterance"))
+        self.assertEqual(grounded("Reagent is a little sticky.",
+                                  build_evidence("the reagent is a little bit sticky")),
+                         (True, "utterance"))
+
+    def test_text_new_number_rejected(self):
+        ev = build_evidence("note C3, I see bubbles")
+        self.assertEqual(grounded("bubbles for 5 minutes", ev), (False, "none"))
+
+    def test_text_new_well_rejected(self):
+        ev = build_evidence("note C3, I see bubbles")
+        self.assertEqual(grounded("bubbles spread to C4", ev), (False, "none"))
+
+    def test_text_no_content_rejected(self):
+        ev = build_evidence("note C3, take a look")
+        self.assertEqual(grounded("a", ev), (False, "none"))
+
+    def test_empty_pool_replay(self):
+        self.assertEqual(grounded("stored tip text", build_evidence()),
+                         (True, "utterance"))
 
 
 class FilterTests(unittest.TestCase):
@@ -379,7 +448,7 @@ class MarkEachTests(unittest.TestCase):
         self.assertTrue(out[0]["args"].get("each"))
 
     def test_each_same_count(self):
-        stq = {"pending_question": {"question": "How many minutes?", "target": "C2–C8"}}
+        stq = {"last_asked": {"question": "How many minutes?", "target": "C2–C8"}}
         self.assertEqual(
             timer_set_reply([{"name": "set_timer", "args": {"minutes": 30, "each": True}}], stq),
             "7 30-minute timers for C2–C8.",
@@ -406,7 +475,7 @@ class CollapseTests(unittest.TestCase):
 
 
 class TimerSetReplyTests(unittest.TestCase):
-    STQ = {"pending_question": {"question": "How many minutes for the timer?", "target": "C2–C8"}}
+    STQ = {"last_asked": {"question": "How many minutes for the timer?", "target": "C2–C8"}}
 
     def test_canonical(self):
         self.assertEqual(
@@ -421,7 +490,7 @@ class TimerSetReplyTests(unittest.TestCase):
         )
 
     def test_singular(self):
-        stq = {"pending_question": {"question": "How many minutes?", "target": "C4"}}
+        stq = {"last_asked": {"question": "How many minutes?", "target": "C4"}}
         self.assertEqual(
             timer_set_reply([{"name": "set_timer", "args": {"minutes": 30}}], stq),
             "30-minute timer for C4.",
@@ -514,21 +583,77 @@ class WhereAmITests(unittest.TestCase):
         self.assertEqual(where_am_i_reply(st), "Step 3 of 5, drug A. 5 wells done. None left.")
 
 
-class VerbatimTests(unittest.TestCase):
+class StripFillersTests(unittest.TestCase):
     def test_strip_fillers(self):
         self.assertEqual(strip_fillers("um, bubbles, uh"), "bubbles")
         self.assertEqual(strip_fillers("like, I see bubbles"), "I see bubbles")
         self.assertEqual(strip_fillers("I like bubbles"), "I like bubbles")
         self.assertEqual(strip_fillers("  Bubbles! "), "Bubbles")
 
-    def test_span_keeps_original_case(self):
-        self.assertEqual(verbatim_span("note C3, Big Bubbles", "big bubbles"), "Big Bubbles")
 
-    def test_model_prefix_dropped(self):
-        self.assertEqual(verbatim_span("note C3, bubbles", "Note: bubbles here"), "bubbles")
+class WellRefTests(unittest.TestCase):
+    def test_three_forms(self):
+        self.assertEqual(parse_wellref("C5"), ["C5"])
+        self.assertEqual(parse_wellref("C2-C8"),
+                         ["C2", "C3", "C4", "C5", "C6", "C7", "C8"])
+        self.assertEqual(parse_wellref("C2–C8"),
+                         ["C2", "C3", "C4", "C5", "C6", "C7", "C8"])
+        self.assertEqual(parse_wellref("C2 to C8"),
+                         ["C2", "C3", "C4", "C5", "C6", "C7", "C8"])
+        self.assertEqual(parse_wellref("C2, C5, C7"), ["C2", "C5", "C7"])
 
-    def test_no_match_returns_transcript(self):
-        self.assertEqual(verbatim_span("note C3, um, bubbles", "totally absent"), "note C3, um, bubbles")
+    def test_invalid_and_empty(self):
+        self.assertEqual(parse_wellref("C99"), [])
+        self.assertEqual(parse_wellref("Z9"), [])
+        self.assertEqual(parse_wellref(""), [])
+        self.assertEqual(parse_wellref(None), [])
+        self.assertEqual(parse_wellref("step 3"), [])
+
+    def test_uncertain_left_untouched(self):
+        self.assertEqual(normalize_text("note C nine nine test"), "note C nine nine test")
+        self.assertEqual(normalize_text("start a 25 minute timer"), "start a 25 minute timer")
+        self.assertEqual(normalize_text("a 5 minute timer for C2"), "a 5 minute timer for C2")
+        self.assertIsNone(match_grammar("note C nine nine test", ST))
+
+    def test_certain_still_rewrites(self):
+        self.assertEqual(normalize_text("see two to eight done"), "C2 to C8 done")
+        self.assertEqual(normalize_text("C to to eight"), "C2 to C8")
+        self.assertEqual(normalize_text("mark a 5 done"), "mark A5 done")
+
+
+class CardAnswerTests(unittest.TestCase):
+    def test_answers(self):
+        self.assertEqual(match_card_answer("yes"), "yes")
+        self.assertEqual(match_card_answer("Yep!"), "yes")
+        self.assertEqual(match_card_answer("no"), "no")
+        self.assertEqual(match_card_answer("cancel"), "cancel")
+        self.assertEqual(match_card_answer("yes to all"), "all")
+
+    def test_non_answers(self):
+        self.assertIsNone(match_card_answer("yes, and mark C2 done"))
+        self.assertIsNone(match_card_answer("cancel the timer"))
+        self.assertIsNone(match_card_answer("maybe"))
+        self.assertIsNone(match_card_answer(""))
+
+
+class ShortQuestionTests(unittest.TestCase):
+    def test_what_step(self):
+        st = dict(ST, next_step="drug B D2–D8")
+        self.assertEqual(what_step_reply(st), "Step 3 of 5, drug A.")
+        calls, _ = match_grammar("what step is it", st)
+        self.assertEqual(calls, [{"name": "where_am_i", "args": {"about": "step"}}])
+
+    def test_whats_next(self):
+        st = dict(ST, next_step="drug B D2–D8")
+        self.assertEqual(whats_next_reply(st), "Next: drug B D2–D8.")
+        calls, _ = match_grammar("what's next", st)
+        self.assertEqual(calls, [{"name": "where_am_i", "args": {"about": "next"}}])
+        self.assertEqual(whats_next_reply({}), "Already at the last step.")
+
+    def test_physical(self):
+        calls, gtext = match_grammar("hand me the pipette", ST)
+        self.assertEqual((calls, gtext), ([], "cant_do_physical"))
+        self.assertIsNone(match_grammar("give me a timer", ST))
 
 
 class CallWellsTests(unittest.TestCase):
@@ -573,6 +698,25 @@ class PipLineTests(unittest.TestCase):
     def test_failures_detected(self):
         self.assertTrue(is_failure_message("Which timer should I cancel? Running: x."))
         self.assertFalse(is_failure_message("✓ C2 done"))
+
+
+class HonestReplyTests(unittest.TestCase):
+    def test_claim_without_tools(self):
+        self.assertEqual(honest_reply([], "B2 done."), "I didn't record anything.")
+        self.assertEqual(honest_reply([], "C3 excluded, noted."), "I didn't record anything.")
+        self.assertEqual(honest_reply(None, "Timer started."), "I didn't record anything.")
+
+    def test_logged_moved_claim(self):
+        self.assertEqual(honest_reply([], "Logged C2."), "I didn't record anything.")
+        self.assertEqual(honest_reply([], "Moved to step 4."), "I didn't record anything.")
+
+    def test_pass_through(self):
+        self.assertEqual(honest_reply([{"name": "mark_done"}], "B2 done."), "B2 done.")
+        self.assertEqual(honest_reply([], "Want me to log it?"), "Want me to log it?")
+        self.assertEqual(honest_reply([], "You got it!"), "You got it!")
+
+    def test_fallback(self):
+        self.assertEqual(honest_reply([], "B2 done.", fallback="X"), "X")
 
 
 class UIGrammarTests(unittest.TestCase):

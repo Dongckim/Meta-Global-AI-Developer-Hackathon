@@ -32,6 +32,7 @@ struct ContentView: View {
     @State private var log: [String] = ["Pip ready — speak or type"]
     @State private var debug: DebugRun?
     @State private var showDebug = false
+    @State private var showSettings = false
     @State private var lastReply = ""
     @State private var recorder = Recorder()
     @State private var recording = false
@@ -39,8 +40,7 @@ struct ContentView: View {
     @State private var recordStart: Date?
     @State private var busy = false
     @State private var selectedWell: WellSelect?
-    @State private var memoFlash: SavedMemo?
-    @State private var memoGen = 0
+    @State private var peekGen = 0
     @State private var robotState = RobotState.idle
     @State private var ttsOn = SpeechBus.shared.enabled
     @State private var routeLine = ""
@@ -77,12 +77,7 @@ struct ContentView: View {
         }
         .sheet(item: $selectedWell) { sel in WellSheet(well: sel.id, lab: lab) { say($0) } }
         .sheet(isPresented: robotSheet) { robotPanel }
-        .overlay(alignment: .top) {
-            if let m = memoFlash {
-                memoBanner(m)
-                    .allowsHitTesting(false)
-            }
-        }
+        .sheet(isPresented: $showSettings) { VoiceSettingsView() }
         .onAppear { connect(); refreshRoute() }
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
             refreshRoute()
@@ -137,10 +132,10 @@ struct ContentView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(lab.cards) { card in
+                    ForEach(Array(lab.cards.enumerated()), id: \.element.id) { idx, card in
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(card.question).font(.callout)
+                                Text(card.question).font(.callout).bold(idx == 0)
                                 if let detail = card.detail, !detail.isEmpty {
                                     Text(detail).font(.caption).foregroundStyle(.secondary)
                                 }
@@ -151,6 +146,9 @@ struct ContentView: View {
                             Button("No") { answer(id: card.id, ok: false) }
                                 .buttonStyle(.bordered).controlSize(.small)
                         }
+                        .padding(4)
+                        .background(idx == 0 ? Color.accentColor.opacity(0.12) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 6))
                     }
                 }
             }
@@ -170,6 +168,7 @@ struct ContentView: View {
             }
             if showDebug {
                 Text(routeLine).font(.caption2).foregroundStyle(.secondary)
+                Text("voice: \(SpeechBus.shared.voiceInfo)").font(.caption2).foregroundStyle(.secondary)
             }
             if showDebug, let d = debug {
                 debugPanel(d)
@@ -230,17 +229,6 @@ struct ContentView: View {
         .padding()
     }
 
-    private func memoBanner(_ m: SavedMemo) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Note saved (\(m.target))").font(.caption.bold())
-            Text(m.text).font(.body)
-        }
-        .frame(maxWidth: 420, alignment: .leading)
-        .padding(10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .padding(.top, 12)
-    }
-
     private var hintsBar: some View {
         let cmds = screens.first { $0.id == currentScreen }?.commands.prefix(3) ?? []
         return Text("Try saying: " + cmds.joined(separator: " · "))
@@ -250,6 +238,10 @@ struct ContentView: View {
 
     private var inputBar: some View {
         HStack(spacing: 8) {
+            Button { showSettings = true } label: {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(.bordered).controlSize(.small)
             Button {
                 ttsOn.toggle()
                 SpeechBus.shared.enabled = ttsOn
@@ -375,6 +367,20 @@ struct ContentView: View {
             robotState = .idle
             selectedWell = WellSelect(id: t)
             return true
+        case "flash":
+            lab.flash(Set(a.wells ?? []))
+            return true
+        case "peek":
+            guard let t = a.target, !t.isEmpty else { return uiFail("I couldn't open that.") }
+            robotState = .idle
+            selectedWell = WellSelect(id: t)
+            peekGen += 1
+            let g = peekGen
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(a.seconds ?? 3))
+                if peekGen == g, selectedWell?.id == t { selectedWell = nil }
+            }
+            return true
         case "back":
             selectedWell = nil
             robotState = .idle
@@ -430,29 +436,7 @@ struct ContentView: View {
         guard !text.isEmpty, !busy else { return }
         input = ""
         say("> \(text)")
-        if !lab.cards.isEmpty, isYesToAll(text) {
-            answerAll()
-            return
-        }
-        if !lab.cards.isEmpty, let ok = cardAnswer(for: text) {
-            answer(ok)
-            return
-        }
         Task { await sendText(text) }
-    }
-
-    /// Card answers are yes/no/cancel only; everything else is a new command.
-    private func cardAnswer(for text: String) -> Bool? {
-        switch text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "yes": true
-        case "no", "cancel": false
-        default: nil
-        }
-    }
-
-    private func isYesToAll(_ text: String) -> Bool {
-        ["yes to all", "yes all", "approve all"].contains(
-            text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
 
     private func sendText(_ text: String) async {
@@ -464,7 +448,7 @@ struct ContentView: View {
                                                     openSheet: selectedWell == nil ? "" : "well_card")
             handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
                    route: r.route, input: text, sources: r.sources,
-                   savedMemo: r.saved_memo, robot: r.robot == true, dropped: r.dropped ?? 0,
+                   robot: r.robot == true, dropped: r.dropped ?? 0,
                    ui: r.ui, speak: r.speak)
         } catch {
             say("Error: \(error.localizedDescription)")
@@ -520,17 +504,9 @@ struct ContentView: View {
                                               selectedWell: selectedWell?.id ?? "",
                                               openSheet: selectedWell == nil ? "" : "well_card")
             say("🎙 \(r.transcript)")
-            if !lab.cards.isEmpty, isYesToAll(r.transcript) {
-                answerAll()
-                return
-            }
-            if !lab.cards.isEmpty, let ok = cardAnswer(for: r.transcript) {
-                answer(ok)
-                return
-            }
             handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
                    route: r.route, input: r.transcript, sources: r.sources,
-                   savedMemo: r.saved_memo, robot: r.robot == true, dropped: r.dropped ?? 0,
+                   robot: r.robot == true, dropped: r.dropped ?? 0,
                    ui: r.ui, speak: r.speak)
         } catch {
             say("Error: \(error.localizedDescription)")
@@ -539,7 +515,7 @@ struct ContentView: View {
 
     private func handle(calls: [ToolCall], messages: [String], reply: String, ms: [String: Int],
                         route: String?, input: String, sources: [Source],
-                        savedMemo: SavedMemo?, robot: Bool, dropped: Int,
+                        robot: Bool, dropped: Int,
                         ui: [UIAction]?, speak: String?) {
         for msg in messages { say(msg) }
         if !reply.isEmpty {
@@ -552,7 +528,6 @@ struct ContentView: View {
             lab.lastShown = "plate \(show.args["target"]?.string ?? "")"
             lab.flash(parseShowTarget(show.args["target"]?.string))
         }
-        if let m = savedMemo { flashMemo(m) }
         if dropped > 0 { say("Ignored \(dropped) bad call(s)") }
         if robot { runRobot() }
         debug = DebugRun(
@@ -563,16 +538,6 @@ struct ContentView: View {
             sources: sources.map(\.title)
         )
         say("⏱ " + msLine(ms))
-    }
-
-    private func flashMemo(_ m: SavedMemo) {
-        memoFlash = m
-        memoGen += 1
-        let g = memoGen
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(2))
-            if memoGen == g { memoFlash = nil }
-        }
     }
 
     private func runRobot() {

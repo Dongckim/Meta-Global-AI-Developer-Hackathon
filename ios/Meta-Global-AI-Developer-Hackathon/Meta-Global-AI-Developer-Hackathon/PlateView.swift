@@ -168,6 +168,11 @@ struct WellSheet: View {
                 } else {
                     ForEach(memos) { m in
                         Text("• \(m.text) \(m.history.isEmpty ? "" : "(edited \(m.history.count)×)")").font(.callout)
+                        if let raw = m.raw, raw != m.text {
+                            DisclosureGroup("View original") {
+                                Text(raw).font(.caption).foregroundStyle(.secondary)
+                            }.font(.caption)
+                        }
                     }
                 }
             }
