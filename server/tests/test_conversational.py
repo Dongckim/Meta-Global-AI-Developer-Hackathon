@@ -6,6 +6,7 @@ Run: python -m unittest server.tests.test_conversational (runs on import).
 import copy
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -217,5 +218,32 @@ with patch("httpx.AsyncClient", FakeClient):
         [{"name": "read_record", "args": {"kind": "free_wells"}, "call_id": "x"}],
         {"x": '{"near": "C3", "free": ["C9", "C10"]}'}) == ["Free near C3: C9, C10"]
     print("C11 ok: executed map + renderer shapes")
+
+    # C12. honest-text guard fires on claimed outcomes, never bare mentions.
+    from server.grammar import ungrounded_targets as _ut
+    clean = ["It's 2:47 PM.", "It's 2:47 PM, no timers running.",
+             "It's 2:47, time to check step 2.", "No timers running.",
+             "C2 looks good.", "What timer do you mean?"]
+    for line in clean:
+        d = _ut(line)
+        assert not (d["wells"] or d["timer"] or d["step"] or d["memo"]), line
+    claims = ["Marked C2-C8 done", "Nice, we're set on C2-C8",
+              "Timer started for 5 minutes.", "Moving to the next step.",
+              "Your note is saved.", "Excluded C3."]
+    for line in claims:
+        d = _ut(line)
+        assert d["wells"] or d["timer"] or d["step"] or d["memo"], line
+    before = snapshot()
+    FakeClient.spark_payload = msg("It's 2:47 PM, no timers running.")
+    j = c.post("/orchestrate", json={"text": "what time is right now",
+                                     "session": "c12"}).json()
+    assert j["reply"] == "It's 2:47 PM, no timers running.", j
+    assert j["tool_calls"] == [] and snapshot() == before, j
+    print("C12 ok: mentions pass, outcome claims caught")
+
+    # C13. the model sees the bench clock, so time questions answer.
+    st = api.store.model_state(api.get_session("c13"))
+    assert re.fullmatch(r"\d{1,2}:\d{2} [AP]M local", st["clock"]), st["clock"]
+    print("C13 ok: clock context present")
 
 print("ALL PASS")

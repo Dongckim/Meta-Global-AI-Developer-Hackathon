@@ -28,6 +28,7 @@ from server.grammar import (
     whats_next_reply,
     where_am_i_reply,
 )
+from server.screens import READ_KINDS as SCREEN_READ_KINDS
 from server.screens import SCREENS, canonical, parent_of, title_of
 from server.tone import say
 from server import library as lib
@@ -692,8 +693,10 @@ class RecordStore:
         for t in self.r["timers"]:
             left = int((t["started_at"] + t["minutes"] * 60 - now) // 60)
             timers.append(f"{t['label']} ({left}m left)" if left > 0 else f"{t['label']} (done)")
+        now_dt = time.strftime("%I:%M %p").lstrip("0")
         st = {
             "run": (self.r.get("run") or {}).get("protocol_name") or "none",
+            "clock": f"{now_dt} local",
             "step": f"{idx + 1}/{len(steps)} {name}",
             "plan_times": pt,
             "conditions": "; ".join(conds),
@@ -1354,7 +1357,8 @@ class RecordStore:
 
     # --- memos / recent / timers ---
 
-    READ_KINDS = ("wells", "notes", "timers", "steps", "history", "source", "free_wells")
+    #: Readable kinds, derived from shared/schemas/screens.json (single source).
+    READ_KINDS = SCREEN_READ_KINDS
 
     def filter_wells(self, filt: str, rec: dict | None = None) -> list[str]:
         """Well range, condition key/label, 'all', or blank (= current step)."""
@@ -1377,12 +1381,25 @@ class RecordStore:
         return doc.get("record") or {}, doc.get("run_id")
 
     def read_record(self, kind: str, filt="", limit=10) -> dict:
-        """One free read over the viewing (or active) run's record."""
+        """One free read: library/run lists, or the viewing (active) run's record."""
         n = _num(limit)
         n = 10 if n is None else max(1, min(50, int(n)))
         f = filt.strip() if isinstance(filt, str) else ""
         if kind not in self.READ_KINDS:
             return {"error": f"unknown kind: {kind}. Use {', '.join(self.READ_KINDS)}."}
+        if kind == "protocols":
+            if f:
+                hit = lib.find_by_name(f, self.root)
+                docs = [lib.summarize(hit)] if hit else []
+            else:
+                docs = lib.list_all(self.root)[:n]
+            return {"protocols": docs}
+        if kind == "runs":
+            docs = self.all_run_docs()
+            if f:
+                hit = runlog.resolve(f, docs)
+                docs = [hit] if hit else []
+            return {"runs": [runlog.summarize(d) for d in docs[:n]]}
         rec, rid = self._read_scope()
         rec = rec or {}
         if kind == "free_wells":

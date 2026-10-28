@@ -117,3 +117,23 @@ Accuracy: 10/10. One session, fresh record.
 | What is on C8 | 2106 | read_record | y | Got it — C8 has sticky edges, looks weird, bubbles. |
 | Mark C8 done | 1843 | mark_done | y | Nice, C8 are in. |
 | Go to the robot preview | 1648 | navigate | y | Showing Robot preview. |
+
+## Write-vs-view tool choice (live muse-spark-1.3 minimal)
+
+Accuracy: 12/13. One session, fresh record.
+
+| turn | total_ms | calls | pass | reply |
+|---|---|---|---|---|
+| Note C8, sticky edges | 90 | add_note | y | Noted on C8. |
+| I want to make notes on C8 | 1905 | - | y | What should I write on C8? |
+| Show me C8 | 1946 | open | y | Opened C8. |
+| C8 looks weird | 1979 | add_note | y | Got it — noted on C8. |
+| Open C8 and note bubbles | 2235 | open | n | Opened C8. |
+| Let me see the timers | 1778 | read_record | y | No timers running. |
+| C8 is contaminated, exclude it | 1192 | exclude_well | y | Drop C8? |
+| What is on C8 | 1563 | read_record | y | Got it — C8 has "sticky edges" and "looks weird" noted. |
+| Mark C8 done | 1593 | mark_done | y | Nice, C8 are in. |
+| Go to the robot preview | 1575 | navigate | y | Showing Robot preview. |
+| the most recent runs | 1185 | read_record | y | Got it — one recent run, Demo protocol, still active. |
+| show the most recent run | 3118 | read_record,navigate | y | Got it — showing the latest run. Showing run run-20261028-144337-59a6. |
+| What time is right now? | 1270 | - | y | Got it — it's 2:43 PM local. |

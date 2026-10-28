@@ -799,4 +799,22 @@ with patch("httpx.AsyncClient", FakeClient):
     assert set(api.store.r["cards"]) == before
     print("37 ok: tap answers cards, model cannot")
 
+    # 38. empty audio is ignored: no ASR/Spark call, no turn, silent shape.
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+    n_before = len(calls)
+    r = c.post("/voice", files={"audio": ("clip.wav", buf.getvalue(), "audio/wav")},
+               data={"session": "s38"})
+    j = r.json()
+    assert r.status_code == 200, r.text
+    assert len(calls) == n_before, "ignored audio must not call any model"
+    assert j["ignored"] is True and j["route"] == "ignored", j
+    assert j["reply"] == "" and j["transcript"] == "" and "speak" not in j, j
+    assert j["ms"] == {"asr": 0, "spark": 0, "total": j["ms"]["total"]}, j
+    assert "s38" not in api._SESSIONS, "ignored audio touches no session"
+    print("38 ok: empty audio ignored silently")
+
 print("ALL PASS")

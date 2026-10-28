@@ -587,6 +587,25 @@ steps only; timed kinds propose timer cards on step entry.
 - Future: versions of the same source document grouped as one
   protocol (review edits currently save as a separate protocol).
 
+## Log-driven fixes (2026-10-28, implemented)
+
+- Reads registry: screens.json `reads` is the single source of
+  UI-displayable data kinds. store.READ_KINDS, the read_record tool
+  enum/desc, and the speechless renderer all derive from it; drift
+  fails server/tests/test_reads.py. New kinds: protocols (library by
+  name), runs (past + active newest-first, run selectors). "Recent
+  runs" reads kind=runs; "show the most recent run" reads then
+  navigates to run_view in one turn.
+- Honest-text guard fires on claimed outcomes (record target +
+  outcome verb: marked/logged/started/done/excluded/...), never on
+  bare mentions ("no timers running") or questions. model_state
+  carries the bench clock ("2:47 PM local") so time questions answer.
+- Empty audio: no content in, nothing out. The app gates sends below
+  0.3s at PipClient.voice (single choke point); the server ignores
+  zero-frame WAVs without ASR/Spark calls or turn logging
+  (route "ignored", silent). Audio present but wordless still answers
+  didnt_catch.
+
 ## Open Questions
 
 None.

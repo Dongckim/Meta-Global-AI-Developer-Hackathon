@@ -6,6 +6,7 @@ Appends a table to eval/results/tool_choice.md.
 """
 import contextlib
 import io
+import re
 import sys
 import tempfile
 import time
@@ -33,6 +34,13 @@ TURNS = [
     ("What is on C8", {"must": ["read_record"], "must_not": sorted(WRITES)}),
     ("Mark C8 done", {"must": ["mark_done"]}),
     ("Go to the robot preview", {"must": ["navigate"]}),
+    ("the most recent runs", {"must": ["read_record"],
+                              "must_kind": {"read_record": "runs"},
+                              "reply_not": ["no recent runs", "no runs"]}),
+    ("show the most recent run", {"must": ["read_record", "navigate"],
+                                  "must_kind": {"read_record": "runs"}}),
+    ("What time is right now?", {"must_not": sorted(WRITES),
+                                 "reply_match": r"\d{1,2}:\d{2}"}),
 ]
 
 
@@ -46,6 +54,15 @@ def verdict(j, exp) -> bool:
     if set(names) & set(exp.get("must_not", [])):
         return False
     if exp.get("question") and not (j.get("reply") or "").strip().endswith("?"):
+        return False
+    for name, kind in (exp.get("must_kind") or {}).items():
+        if kind not in [(x.get("args") or {}).get("kind")
+                        for x in j.get("tool_calls", []) if x.get("name") == name]:
+            return False
+    if exp.get("reply_match") and not re.search(exp["reply_match"], j.get("reply") or ""):
+        return False
+    low = (j.get("reply") or "").lower()
+    if any(p in low for p in exp.get("reply_not", [])):
         return False
     return True
 

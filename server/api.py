@@ -51,6 +51,7 @@ from server.grammar import (
 )
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
+from server.screens import READS as SCREEN_READS
 from server import library as lib
 from server import protocol as proto
 from server import runs as runlog
@@ -188,14 +189,13 @@ TOOLS = [
     _tool(
         "read_record",
         "Use when you need record facts to answer or decide. "
-        "kinds: wells, notes, timers, steps, history, source (step quote+page), "
-        "free_wells (backup candidates near a WellRef). "
+        f"kinds: {', '.join(f'{r['kind']} ({r['desc']})' for r in SCREEN_READS)}. "
         "Don't use when the state you have already answers it.",
         {
-            "kind": {"type": "string", "enum": ["wells", "notes", "timers", "steps",
-                                                "history", "source", "free_wells"]},
+            "kind": {"type": "string", "enum": [r["kind"] for r in SCREEN_READS]},
             "filter": _opt({"type": "string",
-                            "description": "WellRef, condition, step, or label; blank for natural scope"}),
+                            "description": "WellRef, condition, step, label, protocol name, "
+                            "or run selector (latest/today/yesterday/date/id); blank for natural scope"}),
             "limit": _opt({"type": "integer", "description": "Max entries (default 10)"}),
         },
     ),
@@ -935,6 +935,12 @@ def _render_record(kind: str, data: dict) -> list[str]:
         if not free:
             return []
         return [f"Free near {data.get('near', '')}: {', '.join(free[:4])}"]
+    if kind == "protocols":
+        return [f"{p.get('name', '?')} ({p.get('steps', '?')} steps)"
+                for p in (data.get("protocols") or [])[:3]]
+    if kind == "runs":
+        return [f"{r.get('run_id', '?')} {r.get('protocol_name') or ''} ({r.get('status', '?')})"
+                for r in (data.get("runs") or [])[:3]]
     return []
 
 
@@ -1086,6 +1092,7 @@ async def orchestrate(body: OrchestrateIn):
 
 @app.post("/voice")
 async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session: str = Form("bench")):
+    total0 = time.perf_counter()
     try:
         state_obj = json.loads(state)
     except json.JSONDecodeError:
@@ -1101,6 +1108,16 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session:
         wav_ok = False
     if not wav_ok:
         raise HTTPException(400, "audio must be mono 16-bit PCM WAV at 16kHz or 24kHz")
+    if dur <= 0:
+        # No content in, nothing out: skip ASR/Spark, no turn logged.
+        # (Audio present but wordless still answers didnt_catch below.)
+        print(f"voice dur={dur:.2f}s ignored: empty audio", flush=True)
+        return _utterance_response(
+            [], [], "",
+            {"asr": 0, "spark": 0, "total": int((time.perf_counter() - total0) * 1000)},
+            "ignored", [], {"dropped": 0, "drop_reasons": []}, [], store.r["version"],
+            {"transcript": "", "ignored": True},
+        )
     Path("/tmp/last.wav").write_bytes(raw)
     key = _key()
     asr_req = {
@@ -1110,7 +1127,6 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session:
         "languageBias": LANGUAGE_BIAS,
         "keywords": KEYWORDS,
     }
-    total0 = time.perf_counter()
     sess = get_session(session)
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         t0 = time.perf_counter()

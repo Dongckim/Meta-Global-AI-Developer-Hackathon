@@ -1,7 +1,10 @@
 """Screen registry: single source for UI navigation (server + app bundle).
 
-Screens own their voice aliases and hint commands. Tool definitions derive
-from here at import time and never change per call, so prompt caching holds.
+Screens own their voice aliases and hint commands; the top-level reads list
+owns every UI-displayable data kind (read_record kinds derive from it, so a
+kind the UI can show is always a kind the model can read). Tool definitions
+derive from here at import time and never change per call, so prompt
+caching holds.
 """
 
 from __future__ import annotations
@@ -20,7 +23,18 @@ FALLBACK = {
         {"id": "robot_preview", "title": "Robot preview", "parent": "main",
          "targets": [], "aliases": ["robot preview", "robot"],
          "commands": ["make the robot protocol", "back"]},
-    ]
+    ],
+    "reads": [
+        {"kind": "wells", "screens": ["main"], "desc": "well status"},
+        {"kind": "notes", "screens": ["main"], "desc": "saved memos"},
+        {"kind": "timers", "screens": ["main"], "desc": "labels, remaining"},
+        {"kind": "steps", "screens": ["main"], "desc": "plan order"},
+        {"kind": "history", "screens": ["main"], "desc": "recent actions"},
+        {"kind": "source", "screens": [], "desc": "step quote and page"},
+        {"kind": "free_wells", "screens": [], "desc": "backup candidates"},
+        {"kind": "protocols", "screens": [], "desc": "saved protocols"},
+        {"kind": "runs", "screens": [], "desc": "past and active runs"},
+    ],
 }
 
 REGISTRY_PATH = Path(__file__).resolve().parent.parent / "shared" / "schemas" / "screens.json"
@@ -37,6 +51,10 @@ def load() -> dict:
 REGISTRY = load()
 SCREENS: dict[str, dict] = {s["id"]: s for s in REGISTRY.get("screens", [])}
 IDS = sorted(SCREENS)
+#: Every UI-displayable data kind, in registry order. read_record's kinds,
+#: the tool enum, and the speechless renderer all derive from this.
+READS: list[dict] = list(REGISTRY.get("reads", []))
+READ_KINDS: tuple[str, ...] = tuple(r["kind"] for r in READS)
 ALIASES: dict[str, str] = {
     a.lower(): sid for sid, s in SCREENS.items() for a in s.get("aliases", [])
 }

@@ -836,6 +836,13 @@ def join_wells_ranges(wells) -> str:
 _TIMER_WORD = re.compile(r"\btimers?\b", re.IGNORECASE)
 _STEP_REF = re.compile(r"\bstep\s*\d+|\bnext step\b", re.IGNORECASE)
 _MEMO_REF = re.compile(r"\bnotes?\b|\bmemos?\b", re.IGNORECASE)
+#: Completed-outcome verbs. State words (running, left, remains)
+#: describe; these claim the turn did something.
+_OUTCOME_VERB = re.compile(
+    r"\b(marked|logged|recorded|saved|noted|started|finished|done|excluded|dropped|"
+    r"cancell?ed|mov(?:e|ed|ing)|updated|extended|added|set|put|completed|"
+    r"stopped|paused)\b",
+    re.IGNORECASE)
 
 
 def mentioned_targets(text) -> dict:
@@ -850,12 +857,13 @@ def mentioned_targets(text) -> dict:
 
 
 def ungrounded_targets(reply) -> dict:
-    """Targets a zero-tool-call reply names but the turn never touched.
+    """Targets a zero-tool-call reply claims outcomes on but never touched.
 
-    No writes and no reads happened, so every named target is
-    ungrounded. Questions claim nothing and pass (empty sets).
+    No writes and no reads happened, so a claimed outcome on a named
+    target is ungrounded. Bare mentions (no outcome verb) and questions
+    claim nothing and pass (empty sets).
     """
-    if "?" in (reply or ""):
+    if "?" in (reply or "") or not _OUTCOME_VERB.search(reply or ""):
         return {"wells": set(), "timer": False, "step": False, "memo": False}
     return mentioned_targets(reply)
 
