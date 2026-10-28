@@ -197,6 +197,29 @@ smoke + iPad check.
   must still hold; multi-round is opt-in per turn by the model, the
   cap is worst-case only). fake_app smoke. iPad check, then commit.
 
+## Voice sessions (slice A done, pending iPad check)
+
+- One machine, one owner: VoiceSession (@MainActor, app-local audio
+  state, not server view) — ready/listening/transcribing/thinking/
+  speaking/searching. Views observe; transitions only via methods.
+- One engine, one tap (MicEngine); wake/command/stream share sinks.
+  Recorder rebased onto it unchanged API-wise; session config still
+  lives in Recorder; HFP path untouched.
+- Wake word on-device only (requiresOnDeviceRecognition, "Hey Pip"
+  contextual string); ambient audio never reaches the server.
+  Unsupported -> Setup shows the reason, no silent fallback.
+- Wake chimes, then a separate command (no one-shot utterances);
+  auto-stops on 1s silence, gives up quietly without speech.
+- Triggers abstracted (wakeWord/manual, later glassesTap); all Pip
+  speech (replies, timers, import) flows through speak() so the orb
+  never lies. Orb + reply line only, no overlay (orb styling is a
+  placeholder until Eunbi's design lands).
+- iPad incident fixes: undetermined permissions block wake (auto-ask
+  on activate, each prompts once); restart backoff (5/10s) + failure
+  latch instead of churning; press/release pairing (pressGen) so a
+  release before spin-up aborts instead of stranding listening; mic
+  permission owned by beginManual.
+
 ## Standing rules (carried over)
 
 - Bug-judged behavior changes need a question first (AGENTS.md).

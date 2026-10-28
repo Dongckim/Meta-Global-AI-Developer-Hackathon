@@ -4,10 +4,18 @@ import Foundation
 /// One-shot speech: latest wins, never queues, never speaks while recording.
 /// Voice: user pick, else best installed en-US (Ava premium first). Voice and
 /// rate persist in UserDefaults.
-final class SpeechBus {
+final class SpeechBus: NSObject, AVSpeechSynthesizerDelegate {
     static let shared = SpeechBus()
 
     private let synth = AVSpeechSynthesizer()
+    private var completions: [() -> Void] = []
+    private var pendingUtterances = 0
+    private var suppressCancel = false
+
+    private override init() {
+        super.init()
+        synth.delegate = self
+    }
 
     var enabled: Bool {
         get { UserDefaults.standard.object(forKey: "ttsEnabled") as? Bool ?? true }
@@ -65,10 +73,15 @@ final class SpeechBus {
         return "\(v.name) · \(v.identifier) · \(Self.qualityName(v.quality))"
     }
 
-    func speak(_ text: String?) {
-        guard enabled, let text, !text.isEmpty else { return }
-        stop()
-        for chunk in Self.sentences(text) {
+    /// Speaks, then runs onDone exactly once (natural end or stop).
+    /// Disabled/empty speaks nothing and completes immediately.
+    func speak(_ text: String?, onDone: @escaping () -> Void = {}) {
+        guard enabled, let text, !text.isEmpty else { onDone(); return }
+        interrupt()
+        completions = [onDone]
+        let chunks = Self.sentences(text)
+        pendingUtterances = chunks.count
+        for chunk in chunks {
             let u = AVSpeechUtterance(string: chunk)
             u.voice = voice
             u.rate = Float(rate)
@@ -82,6 +95,30 @@ final class SpeechBus {
         if synth.isSpeaking || synth.isPaused {
             synth.stopSpeaking(at: .immediate)
         }
+    }
+
+    /// Replaces in-flight speech without completing it (interrupted, not done).
+    private func interrupt() {
+        guard synth.isSpeaking || synth.isPaused else { return }
+        suppressCancel = true
+        synth.stopSpeaking(at: .immediate)
+    }
+
+    func speechSynthesizer(_ s: AVSpeechSynthesizer, didFinish u: AVSpeechUtterance) {
+        pendingUtterances -= 1
+        if pendingUtterances <= 0 { fireCompletions() }
+    }
+
+    func speechSynthesizer(_ s: AVSpeechSynthesizer, didCancel u: AVSpeechUtterance) {
+        if suppressCancel { suppressCancel = false; return }
+        fireCompletions()
+    }
+
+    private func fireCompletions() {
+        pendingUtterances = 0
+        let cs = completions
+        completions = []
+        for c in cs { c() }
     }
 
     private static func sentences(_ text: String) -> [String] {

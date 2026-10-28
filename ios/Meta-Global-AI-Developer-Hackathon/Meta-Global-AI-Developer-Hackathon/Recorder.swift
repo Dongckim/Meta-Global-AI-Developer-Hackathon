@@ -4,7 +4,7 @@ import AVFoundation
 /// The tap only collects raw Float32 samples; the resample happens once in stop(),
 /// because per-tap resampling drops samples inside the converter.
 final class Recorder {
-    private var engine: AVAudioEngine?
+    private var sinkID: UUID?
     private var box: SampleBox?
     private var hwRate: Double?
 
@@ -58,46 +58,24 @@ final class Recorder {
     var currentPeak: Float { box?.peak ?? 0 }
 
     func start() async throws {
-        #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try Self.configureSession()
-        let switched = Self.ensurePreferredInput()
-        try session.setActive(true)
-        if switched {
-            try? await Task.sleep(for: .milliseconds(350))
-        }
-        #endif
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        let hw = input.outputFormat(forBus: 0)
-        guard hw.sampleRate > 0, hw.channelCount > 0 else { throw RecorderError.noInput }
-        guard let tapFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: hw.sampleRate, channels: 1, interleaved: false
-        ) else { throw RecorderError.cannotConvert }
+        let rate = try await MicEngine.shared.prepare()
         let box = SampleBox()
-        let sink = Unchecked(value: box) // tap thread appends; stop() reads after the tap is removed
-        input.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { buffer, _ in
+        let sink = Unchecked(value: box) // tap thread appends; stop() unsubscribes first, then reads
+        sinkID = MicEngine.shared.subscribe { buffer in
             guard let ch = buffer.floatChannelData else { return }
             let box = sink.value
             if box.samples.count < 16_000_000 { // ~5min at 48kHz; commands are seconds
                 box.append(UnsafeBufferPointer(start: ch[0], count: Int(buffer.frameLength)))
             }
         }
-        engine.prepare()
-        try engine.start()
-        self.engine = engine
         self.box = box
-        self.hwRate = hw.sampleRate
+        self.hwRate = rate
     }
 
     /// Stops recording and writes the collected audio as 16kHz mono 16-bit WAV. Returns its URL.
     func stop() throws -> URL {
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false)
-        #endif
-        engine = nil
+        if let id = sinkID { MicEngine.shared.unsubscribe(id) }
+        sinkID = nil
         guard let box, let rate = hwRate else { throw RecorderError.notRecording }
         self.box = nil
         self.hwRate = nil
@@ -202,12 +180,12 @@ enum RecorderError: Error, LocalizedError {
 /// Sample accumulator. `samples` only on the tap thread while recording;
 /// `peak` is lock-guarded because the level meter reads it from the UI.
 final class SampleBox {
-    var samples: [Float] = []
+    nonisolated(unsafe) var samples: [Float] = []
     private let peakLock = NSLock()
-    private var _peak: Float = 0
-    var peak: Float { peakLock.withLock { _peak } }
+    nonisolated(unsafe) private var _peak: Float = 0
+    nonisolated var peak: Float { peakLock.withLock { _peak } }
 
-    func append(_ ptr: UnsafeBufferPointer<Float>) {
+    nonisolated func append(_ ptr: UnsafeBufferPointer<Float>) {
         samples.append(contentsOf: ptr)
         var m: Float = 0
         for s in ptr { let a = abs(s); if a > m { m = a } }
@@ -216,6 +194,6 @@ final class SampleBox {
 }
 
 /// Sendable box for values the audio tap hands to a nonisolated function.
-private struct Unchecked<T>: @unchecked Sendable {
-    let value: T
+struct Unchecked<T>: @unchecked Sendable {
+    nonisolated(unsafe) let value: T
 }

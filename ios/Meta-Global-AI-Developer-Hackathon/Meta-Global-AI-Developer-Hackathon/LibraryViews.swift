@@ -482,6 +482,7 @@ struct LevelBar: View {
 
 struct SetupView: View {
     var dat: GlassesDAT? = nil
+    var voice: VoiceSession? = nil
     var onDone: () -> Void
     @State private var mic = "Not checked"
     @State private var server = "Not checked"
@@ -498,6 +499,9 @@ struct SetupView: View {
             }
             row("Server", status: server) {
                 Button("Check") { checkServer() }.buttonStyle(.bordered).controlSize(.small)
+            }
+            row("Hey Pip", status: voice?.wakeStatus ?? "Not checked") {
+                Button("Check") { checkWake() }.buttonStyle(.bordered).controlSize(.small)
             }
             GlassesAudioSection()
             VStack(alignment: .leading, spacing: 4) {
@@ -558,6 +562,13 @@ struct SetupView: View {
             } catch {
                 server = "Unreachable: \(error.localizedDescription)"
             }
+        }
+    }
+
+    private func checkWake() {
+        Task { @MainActor in
+            _ = await WakeListener.requestAccess()
+            voice?.refresh()
         }
     }
 

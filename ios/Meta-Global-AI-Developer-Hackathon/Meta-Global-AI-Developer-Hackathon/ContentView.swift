@@ -62,11 +62,9 @@ struct ContentView: View {
     @State private var showDebug = false
     @State private var showSettings = false
     @State private var lastReply = ""
-    @State private var recorder = Recorder()
-    @State private var recording = false
-    @State private var pressing = false
-    @State private var recordStart: Date?
+    @State private var voice = VoiceSession()
     @State private var busy = false
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedWell: WellSelect?
     @State private var peekGen = 0
     @State private var peekTarget: String?
@@ -136,9 +134,10 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             contractBanners
+            VoiceOrb(voice: voice)
             Group {
                 if !setupDone {
-                SetupView(dat: dat) {
+                SetupView(dat: dat, voice: voice) {
                     setupDone = true
                     if lab.view.current.screen == "setup" { sendAction("back") }
                 }
@@ -204,7 +203,17 @@ struct ContentView: View {
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .plainText]) { res in
             importPicked(res)
         }
-        .onAppear { connect(); refreshRoute(); loadLists() }
+        .onAppear { connect(); refreshRoute(); loadLists(); voice.activate() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { voice.activate() } else { voice.deactivate() }
+        }
+        .onChange(of: showSettings) { _, shown in if !shown { voice.refresh() } }
+        .onChange(of: voice.pendingAudio) { _, url in
+            if let url { Task { await sendVoice(url) } }
+        }
+        .onChange(of: voice.noticeGen) { _, _ in
+            if !voice.notice.isEmpty { say(voice.notice) }
+        }
         .onChange(of: lab.run?.runId) { _, new in
             if new != nil {
                 showHome = false
@@ -679,7 +688,7 @@ struct ContentView: View {
             TextField("Type a command", text: $input)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { submit() }
-            if recording, let t0 = recordStart {
+            if voice.state == .listening, let t0 = voice.listeningSince {
                 TimelineView(.periodic(from: t0, by: 0.2)) { ctx in
                     Text(String(format: "%.1fs", ctx.date.timeIntervalSince(t0)))
                         .font(.callout.monospacedDigit())
@@ -688,15 +697,15 @@ struct ContentView: View {
                 .frame(width: 52, alignment: .trailing)
             }
             Button(action: {}) {
-                Image(systemName: recording ? "mic.fill" : "mic")
+                Image(systemName: voice.state == .listening ? "mic.fill" : "mic")
                     .font(.title2)
                     .foregroundStyle(.white)
                     .padding(10)
-                    .background(recording ? .red : .blue, in: Circle())
+                    .background(voice.state == .listening ? .red : .blue, in: Circle())
             }
             .buttonStyle(HoldStyle { pressed in pressed ? startHold() : endHold() })
-            .disabled(busy)
-            .opacity(busy ? 0.5 : 1)
+            .disabled(!voice.micLive)
+            .opacity(voice.micLive ? 1 : 0.5)
         }
     }
 
@@ -783,10 +792,10 @@ struct ContentView: View {
         routeLine = "in: \(ins.isEmpty ? "-" : ins) · out: \(outs.isEmpty ? "-" : outs)"
     }
 
-    /// Speaks unless recording. Card questions arrive pre-selected by the server.
+    /// All Pip speech flows through the voice machine (speaking state,
+    /// wake pause). Refused mid-listening; card questions pre-selected.
     private func sayAloud(_ text: String?) {
-        guard !recording else { return }
-        SpeechBus.shared.speak(text)
+        voice.speak(text)
     }
 
     /// Applies one server ui action. False when the app could not do it: says
@@ -1101,69 +1110,53 @@ struct ContentView: View {
         defer { busy = false }
         do {
             let r = try await PipClient.orchestrate(text: text)
+            voice.didRespond(hasSources: !r.sources.isEmpty)
             handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
                    route: r.route, input: text, sources: r.sources,
                    dropped: r.dropped ?? 0,
                    ui: r.ui, speak: r.speak, recordVersion: r.record_version)
         } catch {
+            voice.didFail()
             say("Error: \(error.localizedDescription)")
         }
     }
 
     private func startHold() {
-        SpeechBus.shared.stop()
-        pressing = true
-        guard !recording, !busy else { return }
-        Task { @MainActor in
-            guard await Recorder.requestPermission() else { say("Microphone permission needed"); return }
-            guard pressing else { return } // released before the mic was ready
-            do {
-                try await recorder.start()
-                recordStart = Date()
-                recording = true
-            } catch {
-                say("Recording failed: \(error.localizedDescription)")
-            }
-        }
+        voice.beginManual()
     }
 
     private func endHold() {
-        pressing = false
-        guard recording else { return }
-        recording = false
-        let held = recordStart.map { Date().timeIntervalSince($0) } ?? 0
-        recordStart = nil
-        do {
-            let url = try recorder.stop()
-            Task { await sendVoice(url, held: held) }
-        } catch {
-            say("Couldn't save the recording: \(error.localizedDescription)")
-        }
+        voice.endManual()
     }
 
     @MainActor
-    private func sendVoice(_ url: URL, held: Double) async {
-        busy = true
-        defer { busy = false }
+    private func sendVoice(_ url: URL) async {
         do {
             let loud = Recorder.rms(of: url) ?? 0
             let data = try Data(contentsOf: url)
             try? FileManager.default.removeItem(at: url)
-            guard loud >= 0.001 else { say("No sound reached the mic — on the simulator, check the Mac mic permission and input"); return }
+            guard loud >= 0.001 else {
+                voice.didFail()
+                say("No sound reached the mic — on the simulator, check the Mac mic permission and input")
+                return
+            }
             let r = try await PipClient.voice(wav: data)
-            guard r.ignored != true else { return }
+            guard r.ignored != true else { voice.didFail(); return }
             say("🎙 \(r.transcript)")
+            voice.didRespond(hasSources: !r.sources.isEmpty)
             handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
                    route: r.route, input: r.transcript, sources: r.sources,
                    dropped: r.dropped ?? 0,
                    ui: r.ui, speak: r.speak, recordVersion: r.record_version)
         } catch let e as PipClient.VoiceError {
+            voice.didFail()
             switch e {
             case .tooShort(let dur):
-                say(held >= 1 ? "Held it but nothing recorded — check the simulator audio input"
+                say(voice.lastHeld >= 1 ? "Held it but nothing recorded — check the simulator audio input"
                     : String(format: "Too short (%.1fs) — press and hold to speak", dur))
             }
         } catch {
+            voice.didFail()
             say("Error: \(error.localizedDescription)")
         }
     }

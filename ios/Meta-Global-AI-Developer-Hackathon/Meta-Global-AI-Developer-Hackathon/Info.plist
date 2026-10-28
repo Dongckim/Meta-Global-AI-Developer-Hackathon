@@ -70,6 +70,8 @@
 	<string>Used to record bench voice commands.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>This app needs access to save photos captured from your glasses.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Used to detect “Hey Pip” on this device. Wake-word audio never leaves the iPad.</string>
 	<key>ServerBaseURL</key>
 	<string>$(SERVER_BASE_URL)</string>
 	<key>UIBackgroundModes</key>
