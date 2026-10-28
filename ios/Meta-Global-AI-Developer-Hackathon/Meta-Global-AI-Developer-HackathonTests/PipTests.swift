@@ -7,8 +7,12 @@ struct PipTests {
     static func snapshot(version: Int = 3) -> RecordSnapshot {
         let json = """
         {"version": \(version),
-         "plan": {"groups": {"drug_A": {"wells": ["C2", "C3"], "n": 2}},
-                  "steps": [{"name": "s1", "wells": ["B2"]}, {"name": "s2", "wells": ["C2", "C3"]}]},
+         "plan": {"conditions": {"drug_A": {"label": "Drug A", "treatments": ["Drug A"],
+                                            "replicates": 2, "wells": ["C2", "C3"]}},
+                  "steps": [{"kind": "pipette", "text": "s1", "minutes": null, "temp_c": null,
+                             "tip": null, "caution": null, "pipette": null, "wells": ["B2"]},
+                            {"kind": "pipette", "text": "s2", "minutes": null, "temp_c": null,
+                             "tip": null, "caution": null, "pipette": null, "wells": ["C2", "C3"]}]}},
          "step_index": 1, "done": ["C2"], "excluded": {}, "redo": {},
          "notes": [{"id": "m1", "target": "C2", "text": "bubbles", "ts": 1.0, "history": []}],
          "tips": [], "timers": [{"id": "t1", "label": "s2 · C2 · 30 min", "minutes": 30,
@@ -43,8 +47,8 @@ struct PipTests {
     @Test @MainActor func renderDerives() {
         let lab = LabState()
         lab.sync(Self.snapshot())
-        #expect(lab.groupProgress().first { $0.name == "drug_A" }?.have == 1)
-        #expect(lab.groupOf("C2") == "drug_A")
+        #expect(lab.conditionProgress().first { $0.key == "drug_A" }?.have == 1)
+        #expect(lab.conditionOf("C2") == "drug_A")
         #expect(lab.currentRange == "C2–C3")
         #expect(lab.hasNote("C2"))
         #expect(lab.memos(for: "C2").map(\.text) == ["bubbles"])
@@ -54,13 +58,14 @@ struct PipTests {
     @Test @MainActor func redoWellCountsInGroup() {
         let json = """
         {"version": 4,
-         "plan": {"groups": {"drug_A": {"wells": ["C2", "C3", "C9"], "n": 2}}, "steps": []},
+         "plan": {"conditions": {"drug_A": {"label": "Drug A", "treatments": ["Drug A"],
+                                            "replicates": 2, "wells": ["C2", "C3", "C9"]}}, "steps": []},
          "step_index": 0, "done": ["C9"], "excluded": {}, "redo": {"C9": "backup"},
          "notes": [], "tips": [], "timers": [], "stamps": {}, "cards": {}}
         """
         let lab = LabState()
         lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(json.utf8)))
-        #expect(lab.groupProgress().first { $0.name == "drug_A" }?.have == 1)
+        #expect(lab.conditionProgress().first { $0.key == "drug_A" }?.have == 1)
     }
 
     @Test @MainActor func timerVisibility() {

@@ -77,6 +77,29 @@ struct EditNoteResponse: Decodable {
     let record_version: Int
 }
 
+struct ImportResponse: Decodable {
+    let draft: ProtocolDraft
+    let review: [DraftIssue]
+    let errors: [DraftIssue]
+    let reply: String
+    let speak: String?
+}
+
+struct PatchResponse: Decodable {
+    let ok: Bool
+    let draft: ProtocolDraft?
+    let review: [DraftIssue]?
+    let errors: [DraftIssue]?
+    let reason: String?
+}
+
+struct StartResponse: Decodable {
+    let started: Bool
+    let errors: [DraftIssue]?
+    let reply: String
+    let speak: String?
+}
+
 struct RobotCheck: Decodable {
     let expected: [String]
     let simulated: [String]
@@ -170,6 +193,46 @@ enum PipClient {
 
     static func editNote(id: String, text: String) async throws -> EditNoteResponse {
         try await post("notes/edit", ["id": id, "text": text])
+    }
+
+    static func importProtocol(data: Data, filename: String) async throws -> ImportResponse {
+        let boundary = "----pip\(UUID().uuidString)"
+        var body = Data()
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".utf8))
+        body.append(Data("Content-Type: application/octet-stream\r\n\r\n".utf8))
+        body.append(data)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        var req = URLRequest(url: Config.baseURL.appending(path: "protocols/import"))
+        req.httpMethod = "POST"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        let (respData, resp) = try await URLSession.shared.data(for: req)
+        try check(resp, respData)
+        return try JSONDecoder().decode(ImportResponse.self, from: respData)
+    }
+
+    static func patchDraft(path: String, value: Any) async throws -> PatchResponse {
+        var req = URLRequest(url: Config.baseURL.appending(path: "protocols/draft"))
+        req.httpMethod = "PATCH"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["path": path, "value": value])
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try check(resp, data)
+        return try JSONDecoder().decode(PatchResponse.self, from: data)
+    }
+
+    static func startRun() async throws -> StartResponse {
+        try await post("protocols/start", [:])
+    }
+
+    static func discardDraft() async throws {
+        var req = URLRequest(url: Config.baseURL.appending(path: "protocols/draft"))
+        req.httpMethod = "DELETE"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: [:])
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try check(resp, data)
     }
 
     static func record() async throws -> RecordSnapshot {

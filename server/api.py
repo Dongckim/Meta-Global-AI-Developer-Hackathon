@@ -10,11 +10,13 @@ Needs MODEL_API_KEY in .env (see .env.example).
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
 import re
 import subprocess
+from typing import Any
 import time
 import uuid
 import wave
@@ -49,6 +51,7 @@ from server.grammar import (
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
 from server.screens import canonical as canonical_screen
+from server import protocol as proto
 from server.store import RecordStore
 from server.tone import keys as tone_keys
 from server.tone import say
@@ -77,6 +80,8 @@ CACHE_KEY_SEARCH = "pip-bench-spark-search"
 CACHE_RETENTION = "24h"
 #: False = stateless summary mode (default); True keeps previous_response_id chaining.
 CHAIN_ENABLED = os.environ.get("CHAIN_ENABLED", "false").lower() == "true"
+PROTOCOL_FULL_MODE = os.environ.get("PROTOCOL_FULL_MODE", "true").lower() == "true"
+PROTOCOL_MAX_BYTES = 10_000_000
 TURN_HISTORY = 6
 
 SYSTEM = (
@@ -88,6 +93,8 @@ SYSTEM = (
     "do the Pip-side part (timer, guidance) or ask. "
     "If no tool fits (thanks, greeting), answer in one short sentence. "
     "Text beside tool calls is ignored. "
+    "A run-plan draft may be open (draft_open): change it only with edit_draft "
+    "using exact paths from the draft, never with record tools. "
     "Wells are WellRefs (\"C2-C8\"). \"Those\" and \"it\" refer to recent wells. "
     "One set_timer per distinct duration; the server fans each out per well. "
     "Ground every value in this message, the plan, or read results. "
@@ -243,7 +250,7 @@ TOOLS = [
         {
             "kind": {"type": "string", "enum": ["wells", "notes", "timers", "steps", "history"]},
             "filter": _opt({"type": "string",
-                            "description": "WellRef, group, step, or label; blank for the natural scope"}),
+                            "description": "WellRef, condition, step, or label; blank for natural scope"}),
             "limit": _opt({"type": "integer", "description": "Max entries (default 10)"}),
         },
     ),
@@ -286,6 +293,20 @@ TOOLS = [
           "Use when the user says back. "
           "Don't use after other actions in the same turn. "
           "Example: 'back'.", {}),
+    _tool(
+        "edit_draft",
+        "Use to change the open run-plan draft, only when draft_open is true. "
+        "Path is conditions.<id>.replicates (.wells), liquids.<id>, or steps.N.minutes "
+        "(.temp_c/.caution/.text/.pipette.volume/.pipette.target) with exact ids and the "
+        "N from the draft's [N] step labels; value is text (digits for counts/minutes, "
+        "a WellRef or 'row X' for wells, wells:<WellRef>|condition:<id>|all|other for targets). "
+        "Don't use when no draft is open. Don't use for the live record. "
+        "Example: 'change drug A to row E'.",
+        {
+            "path": {"type": "string", "description": "Draft path to set"},
+            "value": {"type": "string", "description": "New value as text"},
+        },
+    ),
 ]
 if WEB_SEARCH_ENABLED:
     TOOLS.append({"type": "web_search", "search_context_size": "low"})
@@ -396,6 +417,16 @@ class InputIn(BaseModel):
 class EditNoteIn(BaseModel):
     id: str = Field(min_length=1)
     text: str = Field(min_length=1)
+
+
+class DraftPatchIn(BaseModel):
+    path: str = ""
+    value: Any = None
+    session: str = "bench"
+
+
+class DraftStartIn(BaseModel):
+    session: str = "bench"
 
 
 def _key() -> str:
@@ -654,7 +685,9 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         session["last_web"] = sentence
     ordered_ids = [c.get("call_id") for c in calls]
     r1raw = [dict(c) for c in calls]
-    plan_allowed = relevant_plan_numbers(text, [s.get("name", "") for s in store.r["plan"]["steps"]])
+    plan_allowed = relevant_plan_numbers(
+        text, [(s.get("text") or s.get("name", ""), s.get("minutes"))
+               for s in store.r["plan"]["steps"]])
     has_reads = any(c.get("name") in ("read_record", "find_free_wells") and c.get("call_id") for c in calls)
     pre_all_reads = bool(calls) and all(c.get("name") in ("read_record", "find_free_wells") for c in calls)
     calls, question, outcomes, gdrop = _validate(calls, text, 1, plan_allowed, summary=summary,
@@ -1045,6 +1078,7 @@ _COULDNT = {
     "answer": "answer that",
     "mark_done": "record that",
     "record_redo": "mark that for redo",
+    "edit_draft": "edit the draft",
 }
 
 
@@ -1216,6 +1250,158 @@ async def confirm(body: ConfirmIn):
 async def notes_edit(body: EditNoteIn):
     message = store.edit_note_manual(body.id, body.text)
     return {"message": message, "record_version": store.r["version"]}
+
+
+def _coerce_patch_value(draft, parsed, value):
+    """PATCH JSON values -> typed values. Returns (ok, value|reason)."""
+    kind, _, field = parsed
+    if field == "replicates":
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            return False, "count must be a whole number of 1 or more"
+        return True, value
+    if field in ("minutes", "temp_c", "pipette.volume"):
+        noun = {"minutes": "minutes", "temp_c": "temp", "pipette.volume": "volume"}[field]
+        if value is None:
+            return True, None
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            return False, f"{noun} must be 0 or more"
+        return True, float(value)
+    if field == "wells":
+        if isinstance(value, str):
+            items = proto.parse_wellref(value)
+            if not items:
+                return False, f"not plate wells: {value}"
+            return True, items
+        items = list(value) if isinstance(value, list) else None
+        if items is None or not all(isinstance(w, str) and proto.parse_wellref(w) == [w.upper()]
+                                    for w in items):
+            return False, f"not plate wells: {value}"
+        if not items:
+            return False, "needs at least one well"
+        return True, [w.upper() for w in items]
+    if field == "pipette.target":
+        if isinstance(value, dict):
+            t, v = value.get("type"), value.get("value")
+            if t == "wells" and (not isinstance(v, str) or not proto.parse_wellref(v)):
+                return False, f"not plate wells: {v}"
+            if t == "condition" and v not in (draft.get("plan") or {}).get("conditions", {}):
+                return False, f"no such condition: {v}"
+            if t not in ("wells", "condition", "all_used", "other"):
+                return False, "need wells:<WellRef>, condition:<id>, all, or other"
+            return True, {"type": t, "value": v}
+        if isinstance(value, str):
+            return proto.parse_target_value(draft, value)
+        return False, "need wells:<WellRef>, condition:<id>, all, or other"
+    if not isinstance(value, str) and value is not None:
+        return False, f"{field} must be text"
+    return True, (value.strip() if value else None)
+
+
+@app.post("/protocols/import")
+async def protocol_import(file: UploadFile = File(...), session: str = Form("bench")):
+    """PDF/txt -> extracted draft. Full mode only; bytes never touch disk."""
+    if not PROTOCOL_FULL_MODE:
+        raise HTTPException(403, "protocol import needs Full mode")
+    sess = get_session(session)
+    raw = await file.read()
+    if len(raw) > PROTOCOL_MAX_BYTES:
+        raise HTTPException(413, "protocol file too large (10MB max)")
+    name = (file.filename or "").lower()
+    kind = "pdf" if name.endswith(".pdf") else "txt" if name.endswith(".txt") else None
+    if kind is None:
+        raise HTTPException(400, "need a .pdf or .txt file")
+    if kind == "pdf":
+        try:
+            from pypdf import PdfReader
+            text = "\n".join((pg.extract_text() or "")
+                             for pg in PdfReader(BytesIO(raw)).pages)
+        except Exception:
+            text = ""
+        payload = "data:application/pdf;base64," + base64.b64encode(raw).decode("ascii")
+    else:
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(400, "txt must be UTF-8")
+        payload = text[: proto.PROMPT_CHARS]
+    body = proto.build_extract_body(kind, file.filename or "protocol", payload, SPARK_MODEL)
+    key = _key()
+    t0 = time.perf_counter()
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await _post(client, "protocol", f"{BASE_URL}/responses",
+                           headers={"Authorization": f"Bearer {key}",
+                                    "Content-Type": "application/json"},
+                           json=body)
+    ms = int((time.perf_counter() - t0) * 1000)
+    _check("protocol", resp)
+    usage = resp.json().get("usage") or {}
+    print(f"protocol ms={ms} in_tok={usage.get('input_tokens', '?')} "
+          f"out_tok={usage.get('output_tokens', '?')}", flush=True)
+    ok, data = proto.parse_extract_payload(resp.json())
+    if not ok:
+        raise HTTPException(502, f"protocol extraction failed: {data}")
+    draft = proto.build_draft(data, proto.evidence_from_text(text), file.filename or "protocol")
+    store.save_draft(draft)
+    conds = len(draft["plan"]["conditions"])
+    steps = len(draft["plan"]["steps"])
+    reply = f"Draft ready: {conds} conditions, {steps} steps."
+    if draft["errors"]:
+        reply += f" {len(draft['errors'])} red items to fix."
+    elif draft["review"]:
+        reply += f" {len(draft['review'])} to review."
+    log_turn(sess, f"import {file.filename or 'protocol'}", [], [reply])
+    return {"draft": draft, "review": draft["review"], "errors": draft["errors"], "reply": reply,
+            "speak": speak_text(reply), "ms": ms, "record_version": store.r["version"]}
+
+
+@app.patch("/protocols/draft")
+async def draft_patch(body: DraftPatchIn):
+    """Hand edit one draft path; same validator as the voice tool."""
+    get_session(body.session)
+    draft = store.r.get("draft")
+    if not draft:
+        return {"ok": False, "reason": "no draft open", "record_version": store.r["version"]}
+    parsed = proto.parse_draft_path(body.path)
+    if parsed is None:
+        return {"ok": False, "reason": f"unknown path {body.path}",
+                "record_version": store.r["version"]}
+    ok, value = _coerce_patch_value(draft, parsed, body.value)
+    if not ok:
+        return {"ok": False, "reason": value, "record_version": store.r["version"]}
+    ok, reason = proto.apply_draft_edit(draft, parsed, value)
+    if not ok:
+        return {"ok": False, "reason": reason, "record_version": store.r["version"]}
+    proto.recompute_draft(draft)
+    store.save_draft(draft)
+    return {"ok": True, "draft": draft, "review": draft["review"], "errors": draft["errors"],
+            "record_version": store.r["version"]}
+
+
+@app.post("/protocols/start")
+async def protocol_start(body: DraftStartIn):
+    """Archive the current run, reset on the draft plan. Errors block."""
+    session = get_session(body.session)
+    ok, info = store.start_run()
+    if not ok:
+        if "errors" in info:
+            n = len(info["errors"])
+            reply = f"Fix {n} red item{'s' if n != 1 else ''} first."
+            log_turn(session, "start run", [], [reply])
+            return {"started": False, "errors": info["errors"], "reply": reply,
+                    "record_version": store.r["version"]}
+        raise HTTPException(400, info["reason"])
+    reply = f"Run started: {info['conditions']} conditions, {info['steps']} steps."
+    if info["review"]:
+        reply += f" {info['review']} unreviewed."
+    log_turn(session, "start run", [], [reply])
+    return {"started": True, "reply": reply, "speak": speak_text(reply),
+            "record_version": store.r["version"]}
+
+
+@app.delete("/protocols/draft")
+async def draft_delete(body: DraftStartIn):
+    store.clear_draft()
+    return {"ok": True, "record_version": store.r["version"]}
 
 
 @app.get("/health")

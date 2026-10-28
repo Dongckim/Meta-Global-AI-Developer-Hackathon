@@ -34,25 +34,52 @@ func fmtClock(_ s: TimeInterval) -> String {
     "\(Int(s) / 60):\(String(format: "%02d", Int(s) % 60))"
 }
 
+func fmtNum(_ v: Double) -> String {
+    v.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(v)) : String(v)
+}
+
 func msLine(_ ms: [String: Int]) -> String {
     ms.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: " · ") + " ms"
 }
 
 // MARK: - Plan
 
-struct PlanStep: Decodable {
-    var name: String
+struct PlanPipette: Decodable {
+    var liquid: String
+    var volume: Double?
+    var unit: String?
     var wells: [String]
-    var tip: String?
+    var targetLabel: String
+
+    enum CodingKeys: String, CodingKey {
+        case liquid, volume, unit, wells, targetLabel = "target_label"
+    }
 }
 
-struct PlanGroup: Decodable {
+struct PlanStep: Decodable {
+    var kind: String
+    var text: String
+    var minutes: Double?
+    var tempC: Double?
+    var tip: String?
+    var caution: String?
+    var pipette: PlanPipette?
     var wells: [String]
-    var n: Int
+
+    enum CodingKeys: String, CodingKey {
+        case kind, text, minutes, tempC = "temp_c", tip, caution, pipette, wells
+    }
+}
+
+struct PlanCondition: Decodable {
+    var label: String
+    var treatments: [String]
+    var replicates: Int
+    var wells: [String]
 }
 
 struct Plan: Decodable {
-    var groups: [String: PlanGroup]
+    var conditions: [String: PlanCondition]
     var steps: [PlanStep]
     var currentStep: Int?
 }
@@ -131,6 +158,81 @@ struct ServerCard: Decodable, Equatable, Identifiable {
     var ts: Double
 }
 
+struct DraftLiquid: Decodable {
+    var name: String
+    var concentration: String?
+    var prep: String?
+    var quote: String
+}
+
+struct DraftCondition: Decodable {
+    var label: String
+    var treatments: [String]
+    var replicates: Int
+    var wells: [String]
+    var quote: String
+}
+
+struct DraftTarget: Decodable {
+    var type: String
+    var value: String?
+}
+
+struct DraftPipette: Decodable {
+    var liquid: String
+    var volume: Double?
+    var unit: String?
+    var target: DraftTarget
+    var mix: String?
+    var repeatCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case liquid, volume, unit, target, mix, repeatCount = "repeat"
+    }
+}
+
+struct DraftStep: Decodable {
+    var kind: String
+    var text: String
+    var quote: String
+    var minutes: Double?
+    var tempC: Double?
+    var caution: String?
+    var pipette: DraftPipette?
+    var wells: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case kind, text, quote, minutes, tempC = "temp_c", caution, pipette, wells
+    }
+}
+
+struct DraftPlan: Decodable {
+    var liquids: [String: DraftLiquid]
+    var conditions: [String: DraftCondition]
+    var steps: [DraftStep]
+    var backups: [String]
+}
+
+struct DraftIssue: Decodable, Identifiable {
+    var id: String { path + code }
+    var path: String
+    var code: String
+    var reason: String
+    var quote: String?
+}
+
+struct DraftMeta: Decodable {
+    var source: String
+    var layout: [String: String]
+}
+
+struct ProtocolDraft: Decodable {
+    var plan: DraftPlan
+    var review: [DraftIssue]
+    var errors: [DraftIssue]
+    var meta: DraftMeta
+}
+
 struct RecordSnapshot: Decodable {
     var version: Int
     var plan: Plan
@@ -143,10 +245,11 @@ struct RecordSnapshot: Decodable {
     var timers: [TimerEntry]
     var stamps: [String: Stamp]
     var cards: [ServerCard]
+    var draft: ProtocolDraft?
 
     enum CodingKeys: String, CodingKey {
         case version, plan, stepIndex = "step_index", done, excluded, redo,
-             notes, tips, timers, stamps, cards
+             notes, tips, timers, stamps, cards, draft
     }
 
     init(from decoder: Decoder) throws {
@@ -162,6 +265,7 @@ struct RecordSnapshot: Decodable {
         timers = try c.decode([TimerEntry].self, forKey: .timers)
         stamps = try c.decode([String: Stamp].self, forKey: .stamps)
         cards = try c.decode([String: ServerCard].self, forKey: .cards).values.sorted { $0.ts > $1.ts }
+        draft = try c.decodeIfPresent(ProtocolDraft.self, forKey: .draft)
     }
 }
 
@@ -207,7 +311,7 @@ func wellRangeLabel(_ wells: [String]) -> String? {
 final class LabState {
     var version = -1
     var planSteps: [PlanStep] = []
-    var groups: [String: PlanGroup] = [:]
+    var conditions: [String: PlanCondition] = [:]
     var steps: [String] = ["Prep", "Dispense", "Incubate", "Measure", "Clean up"]
     var stepIndex = 0
     var done: Set<String> = []
@@ -216,6 +320,7 @@ final class LabState {
     var notes: [Memo] = []
     var timers: [TimerEntry] = []
     var cards: [ServerCard] = []
+    var draft: ProtocolDraft?
     var lastShown = ""
     /// Per-well provenance for the well card: source and last record time.
     var wellSource: [String: String] = [:]
@@ -229,8 +334,8 @@ final class LabState {
         guard snap.version > version else { return }
         version = snap.version
         planSteps = snap.plan.steps
-        groups = snap.plan.groups
-        if !snap.plan.steps.isEmpty { steps = snap.plan.steps.map(\.name) }
+        conditions = snap.plan.conditions
+        if !snap.plan.steps.isEmpty { steps = snap.plan.steps.map(\.text) }
         stepIndex = min(max(snap.stepIndex, 0), steps.count - 1)
         done = Set(snap.done)
         excluded = snap.excluded
@@ -238,25 +343,48 @@ final class LabState {
         notes = snap.notes
         timers = snap.timers
         cards = snap.cards
+        draft = snap.draft
         wellSource = snap.stamps.mapValues(\.source)
         wellTime = snap.stamps.mapValues { Date(timeIntervalSince1970: $0.ts) }
     }
 
-    /// Per-group usable-done counts: done wells minus excluded ones, vs required n.
-    func groupProgress() -> [(name: String, have: Int, need: Int)] {
+    /// Per-condition usable-done counts: done wells minus excluded ones, vs replicates.
+    func conditionProgress() -> [(key: String, label: String, have: Int, need: Int)] {
         let usable = done.subtracting(excluded.keys)
-        return groups.sorted { $0.key < $1.key }.map {
-            (name: $0.key, have: usable.intersection($0.value.wells).count, need: $0.value.n)
+        return conditions.sorted { $0.key < $1.key }.map {
+            (key: $0.key, label: $0.value.label,
+             have: usable.intersection($0.value.wells).count, need: $0.value.replicates)
         }
     }
 
-    func groupOf(_ well: String) -> String? {
-        groups.first { $0.value.wells.contains(well) }?.key
+    func conditionOf(_ well: String) -> String? {
+        conditions.first { $0.value.wells.contains(well) }?.key
+    }
+
+    func conditionLabel(_ well: String) -> String? {
+        conditions.first { $0.value.wells.contains(well) }?.value.label
     }
 
     var currentTip: String? {
         guard !planSteps.isEmpty, stepIndex < planSteps.count else { return nil }
         return planSteps[stepIndex].tip
+    }
+
+    var currentCaution: String? {
+        guard !planSteps.isEmpty, stepIndex < planSteps.count else { return nil }
+        return planSteps[stepIndex].caution
+    }
+
+    var currentKindLine: String? {
+        guard !planSteps.isEmpty, stepIndex < planSteps.count else { return nil }
+        let s = planSteps[stepIndex]
+        var bits = [s.kind]
+        if let m = s.minutes { bits.append(fmtNum(m) + " min") }
+        if let t = s.tempC { bits.append(fmtNum(t) + " °C") }
+        if let p = s.pipette, let v = p.volume {
+            bits.append(fmtNum(v) + " " + (p.unit ?? "uL") + " " + p.liquid)
+        }
+        return bits.joined(separator: " · ")
     }
 
     var currentRange: String? {
@@ -312,5 +440,6 @@ func loadScreens() -> [ScreenDef] {
         ScreenDef(id: "main", commands: ["mark C2 done", "start a 5 minute timer", "show C5"]),
         ScreenDef(id: "well_card", commands: ["note bubbles", "exclude this well", "back"]),
         ScreenDef(id: "robot_preview", commands: ["make the robot protocol", "back"]),
+        ScreenDef(id: "protocol_review", commands: ["import a protocol", "start the run", "back"]),
     ]
 }

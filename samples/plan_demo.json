@@ -1,30 +1,58 @@
 {
-  "groups": {
-    "ctrl": {"wells": ["B2", "B3", "B4", "B5", "B6", "B7", "B8"], "n": 5},
-    "drug_A": {"wells": ["C2", "C3", "C4", "C5", "C6", "C7", "C8"], "n": 5},
-    "drug_B": {"wells": ["D2", "D3", "D4", "D5", "D6", "D7", "D8"], "n": 5}
+  "conditions": {
+    "ctrl": {"label": "Control", "treatments": ["vehicle"], "replicates": 5, "wells": ["B2", "B3", "B4", "B5", "B6", "B7", "B8"]},
+    "drug_A": {"label": "Drug A", "treatments": ["Drug A"], "replicates": 5, "wells": ["C2", "C3", "C4", "C5", "C6", "C7", "C8"]},
+    "drug_B": {"label": "Drug B", "treatments": ["Drug B"], "replicates": 5, "wells": ["D2", "D3", "D4", "D5", "D6", "D7", "D8"]}
   },
   "steps": [
     {
-      "name": "media 100µL B2–D8",
-      "wells": ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "D2", "D3", "D4", "D5", "D6", "D7", "D8"],
-      "tip": "pipette slowly down the wall"
+      "kind": "pipette",
+      "text": "media 100µL B2–D8",
+      "minutes": null,
+      "temp_c": null,
+      "tip": "pipette slowly down the wall",
+      "caution": null,
+      "pipette": {"liquid": "culture medium", "volume": 100, "unit": "ul", "wells": ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "D2", "D3", "D4", "D5", "D6", "D7", "D8"], "target_label": "all used wells"},
+      "wells": ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
     },
     {
-      "name": "vehicle B2–B8",
+      "kind": "pipette",
+      "text": "vehicle B2–B8",
+      "minutes": null,
+      "temp_c": null,
+      "tip": null,
+      "caution": null,
+      "pipette": {"liquid": "vehicle", "volume": null, "unit": null, "wells": ["B2", "B3", "B4", "B5", "B6", "B7", "B8"], "target_label": "Control wells"},
       "wells": ["B2", "B3", "B4", "B5", "B6", "B7", "B8"]
     },
     {
-      "name": "drug A C2–C8",
-      "wells": ["C2", "C3", "C4", "C5", "C6", "C7", "C8"],
-      "tip": "do not mix up and down after adding"
+      "kind": "pipette",
+      "text": "drug A C2–C8",
+      "minutes": null,
+      "temp_c": null,
+      "tip": "do not mix up and down after adding",
+      "caution": null,
+      "pipette": {"liquid": "Drug A", "volume": null, "unit": null, "wells": ["C2", "C3", "C4", "C5", "C6", "C7", "C8"], "target_label": "Drug A wells"},
+      "wells": ["C2", "C3", "C4", "C5", "C6", "C7", "C8"]
     },
     {
-      "name": "drug B D2–D8",
+      "kind": "pipette",
+      "text": "drug B D2–D8",
+      "minutes": null,
+      "temp_c": null,
+      "tip": null,
+      "caution": null,
+      "pipette": {"liquid": "Drug B", "volume": null, "unit": null, "wells": ["D2", "D3", "D4", "D5", "D6", "D7", "D8"], "target_label": "Drug B wells"},
       "wells": ["D2", "D3", "D4", "D5", "D6", "D7", "D8"]
     },
     {
-      "name": "30 min incubation",
+      "kind": "incubate",
+      "text": "30 min incubation",
+      "minutes": 30,
+      "temp_c": null,
+      "tip": null,
+      "caution": null,
+      "pipette": null,
       "wells": []
     }
   ],

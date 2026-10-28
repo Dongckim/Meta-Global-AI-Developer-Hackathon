@@ -248,3 +248,325 @@
 - H. 실행됐는데 말 없음: _executed_reply가 실행 결과로 발화(UI→opened,
   읽기→found+데이터 렌더, 빈 읽기→found_empty). 검증 탈락은 couldn't로.
   didnt_catch는 받아쓰기 empty·응답 잘림에만.
+
+## Protocol import plan (2026-10-27)
+
+## Goal
+
+Import a PDF/txt bench protocol into a reviewable run plan: Spark extracts
+groups/steps/times into our plan schema, code validates and grounds every
+value, the user reviews (hand + voice edits), and Start run archives the old
+run and begins the new one.
+
+## Success Criteria
+
+- Demo PDF imports to groups {ctrl/control, drug_A, drug_B}, 5 steps, n=5,
+  100uL + 30min grounded, wells auto-laid on rows B/C/D cols 2-8.
+- Invented numbers become needs_review (never silent); stated wells absent
+  from the PDF fall back to auto layout with a flag.
+- Blocking errors (overlap, bad wells, unknown group, n > wells) prevent
+  Start; needs_review warns but allows it.
+- Voice "change drug A to row E" moves the draft group; manual table edits
+  re-validate; old run is archived under server/data/runs/.
+
+## Approach
+
+One-shot extraction call (no tools, no chain): PDF rides inline as
+`input_file` + base64 `file_data`, output constrained by `text.format`
+json_schema loaded from shared/schemas/plan.schema.json. Server validates
+with hand-rolled checks (no new dep except pypdf for evidence text),
+auto-lays missing wells, and holds the result in record["draft"] so it flows
+to the app through the existing snapshot/SSE path. Review UI mirrors the
+robot sheet pattern. Runs archive to server/data/runs/ (gitignored).
+
+## Key Decisions
+
+1. Inline PDF (input_file + file_data), not Files API. One-shot import needs
+   no reuse, and inline leaves no server-side copy (data-safety story).
+   Server cap 10MB (docs allow 50MB inline). Docs: file-handling page.
+2. text.format {type json_schema, name, schema, strict:true} on the Responses
+   endpoint (never response_format there). Schema kept strict-clean: root
+   object, additionalProperties:false everywhere, required==all props,
+   nullable via type arrays, no pattern/format/oneOf/$schema key, groups
+   as an array (strict forbids free-key maps; found via live 400). WellRef
+   strings validated by parse_wellref in code. Docs: structured-output page
+   + responses schemas reference.
+3. Extraction is Spark's documented strength (headline structured-output use
+   case; PDF arrives as text + page images; decoding constrained so output
+   conforms): effort minimal, max 2048 tokens, separate prompt_cache_key
+   (pip-bench-protocol), store:false, no tools.
+4. Evidence text: pypdf in-memory extraction (import-only dep); txt uploads
+   use raw text. Numbers ground via grounded(n, build_evidence(utterance=
+   pdf_text)) plus unit-word presence (uL/min words). Group/reagent names via
+   content-word presence reusing _SPAN_STOPWORDS (grounded-text cannot do
+   presence; documented deviation, grounded itself untouched). Scanned PDFs
+   yield no text, so everything flags needs_review (safe direction).
+5. Stated wells must appear in the PDF text (find_well_mentions subset);
+   otherwise the group falls back to auto layout + flag. This is the teeth
+   behind "never invent positions".
+6. Draft lives in record["draft"] = {plan, review[], errors[], meta{source,
+   extracted_at, evidence_chars, layout{group: auto|stated}}}. Stateless
+   recompute on every edit (no accept-state; Start never blocks on review).
+7. Draft edits: edit_draft(path, value) agent tool (static in TOOLS, gated
+   by draft_open in state + code rejection when no draft is open); PATCH
+   /protocols/draft {path, value} for hand edits; same validator both
+   channels (value parsing differs: JSON types vs tool strings). Values:
+   digits for n/minutes, WellRef or 'row X' for wells. Malformed edits get
+   honest couldn't; rule violations apply + flag errors (red, block Start).
+   Replies use the draft_edited voice key. No draft grammar.
+8. Start: errors block (200 + list), review warns (count in reply). Archive
+   full record to server/data/runs/run-<UTC>.json, reset with draft plan at
+   step_index 0, pop draft, snapshot push. current_step always 1.
+9. Full-mode gate: env PROTOCOL_FULL_MODE (default true); false gives 403
+   with no Meta call. PDF bytes never touch disk. Demo PDF only for now;
+   Private mode (on-device extraction) later.
+10. plan_times additionally honors step.minutes (additive; names still
+    parsed first). Step wells derive from the group union when step.group is
+    set; explicit step.wells only for group-less steps and must pass the
+    PDF-presence rule.
+
+## Steps
+
+1. Schema + demo PDF. shared/schemas/plan.schema.json (groups{n,wells} /
+    steps{name,group,wells,tip,minutes}); samples/make_protocol_demo.py
+    (stdlib hand-rolled 1-page Methods PDF, no plate positions, 100uL +
+    30min + 5 replicates) + committed samples/protocol_demo.pdf.
+2. server/protocol.py. extract (Meta call), pypdf evidence, mini-validator
+    driven by the schema file (type/required/properties/items/enum subset),
+    grounded + name/unit checks, auto-layout (rows B.., cols from 2, n+2
+    wells, last 2 into plan.backups), draft validate/edit/start/archive.
+    pypdf to requirements.txt.
+3. Endpoints + gate + tool. POST /protocols/import (multipart, mirrors
+    /voice), PATCH /protocols/draft, POST /protocols/start, DELETE
+    /protocols/draft; PROTOCOL_FULL_MODE gate; edit_draft tool (contract +
+    _apply_call branch + draft block in model_state) and draft_edited voice
+    key. Tools 18 -> 19.
+4. App. screens.json += protocol_review; toolbar Import -> system document
+    picker (PDF/txt) -> PipClient.importProtocol; review sheet (table,
+    yellow review rows with reasons, red errors, editable fields, Start run
+    disabled on errors, Discard); RecordSnapshot.draft optional;
+    currentScreen += draftState (robotState mirror).
+5. Tests + live eval. server/tests/test_protocol.py (mocked: strict-subset
+    checker on the schema file, validator, layout incl. overflow/>7 groups/
+    default-n grounding, invented-number review, PDF-absent wells auto,
+    PATCH + edit_draft re-validation, invalid edit blocks Start, gate 403,
+    start archive/reset on tmp store); eval/import_check.py live (demo PDF
+    asserts groups/steps/minutes/layout, fuzzy step names, plus 3 free
+    voice edits on fresh imports incl. an overlap case) appending
+    eval/results/import.md.
+
+## Validation Plan
+
+- `.venv/bin/python -m unittest server.tests.test_protocol` (mocked suite).
+- `.venv/bin/python eval/import_check.py` (live Spark extraction proof).
+- Full suites + sim-SDK typecheck (known @Observable macro caveat).
+- Manual iPad: pick PDF -> review flags -> hand edit -> "change drug A to
+  row E" -> Start -> bench runs new plan; runs/ holds the old record.
+- Assumption checks at implementation: no "ctrl" hardcode outside plan_demo
+  (grep); edit_draft gated by draft_open + code rejection verified (P6a).
+
+## Risks
+
+- Group-name variance (control vs ctrl): normalize case/space/underscore
+  only; live test accepts either; verify no hardcode.
+- pypdf text quality on real PDFs degrades to more review flags (safe).
+- Registry grows (protocol_review): SCREEN_IDS enum changes, prompt cache
+  cold for one turn; tools stay 18.
+- Second import overwrites the open draft (single-bench assumption).
+- Writes during review still target the live record (non-goal; Start
+  archives whatever the record holds).
+
+## Open Questions
+
+None.
+
+## Sources
+
+- https://dev.meta.ai/docs/file-handling
+- https://dev.meta.ai/docs/structured-output
+- https://dev.meta.ai/docs/protocols/responses
+- https://dev.meta.ai/docs/api-reference/responses/schemas
+- https://pypi.org/project/pypdf/
+
+## Protocol format v2 plan (2026-10-28)
+
+## Goal
+
+Replace the fixed groups+steps protocol shape with a generic structure that
+covers any bench protocol (volumes, temps, wash, centrifuge, reads): v2
+schema (liquids/conditions/steps/layout), quote-grounded validation, 3-tab
+review, ordered execution with kind-aware plate and timer cards, converted
+plan_demo, and outcome-based card keys.
+
+## Success Criteria
+
+- User file protocol_demo_v2.pdf imports to 4 liquids, 3 conditions,
+  5 steps with 100/10 uL, 30 min, 37 C grounded; null volumes flag
+  needs_review with sentences; its italic "Tip:" sentence becomes caution
+  and no step carries a tip.
+- Wash/centrifuge fixture imports (repeat 2, new kinds); table fixture
+  yields stated layout with exact wells.
+- Quoteless values always flag; Start expands repeats, resolves targets
+  and liquids, archives, and resets.
+- Voice edits work on v2 paths; invalid moves block Start with red errors.
+- Timer-expiry suggestion and voice next_step to the same step yield 1 card.
+- All suites + 5 evals green on the converted plan_demo.
+
+## Approach
+
+Schema v2 carries liquids[]/conditions[]/steps[] (arrays only, strict-clean)
+plus a code-derived layout section. One unified grounding rule replaces all
+per-number checks: every extracted value must appear in its node's quote,
+and every quote must appear in the document (normalized); else needs_review
+with the quote shown. Import never writes tips; document cautions ride
+steps[].caution verbatim. The live plan migrates to {conditions, steps,
+backups} with kinds; old records convert on load. Plate reacts to pipette
+steps only; timed kinds propose timer cards on step entry.
+
+## Key Decisions
+
+1. Schema v2: liquids[{id,name,concentration?,prep?,quote}],
+   conditions[{id,label,treatments[liquid ids],replicates?,wells?,quote}],
+   steps[{kind enum(10),text,quote,minutes?,temp_c?,caution?,
+   pipette?{liquid id,volume?,unit enum?,target{type enum,value?},mix?,repeat?}}].
+   No tip field: import never creates tips (schema-structural guarantee).
+   caution holds a verbatim document caution sentence ("do not…",
+   Tip:/Note:/Caution: markers) or null. conditions[].wells added (spec
+   deviation: stated-layout source; without it stated positions have
+   nowhere to live). Wells ride as WellRef strings each substring-checked
+   against the quote, then expanded. Step index dropped (spec deviation:
+   array position rules; model misnumbers). mix is free text; repeat
+   1..12 int, else error.
+2. Quote rule (replaces grounded-per-number for import; grounded() itself
+   untouched): only kind and text are exempt. Every other value (volumes,
+   units, minutes, temp, concentration, repeats, wells, liquid and
+   condition names, caution) must sit in its node's quote, and every quote
+   must sit in the document. Numbers int-normalized before compare (30 not
+   30.0); repeat also accepts word forms (once/twice/thrice, "N times").
+   Null value or failed check becomes needs_review carrying the quote;
+   review items gain a quote field.
+3. Quote normalization (norm_quote, applied to document, quotes, values):
+   lowercase; µ/μ/u unify to u (so µl/μl/uL all read ul); ° stripped
+   (37 °C reads 37 c); unicode dashes/quotes/spaces unify to ASCII
+   -/'/single space. Unit tests lock each mapping plus repeat word forms.
+4. Stated wells: each WellRef string in conditions[].wells or a wells-type
+   target must sit in its quote (transitively in the doc; no separate
+   doc-presence pass). Absent becomes auto layout + dropped_positions flag.
+   Step target contradicting its condition union becomes mismatch review.
+5. Layout derived per condition: stated when wells extracted, else auto
+   (existing row/col/reserve logic, backups key kept). meta.layout maps
+   condition to stated|auto|hand. Live plan drops layout (wells flattened
+   into conditions) and liquids (names inlined into pipette.liquid).
+6. Start: expand pipette.repeat into N sequential steps, resolve targets
+   (wells parse, condition union, all_used full union, other empty) and
+   liquid ids to names; unknown ids, bad WellRefs, and overlap block.
+   Live step: {kind,text,minutes?,temp_c?,tip?,caution?,pipette?{liquid,
+   volume,unit,wells[],target_label},wells[]}. Live condition:
+   {label,treatments (names),replicates,wells}. Imports never set tip;
+   the live tip field, save_tip, and plan_demo's 2 tips stay untouched.
+7. Ordered execution, no auto-advance (non-goal): step_index walks all
+   kinds; plate emphasis and Catch use step wells (empty for non-pipette);
+   entering an incubate/centrifuge/wait step with minutes raises a timer
+   suggestion card (new timer_suggest voice key, set_timer op). whats_next
+   and where_am_i follow step text; both append the step caution as
+   "⚠️ Protocol: <caution>" when present.
+8. Old records convert on load (groups to conditions with label=key and
+   empty treatments, name to text, kind inferred: minutes or min in name
+   means incubate else pipette, tip kept, caution absent). runs/ archives
+   stay untouched.
+9. edit_draft paths v2: liquids.<id>|conditions.<id>|layout-equivalent via
+   conditions.<id>.wells|steps[N] (0-based, summary shows [N] labels).
+   Fields mirror the schema with steps[N].caution (no tip path: drafts
+   have no tips); target values use wells:<W>|condition:<id>|all|other;
+   wells accept WellRef or row X. PATCH shares validator.
+10. Card keys by outcome: next_step subject becomes the 1-based target step
+    (key (next_step, 5)); timer-expiry suggestions route through _card with
+    the same key and merge wells/count/detail on replace, so the pair
+    collapses to 1 card. Other keys already outcome-shaped; op names stay.
+11. Review UI: 3 tabs (Liquids prep checklist local-only, Steps ordered
+    timeline with pipette emphasis + quotes, Layout mini plate grid by
+    condition). Needs_review yellow with quote; errors red; Start disabled
+    on errors. Live StepCard shows text + kind/minutes/temp and caution as
+    "⚠️ Protocol"; bars read conditions/replicates.
+12. Hand off: the live pipette object ({liquid, volume, unit, wells})
+    maps 1:1 onto an Opentrons transfer template. Scope excludes Learn
+    entirely; robot code untouched.
+
+## Steps
+
+1. Schema + fixtures + seed. plan.schema.json v2 (caution, no tip);
+   verify in user file samples/protocol_demo_v2.pdf (table, µ, italic
+   Tip:, no positions); generator extended to protocol_wash.pdf
+   (wash/centrifuge mid-flow, repeat 2) + protocol_table.pdf (positions
+   table); plan_demo.json rewritten in live v2 (same wells/semantics,
+   current_step 3, 2 tips kept, no cautions).
+2. protocol.py v2. Schema load, norm_quote + quote checker (incl. repeat
+   word forms), build/validate/layout on new shapes, repeat expansion,
+   target/liquid resolution, v2 edit paths + parsing, v2 draft summary,
+   Start-shape builder.
+3. Live migration. store (conditions keys, step text, on-load conversion,
+   model_state/prompt_state strings, entry timer suggestion), api
+   (edit_draft contract, draft block), timer_suggest voice key, card-key
+   outcome + suggest merge.
+4. App. Live structs + StepCard/bars migration, review 3 tabs + layout grid
+   + v2 patch paths, draft models with quote/issues.
+5. Tests + evals. Rewrite protocol fixtures; update state-string probes and
+   plan-shape tests; norm_quote unit tests (µ/μ/u, °C, dashes, quotes, case,
+   repeat words); import_check covers 4 PDFs (v1 regression, v2 user file
+   with Tip-to-caution and empty tips, wash, table) + voice edits + Start
+   expansion; full suites + smoke/latency/tool_choice/instruction re-runs.
+
+## Validation Plan
+
+- `.venv/bin/python -m unittest server.test_grammar server.test_store
+  server.tests.test_api server.tests.test_regressions server.tests.test_v2
+  server.tests.test_conversational server.tests.test_protocol`
+- `.venv/bin/python eval/import_check.py` (4 PDFs, caution rule, edits,
+  Start expansion). Blocked until samples/protocol_demo_v2.pdf is provided.
+- `.venv/bin/python eval/tool_choice.py` + smoke + latency + instruction
+  re-runs on converted plan_demo.
+- Sim-SDK typecheck (known macro caveat) + iPad review/execution pass.
+
+## Risks
+
+- Live shape rename touches model_state strings, probes, app structs, and
+  evals; converted plan_demo must keep wells/steps/evals stable.
+- Model step-kind classification errors surface as wrong plate/timer
+  behavior; review timeline makes kinds visible pre-run.
+- 0-based step paths vs spoken ordinals: mitigated by [N] labels in the
+  model summary; user never types paths.
+- Second import still overwrites the open draft.
+- protocol_demo_v2.pdf received 2026-10-28: 4 liquids, 3 conditions x5,
+  5 steps, cautions on steps 1+3, no tips, auto layout B/C/D rows 2-8.
+
+## Implementation notes (2026-10-28)
+
+- unit is a code-checked string (ul/ml), not a schema enum: strict-mode
+  null enums risk live rejection; code validates per standing rule.
+- IMPORT_MAX_OUTPUT_TOKENS 4096: quotes inflate extraction output.
+- parse_draft_path tolerates bracket/dot mixes (steps.[0] == steps[0] ==
+  steps.0); the edit_draft contract says steps.N with N from [N] labels.
+- EXTRACT_PROMPT gained two clauses from live misses: seeding/design
+  sentences belong to conditions, never steps; pipette is set for
+  pipette, wash, and aspirate steps.
+- Null flags cover execution-blocking nulls only: pipette volume,
+  unit-with-volume, timed-kind minutes; null replicates default to 5
+  (flagged when 5 is not in the quote, as v1). temp/caution/prep/
+  concentration nulls never flag.
+- draft_edited voice variants reconstructed (first verified verbatim
+  from eval/results/import.md; others reworded).
+- Auto layout vs the v2 file's guidance (one row per group, outer wells
+  empty, two spares): matches for this file (B/C/D rows, cols 2-8).
+  Edge deviations kept: row H and col 12 are usable at 6+ groups / n>=10.
+
+## Open Questions
+
+None.
+
+## Sources
+
+- https://dev.meta.ai/docs/file-handling
+- https://dev.meta.ai/docs/structured-output
+- https://dev.meta.ai/docs/protocols/responses
+- https://dev.meta.ai/docs/api-reference/responses/schemas
+- https://pypi.org/project/pypdf/

@@ -99,7 +99,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert body["model"] == "muse-spark-1.3", body
     assert body["reasoning"] == {"effort": "minimal"}, body
     assert body["max_output_tokens"] == 1024, body
-    assert len(body["tools"]) == 18, len(body["tools"])
+    assert len(body["tools"]) == 19, len(body["tools"])
     assert not [t for t in body["tools"] if t.get("type") == "web_search"], "flag off by default"
     names = [t.get("name") for t in body["tools"] if t.get("type") == "function"]
     assert "read_record" in names and "find_free_wells" in names, names
@@ -108,7 +108,8 @@ with patch("httpx.AsyncClient", FakeClient):
     assert {"navigate", "open", "back"} <= set(names), names
     assert "answer_card" not in names and "confirm" not in names, names
     nav = next(t for t in body["tools"] if t.get("name") == "navigate")
-    assert nav["parameters"]["properties"]["screen"]["enum"] == ["main", "robot_preview", "well_card"], nav
+    assert nav["parameters"]["properties"]["screen"]["enum"] == [
+        "main", "protocol_review", "robot_preview", "well_card"], nav
     for t in body["tools"]:
         if t.get("type") != "function":
             continue
@@ -127,7 +128,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert "act on the first candidate at once" in body["instructions"] and "first step" in body["instructions"]
     assert '"step": 99' not in body["instructions"], "client state ignored; record is truth"
     assert '"step": "3/5' in body["instructions"]
-    assert '"groups": "ctrl' in body["instructions"]
+    assert '"conditions": "Control 0/5' in body["instructions"]
     assert '"plan_times": "5: 30m"' in body["instructions"]
     assert '"step_wells": "C2–C8"' in body["instructions"], body["instructions"]
     assert body["input"] == "C3 all set"
@@ -565,9 +566,11 @@ with patch("httpx.AsyncClient", FakeClient):
 
     # 27. plan-time grounding: "incubate 30 min" step + "set the incubation timer"
     saved_plan, saved_idx = api.store.r["plan"], api.store.r["step_index"]
-    api.store.r["plan"] = {"groups": {}, "steps": [{"name": "incubate 30 min",
+    api.store.r["plan"] = {"conditions": {}, "steps": [{"kind": "incubate", "text": "incubate 30 min",
+                                                    "minutes": 30,
                                                     "wells": ["C2", "C3", "C4", "C5", "C6", "C7", "C8"]},
-                                                   {"name": "wash 5 min", "wells": ["C2"]}]}
+                                                   {"kind": "wash", "text": "wash 5 min",
+                                                    "minutes": 5, "wells": ["C2"]}]}
     api.store.r["step_index"] = 0
     FakeClient.spark_payload = {"id": "resp_g", "output": [
         {"type": "function_call", "name": "set_timer",

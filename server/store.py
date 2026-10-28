@@ -29,6 +29,7 @@ from server.grammar import (
 )
 from server.screens import SCREENS, canonical, parent_of, title_of
 from server.tone import say
+from server import protocol as proto
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 RECORD_PATH = DATA_DIR / "record.json"
@@ -83,6 +84,27 @@ def _well_coords(w: str):
 
 def sort_wells(wells) -> list[str]:
     return sorted(wells, key=lambda w: (_well_coords(w), w))
+
+
+def migrate_plan(plan: dict) -> dict:
+    """v1 {groups, name-steps} -> v2 {conditions, kind/text steps}. Idempotent."""
+    if "groups" not in plan:
+        return plan
+    conditions = {}
+    for key, g in (plan.get("groups") or {}).items():
+        conditions[key] = {"label": key, "treatments": [],
+                           "replicates": (g or {}).get("n"),
+                           "wells": list((g or {}).get("wells") or [])}
+    steps = []
+    for s in plan.get("steps") or []:
+        s = s or {}
+        name = s.get("name", "")
+        kind = "incubate" if s.get("minutes") is not None or "min" in name.lower() else "pipette"
+        steps.append({"kind": kind, "text": name, "minutes": s.get("minutes"),
+                      "temp_c": None, "tip": s.get("tip"), "caution": None,
+                      "pipette": None, "wells": list(s.get("wells") or [])})
+    return {"conditions": conditions, "steps": steps,
+            "backups": list(plan.get("backups") or [])}
 
 
 def timer_noun(q: str) -> str:
@@ -156,18 +178,25 @@ class RecordStore:
             self.r.pop("plans", None)  # legacy: plans folded into the card queue
             for m in self.r.get("notes", []):
                 m.setdefault("raw", m.pop("transcript", None) or m.get("text", ""))
+            self.r["plan"] = migrate_plan(self.r.get("plan") or {})
             return
-        plan = {"groups": {}, "steps": []}
+        plan = {"conditions": {}, "steps": []}
         current = 1
         if SEED_PATH.exists():
             seed = json.loads(SEED_PATH.read_text())
-            plan = {"groups": seed.get("groups", {}), "steps": seed.get("steps", []),
+            plan = {"conditions": seed.get("conditions", {}), "steps": seed.get("steps", []),
                     "backups": seed.get("backups", [])}
             current = seed.get("current_step", 1)
-        self.r = {
+        self.r = self._fresh_record(migrate_plan(plan), current)
+        self._save()
+
+    @staticmethod
+    def _fresh_record(plan: dict, current: int = 1) -> dict:
+        steps = plan.get("steps", [])
+        return {
             "version": 0,
             "plan": plan,
-            "step_index": max(min(current - 1, len(plan["steps"]) - 1), 0) if plan["steps"] else 0,
+            "step_index": max(min(current - 1, len(steps) - 1), 0) if steps else 0,
             "done": [],
             "excluded": {},
             "redo": {},
@@ -178,7 +207,37 @@ class RecordStore:
             "recent": [],
             "cards": {},
         }
-        self._save()
+
+    def save_draft(self, draft: dict) -> None:
+        with self._lock:
+            self.r["draft"] = draft
+            self._commit()
+
+    def clear_draft(self) -> None:
+        with self._lock:
+            self.r.pop("draft", None)
+            self._commit()
+
+    def start_run(self):
+        """Archive the current record, reset on the draft plan. (ok, info)."""
+        with self._lock:
+            draft = self.r.get("draft")
+            if not draft:
+                return False, {"reason": "no draft open"}
+            proto.recompute_draft(draft)
+            if draft["errors"]:
+                self._commit()
+                return False, {"errors": draft["errors"]}
+            runs = self.path.parent / "runs"
+            runs.mkdir(exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+            (runs / f"run-{stamp}.json").write_text(json.dumps(self.r, ensure_ascii=False))
+            plan = proto.build_start_plan(draft["plan"])
+            self.r = self._fresh_record(plan)
+            self._save()
+            self._commit()
+            return True, {"conditions": len(plan["conditions"]), "steps": len(plan["steps"]),
+                          "review": len(draft["review"])}
 
     def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -207,7 +266,7 @@ class RecordStore:
     # --- plan helpers ---
 
     def steps(self) -> list[str]:
-        names = [s.get("name", "") for s in self.r["plan"]["steps"]]
+        names = [s.get("text") or s.get("name", "") for s in self.r["plan"]["steps"]]
         return names or list(DEFAULT_STEPS)
 
     def current_range(self) -> str | None:
@@ -232,11 +291,11 @@ class RecordStore:
         return sort_wells(self.current_planned())
 
     def planned_wells(self) -> set[str]:
-        """Every well named anywhere in the plan (all steps + all groups)."""
+        """Every well named anywhere in the plan (all steps + all conditions)."""
         out: set[str] = set()
         for s in self.r["plan"]["steps"]:
             out |= set(s.get("wells", []))
-        for g in self.r["plan"]["groups"].values():
+        for g in self.r["plan"]["conditions"].values():
             out |= set(g.get("wells", []))
         return out
 
@@ -299,12 +358,12 @@ class RecordStore:
         return (out + rest)[:n]
 
     def _affinity_group(self, well: str) -> str | None:
-        """Group sharing the well's row (most wells wins, name breaks ties)."""
+        """Condition sharing the well's row (most wells wins, name breaks ties)."""
         row = well[0]
         best: str | None = None
         best_n = 0
-        for gname in sorted(self.r["plan"]["groups"]):
-            n = sum(1 for w in self.r["plan"]["groups"][gname].get("wells", [])
+        for gname in sorted(self.r["plan"]["conditions"]):
+            n = sum(1 for w in self.r["plan"]["conditions"][gname].get("wells", [])
                     if w.startswith(row))
             if n > best_n:
                 best, best_n = gname, n
@@ -322,11 +381,14 @@ class RecordStore:
     def prompt_state(self, session: dict) -> dict:
         steps = self.steps()
         idx = self.r["step_index"]
+        raw = self.r["plan"]["steps"]
         st = {
             "step": idx,
             "total": len(steps),
             "step_name": steps[idx] if idx < len(steps) else "",
             "next_step": steps[idx + 1] if idx + 1 < len(steps) else "",
+            "caution": (raw[idx].get("caution") or "") if idx < len(raw) else "",
+            "next_caution": (raw[idx + 1].get("caution") or "") if idx + 1 < len(raw) else "",
             "plan_summary": f"Step {idx + 1}/{len(steps)}: {steps[idx]}" if idx < len(steps) else "",
             "done": sorted(self.r["done"]),
             "excluded": sorted(self.r["excluded"]),
@@ -341,10 +403,13 @@ class RecordStore:
         return st
 
     def plan_times(self) -> dict[int, list]:
-        """step_index -> durations parsed from step names."""
+        """step_index -> durations from the minutes field, else parsed text."""
         out: dict[int, list] = {}
         for i, s in enumerate(self.r["plan"]["steps"]):
-            ds = sorted(find_durations(s.get("name", "")))
+            if isinstance(s.get("minutes"), (int, float)):
+                out[i] = [float(s["minutes"])]
+                continue
+            ds = sorted(find_durations(s.get("text") or s.get("name", "")))
             if ds:
                 out[i] = ds
         return out
@@ -354,14 +419,14 @@ class RecordStore:
         steps = self.steps()
         idx = self.r["step_index"]
         name = steps[idx] if idx < len(steps) else ""
-        pt = "; ".join(f"{i + 1}: {', '.join(f'{d}m' for d in ds)}"
+        pt = "; ".join(f"{i + 1}: {', '.join(f'{fmt_minutes(d)}m' for d in ds)}"
                        for i, ds in sorted(self.plan_times().items()))
         usable = set(self.r["done"]) - set(self.r["excluded"])
-        groups = []
-        for gname in sorted(self.r["plan"]["groups"]):
-            g = self.r["plan"]["groups"][gname]
+        conds = []
+        for gname in sorted(self.r["plan"]["conditions"]):
+            g = self.r["plan"]["conditions"][gname]
             have = len(usable & set(g.get("wells", [])))
-            groups.append(f"{gname} {have}/{g.get('n', '?')}")
+            conds.append(f"{g.get('label', gname)} {have}/{g.get('replicates', '?')}")
         now = time.time()
         timers = []
         for t in self.r["timers"]:
@@ -370,7 +435,7 @@ class RecordStore:
         st = {
             "step": f"{idx + 1}/{len(steps)} {name}",
             "plan_times": pt,
-            "groups": "; ".join(groups),
+            "conditions": "; ".join(conds),
             "step_wells": join_wells_ranges(self.step_wells()),
             "remaining": join_wells_ranges(self.remaining_wells()),
             "done": join_wells_ranges(self.r["done"]),
@@ -381,7 +446,13 @@ class RecordStore:
             "selected_well": session.get("selected_well", ""),
             "open_sheet": session.get("open_sheet", ""),
             "pending_cards": len(self.r["cards"]),
+            "draft_open": bool(self.r.get("draft")),
         }
+        if self.r.get("draft"):
+            draft = self.r["draft"]
+            st["draft"] = proto.draft_summary(draft.get("plan") or {})
+            st["draft_issues"] = (f"review {len(draft.get('review', []))}, "
+                                  f"errors {len(draft.get('errors', []))}")
         if session.get("turns"):
             ts = session["turns"]
             st["recent_turns"] = [self._turn_line(t, i == len(ts) - 1) for i, t in enumerate(ts)]
@@ -438,7 +509,7 @@ class RecordStore:
         elif op in ("cancel_timer", "extend_timer"):
             subject = p.get("label")
         elif op == "next_step":
-            subject = "step"
+            subject = p.get("target")
         else:
             subject = None
         return (op, subject if subject != [] else None)
@@ -551,9 +622,9 @@ class RecordStore:
                     self.r["redo"][w] = note or ""
                     g = self._affinity_group(w)
                     if g is not None:
-                        gw = self.r["plan"]["groups"][g].get("wells", [])
+                        gw = self.r["plan"]["conditions"][g].get("wells", [])
                         if w not in gw:
-                            self.r["plan"]["groups"][g]["wells"] = sort_wells(set(gw) | {w})
+                            self.r["plan"]["conditions"][g]["wells"] = sort_wells(set(gw) | {w})
                 self._stamp(good, source, now)
                 msg = f"{', '.join(good)} marked for redo ({trimmed(note)})" if note else f"{', '.join(good)} marked for redo"
             if bad:
@@ -708,11 +779,12 @@ class RecordStore:
             elif not force:
                 nxt = self.r["step_index"] + 1
                 self._card(res, "next_step", say("step_move", session, step=nxt + 1),
-                           steps[nxt], {"op": "next_step"})
+                           steps[nxt], {"op": "next_step", "target": nxt + 1})
             else:
                 self.r["step_index"] += 1
                 self._drop_step_cards_locked()
                 res["messages"].append(f"Next: {steps[self.r['step_index']]}")
+                self._suggest_entry_timer(res, session)
         elif name == "show":
             view = args.get("view", "?")
             res["messages"].append(f"Viewing: {view} {args.get('target')}" if args.get("target") else f"Viewing: {view}")
@@ -770,6 +842,28 @@ class RecordStore:
                 res["info"]["drop_reasons"].append({"call": name, "args": args, "reason": "missing text"})
             else:
                 res["messages"].append(text.strip()[:200])
+        elif name == "edit_draft":
+            draft = self.r.get("draft")
+            parsed = proto.parse_draft_path(args.get("path"))
+            if not draft:
+                res["messages"].append("I couldn't edit the draft: no draft open.")
+            elif parsed is None:
+                res["messages"].append(
+                    f"I couldn't edit the draft: unknown path {args.get('path')}.")
+            else:
+                ok, value = proto.parse_draft_value(draft, parsed, args.get("value"))
+                if not ok:
+                    res["messages"].append(f"I couldn't edit the draft: {value}.")
+                else:
+                    ok2, reason = proto.apply_draft_edit(draft, parsed, value)
+                    if not ok2:
+                        res["messages"].append(f"I couldn't edit the draft: {reason}.")
+                    else:
+                        proto.recompute_draft(draft)
+                        msg = say("draft_edited", session, target=proto.edit_target(parsed))
+                        if draft["errors"]:
+                            msg += f" Heads up: {draft['errors'][0]['reason']}."
+                        res["messages"].append(msg)
         else:
             res["info"]["dropped"] += 1
             res["info"]["drop_reasons"].append({"call": name or "?", "args": args, "reason": "unknown tool"})
@@ -921,14 +1015,14 @@ class RecordStore:
     READ_KINDS = ("wells", "notes", "timers", "steps", "history")
 
     def filter_wells(self, filt: str) -> list[str]:
-        """Well range, group name, 'all', or blank (= current step wells)."""
+        """Well range, condition key/label, 'all', or blank (= current step)."""
         f = (filt or "").strip()
         if not f:
             return self.step_wells()
         if f.lower() == "all":
             return ALL_WELLS
-        for gname, g in self.r["plan"]["groups"].items():
-            if f.lower() == gname.lower():
+        for gname, g in self.r["plan"]["conditions"].items():
+            if f.lower() in (gname.lower(), (g.get("label") or "").lower()):
                 return sort_wells(g.get("wells", []))
         return parse_wellref(f)
 
@@ -956,9 +1050,11 @@ class RecordStore:
                             "status": "done" if is_over(t, now) else "active"})
             return {"timers": out[:n]}
         if kind == "steps":
-            steps = self.steps()
+            raw = self.r["plan"]["steps"]
             idx = self.r["step_index"]
-            out = [{"i": i + 1, "name": s, "current": i == idx} for i, s in enumerate(steps)]
+            out = [{"i": i + 1, "name": s.get("text") or s.get("name", ""),
+                    "kind": s.get("kind", ""), "current": i == idx}
+                   for i, s in enumerate(raw)]
             if not f or f.lower() == "all":
                 return {"steps": out[:n]}
             if f.lower() == "current":
@@ -993,11 +1089,11 @@ class RecordStore:
             status = "redo"
         elif up in self.r["done"]:
             status = "done"
-        elif any(up in g.get("wells", []) for g in self.r["plan"]["groups"].values()):
+        elif any(up in g.get("wells", []) for g in self.r["plan"]["conditions"].values()):
             status = "planned"
         else:
             status = "empty"
-        group = next((n for n, g in self.r["plan"]["groups"].items() if up in g.get("wells", [])), "")
+        group = next((n for n, g in self.r["plan"]["conditions"].items() if up in g.get("wells", [])), "")
         return {
             "well": up,
             "status": status,
@@ -1061,34 +1157,41 @@ class RecordStore:
             self._broadcast(ev)
         return events
 
+    def _suggest_entry_timer(self, res: dict, session: dict):
+        """Entering a timed step proposes its timer; nothing otherwise."""
+        steps = self.r["plan"]["steps"]
+        idx = self.r["step_index"]
+        if idx >= len(steps):
+            return
+        s = steps[idx]
+        m = s.get("minutes")
+        if (s.get("kind") or "") not in proto.TIMED_KINDS or not isinstance(m, (int, float)):
+            return
+        wells = list(s.get("wells") or [])
+        self._card(res, "timer_suggest",
+                   say("timer_suggest", session, minutes=fmt_minutes(m)),
+                   None, {"op": "set_timer", "minutes": m, "on_done": None,
+                          "wells": wells or None})
+
     def _suggest_next_locked(self, done_timers: list[dict], now: float):
-        """One card for finished timers; folds into an unanswered suggest card."""
+        """Timer-expiry step suggestion; merges into the same-key step card."""
         if self.r["step_index"] >= len(self.steps()) - 1:
             return
+        target = self.r["step_index"] + 2
         fresh = list(dict.fromkeys(w for t in done_timers for w in (parse_wellref(t["wells"]) if t["wells"] else [])))
-        old = next((c for c in self.r["cards"].values() if c["kind"] == "suggest_next"), None)
+        old = next((c for c in self.r["cards"].values()
+                    if self._card_key(c.get("payload")) == ("next_step", target)), None)
+        wells, count = fresh, len(done_timers)
         if old is not None:
             wells = list(dict.fromkeys((old["payload"].get("wells") or []) + fresh))
             count = old["payload"].get("count", 1) + len(done_timers)
-            old["payload"]["wells"] = wells
-            old["payload"]["count"] = count
-            old["detail"] = self._suggest_detail(count, wells)
-            old["ts"] = now
-            return
-        if len(done_timers) == 1:
+        if old is None and len(done_timers) == 1:
             detail = timer_done_message(done_timers[0])
         else:
-            detail = self._suggest_detail(len(done_timers), fresh)
-        question = say("step_move", None, step=self.r["step_index"] + 2)
-        cid = uuid.uuid4().hex[:8]
-        self.r["cards"][cid] = {
-            "id": cid,
-            "kind": "suggest_next",
-            "question": question,
-            "detail": detail,
-            "payload": {"op": "next_step", "wells": fresh, "count": len(done_timers)},
-            "ts": now,
-        }
+            detail = self._suggest_detail(count, wells)
+        self._card({"cards": []}, "suggest_next", say("step_move", None, step=target),
+                   detail, {"op": "next_step", "target": target,
+                            "wells": wells, "count": count})
 
     def _suggest_detail(self, n: int, wells: list[str]) -> str:
         rng = join_wells_ranges(wells)

@@ -217,7 +217,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert r.json()["route"] == "grammar", r.json()
     assert c.post("/input", json={"text": " ", "session": "v9"}).status_code == 400
     h = c.get("/health").json()
-    assert h["ok"] and h["commit"] and h["tools"] == 18 and h["prompt_hash"], h
+    assert h["ok"] and h["commit"] and h["tools"] == 19 and h["prompt_hash"], h
     assert h["memory"] == "summary", h
     FakeClient.spark_payload = {"id": "v9a", "output": [
         fc("exclude_well", '{"well": "C4"}', "c1")]}

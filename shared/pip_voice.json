@@ -88,5 +88,15 @@
   "confirm_minutes": [
     "{minutes} minutes on {wells_spoken}?",
     "Start {minutes} minutes on {wells_spoken}?"
+  ],
+  "draft_edited": [
+    "Updated {target}.",
+    "Done — {target} updated.",
+    "Got it, {target} changed."
+  ],
+  "timer_suggest": [
+    "Start the {minutes}-minute timer?",
+    "Kick off {minutes} minutes?",
+    "Want me to start {minutes} minutes?"
   ]
 }

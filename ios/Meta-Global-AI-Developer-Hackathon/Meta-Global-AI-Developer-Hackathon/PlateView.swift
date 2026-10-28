@@ -1,6 +1,6 @@
 import SwiftUI
 
-func groupColor(_ name: String?) -> Color {
+func conditionColor(_ name: String?) -> Color {
     switch name {
     case "ctrl": .gray
     case "drug_A": .blue
@@ -62,21 +62,21 @@ struct WellDot: View {
     private var done: Bool { lab.done.contains(well) }
     private var redo: Bool { lab.redo[well] != nil }
     private var noted: Bool { lab.hasNote(well) }
-    private var group: String? { lab.groupOf(well) }
+    private var cond: String? { lab.conditionOf(well) }
     private var current: Bool { lab.currentPlanned.contains(well) }
     private var lit: Bool { lab.flashing.contains(well) }
 
     private var fill: Color {
         if excluded { return scheme == .dark ? Color(white: 0.6) : Color(white: 0.35) }
-        if done { return groupColor(group) }
-        if current, group != nil { return groupColor(group).opacity(0.18) }
+        if done { return conditionColor(cond) }
+        if current, cond != nil { return conditionColor(cond).opacity(0.18) }
         return .clear
     }
 
     private var edge: (Color, CGFloat) {
         if lit { return (.yellow, 3) }
-        if current { return (groupColor(group), 3) }
-        if group != nil { return (groupColor(group), 1.5) }
+        if current { return (conditionColor(cond), 3) }
+        if cond != nil { return (conditionColor(cond), 1.5) }
         return (.secondary.opacity(0.5), 1.5)
     }
 
@@ -109,15 +109,15 @@ struct WellDot: View {
 
 // MARK: - Group bars
 
-struct GroupBars: View {
+struct ConditionBars: View {
     let lab: LabState
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(lab.groupProgress(), id: \.name) { g in
+            ForEach(lab.conditionProgress(), id: \.key) { g in
                 let ok = g.have >= g.need
                 HStack(spacing: 6) {
-                    Text(g.name).font(.caption).frame(width: 56, alignment: .leading)
+                    Text(g.label).font(.caption).frame(width: 56, alignment: .leading)
                     Text(String(repeating: "■", count: g.have) + String(repeating: "□", count: max(g.need - g.have, 0)))
                         .font(.caption.monospaced())
                         .foregroundStyle(ok ? .green : .orange)
@@ -148,7 +148,7 @@ struct WellSheet: View {
         if lab.excluded[well] != nil { s.append("Excluded") }
         if lab.redo[well] != nil { s.append("Redo") }
         if lab.done.contains(well) { s.append("Done") }
-        if s.isEmpty { s.append(lab.groupOf(well) == nil ? "Empty" : "Planned") }
+        if s.isEmpty { s.append(lab.conditionOf(well) == nil ? "Empty" : "Planned") }
         return s.joined(separator: ", ")
     }
 
@@ -159,7 +159,7 @@ struct WellSheet: View {
                 Spacer()
                 Button("Done") { dismiss() }
             }
-            LabeledContent("Group", value: lab.groupOf(well) ?? "—")
+            LabeledContent("Condition", value: lab.conditionLabel(well) ?? "—")
             LabeledContent("Status", value: status)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Notes").font(.callout).foregroundStyle(.secondary)
@@ -226,8 +226,14 @@ struct StepCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.headline)
+            if let line = lab.currentKindLine {
+                Text(line).font(.caption).foregroundStyle(.secondary)
+            }
             if let tip = lab.currentTip {
                 Text("💡 \(tip)").font(.callout)
+            }
+            if let caution = lab.currentCaution {
+                Text("⚠️ Protocol: \(caution)").font(.callout)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

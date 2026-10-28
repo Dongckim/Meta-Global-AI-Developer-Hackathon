@@ -191,6 +191,8 @@ def where_am_i_reply(state: dict) -> str:
     if isinstance(state.get("remaining"), list):
         left = [w for w in state["remaining"] if isinstance(w, str)]
         out += f" {len(left)} left: {wells_label(left)}." if left else " None left."
+    if state.get("caution"):
+        out += f" ⚠️ Protocol: {state['caution']}"
     return out
 
 
@@ -208,7 +210,10 @@ def what_step_reply(state: dict) -> str:
 
 def whats_next_reply(state: dict) -> str:
     nxt = state.get("next_step", "")
-    return f"Next: {nxt}." if nxt else "Already at the last step."
+    out = f"Next: {nxt}." if nxt else "Already at the last step."
+    if nxt and state.get("next_caution"):
+        out += f" ⚠️ Protocol: {state['next_caution']}"
+    return out
 
 
 _CARD_YES = {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "do it", "confirm"}
@@ -454,14 +459,21 @@ def _content_stems(text) -> set[str]:
 
 
 def relevant_plan_numbers(norm, step_names) -> set:
-    """Durations from steps sharing a content stem with the utterance."""
+    """Durations from steps sharing a content stem with the utterance.
+
+    Entries are texts or (text, minutes) pairs; the minutes field counts
+    when the text carries no digits.
+    """
     stems = _content_stems(norm)
     if not stems:
         return set()
     out: set = set()
-    for name in step_names or []:
-        if stems & _content_stems(name):
-            out |= find_durations(name)
+    for entry in step_names or []:
+        text, minutes = entry if isinstance(entry, tuple) else (entry, None)
+        if stems & _content_stems(text or ""):
+            out |= find_durations(text or "")
+            if isinstance(minutes, (int, float)) and not isinstance(minutes, bool):
+                out.add(float(minutes))
     return out
 
 
@@ -727,7 +739,7 @@ def strip_fillers(s: str) -> str:
 
 _WELL_SAY_RANGE = re.compile(r"\b([A-H])(\d{1,2})\s*[–—-]\s*([A-H])(\d{1,2})\b")
 _WELL_SAY_ONE = re.compile(r"\b([A-H])(\d{1,2})\b")
-_SPEAK_STRIP = "✓⏰💡↻●○"
+_SPEAK_STRIP = "✓⏰💡↻●○⚠︎️"
 
 
 def spell_wells(text: str) -> str:

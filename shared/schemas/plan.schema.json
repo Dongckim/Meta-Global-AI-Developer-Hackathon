@@ -1,0 +1,156 @@
+{
+  "type": "object",
+  "description": "Bench run plan extracted from a protocol document.",
+  "properties": {
+    "liquids": {
+      "type": "array",
+      "description": "Reagents and solutions named by the document.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Short lowercase id, e.g. drug_a."
+          },
+          "name": {
+            "type": "string",
+            "description": "Liquid name as stated, e.g. Drug A 10 uM working solution."
+          },
+          "concentration": {
+            "type": ["string", "null"],
+            "description": "Stated concentration with unit (10 uM), or null."
+          },
+          "prep": {
+            "type": ["string", "null"],
+            "description": "Stated preparation note, or null."
+          },
+          "quote": {
+            "type": "string",
+            "description": "Verbatim document sentence this liquid comes from."
+          }
+        },
+        "required": ["id", "name", "concentration", "prep", "quote"],
+        "additionalProperties": false
+      }
+    },
+    "conditions": {
+      "type": "array",
+      "description": "Experimental conditions (array form: strict mode forbids free-key maps).",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Short lowercase id, e.g. drug_a."
+          },
+          "label": {
+            "type": "string",
+            "description": "Condition name as stated, e.g. Drug A."
+          },
+          "treatments": {
+            "type": "array",
+            "description": "Liquid ids applied to this condition.",
+            "items": {"type": "string"}
+          },
+          "replicates": {
+            "type": ["integer", "null"],
+            "description": "Replicate count, or null when the document does not state one."
+          },
+          "wells": {
+            "type": ["array", "null"],
+            "description": "Plate positions as WellRef strings (B2, B2-B8) ONLY when the document states them, else null. Never invent positions.",
+            "items": {"type": "string"}
+          },
+          "quote": {
+            "type": "string",
+            "description": "Verbatim document sentence this condition comes from."
+          }
+        },
+        "required": ["id", "label", "treatments", "replicates", "wells", "quote"],
+        "additionalProperties": false
+      }
+    },
+    "steps": {
+      "type": "array",
+      "description": "Bench actions in document order.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["pipette", "incubate", "wait", "wash", "aspirate", "mix", "centrifuge", "read", "prep", "other"],
+            "description": "Action class."
+          },
+          "text": {
+            "type": "string",
+            "description": "The document sentence, lightly trimmed."
+          },
+          "quote": {
+            "type": "string",
+            "description": "Verbatim document sentence this step comes from."
+          },
+          "minutes": {
+            "type": ["number", "null"],
+            "description": "Duration in minutes when stated, else null. Never invent numbers."
+          },
+          "temp_c": {
+            "type": ["number", "null"],
+            "description": "Temperature in Celsius when stated, else null."
+          },
+          "caution": {
+            "type": ["string", "null"],
+            "description": "Verbatim caution sentence (do not..., Tip:/Note:/Caution: markers), or null. Never write tips: there is no tip field."
+          },
+          "pipette": {
+            "type": ["object", "null"],
+            "description": "Transfer detail for pipetting steps, else null.",
+            "properties": {
+              "liquid": {
+                "type": "string",
+                "description": "Liquid id from liquids."
+              },
+              "volume": {
+                "type": ["number", "null"],
+                "description": "Volume when stated, else null. Never invent numbers."
+              },
+              "unit": {
+                "type": ["string", "null"],
+                "description": "Volume unit as stated (ul, ml), else null."
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": ["wells", "condition", "all_used", "other"],
+                    "description": "wells: stated positions; condition: one condition; all_used: every used well; other: anything else."
+                  },
+                  "value": {
+                    "type": ["string", "null"],
+                    "description": "WellRef string for wells, condition id for condition, else null."
+                  }
+                },
+                "required": ["type", "value"],
+                "additionalProperties": false
+              },
+              "mix": {
+                "type": ["string", "null"],
+                "description": "Stated mixing note, or null."
+              },
+              "repeat": {
+                "type": ["integer", "null"],
+                "description": "Repeat count 1-12 when stated (wash x2), else null."
+              }
+            },
+            "required": ["liquid", "volume", "unit", "target", "mix", "repeat"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["kind", "text", "quote", "minutes", "temp_c", "caution", "pipette"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["liquids", "conditions", "steps"],
+  "additionalProperties": false
+}

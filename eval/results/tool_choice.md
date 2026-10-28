@@ -49,3 +49,37 @@ Accuracy: 10/10. One session, fresh record.
 | What is on C8 | 2290 | read_record,answer | y | C8 is drug_A, planned, notes: sticky edges, looks weird, bubbles. |
 | Mark C8 done | 613 | mark_done | y | Nice, C8 are in. |
 | Go to the robot preview | 556 | navigate | y | Showing Robot preview. |
+
+## Write-vs-view tool choice (live muse-spark-1.3 minimal)
+
+Accuracy: 10/10. One session, fresh record.
+
+| turn | total_ms | calls | pass | reply |
+|---|---|---|---|---|
+| Note C8, sticky edges | 79 | add_note | y | Noted on C8. |
+| I want to make notes on C8 | 787 | - | y | What should I write on C8? |
+| Show me C8 | 647 | open | y | Opened C8. |
+| C8 looks weird | 2493 | add_note | y | Got it — noted on C8. |
+| Open C8 and note bubbles | 1616 | open,add_note | y | Opened C8. Written down for C8. |
+| Let me see the timers | 1395 | show | y | Viewing: timer |
+| C8 is contaminated, exclude it | 1255 | exclude_well | y | Drop C8? |
+| What is on C8 | 1600 | read_record | y | Got it — pulling what’s on C8., but i couldn't read that: unknown sect |
+| Mark C8 done | 732 | mark_done | y | Nice, C8 are in. |
+| Go to the robot preview | 845 | navigate | y | Showing Robot preview. |
+
+## Write-vs-view tool choice (live muse-spark-1.3 minimal)
+
+Accuracy: 10/10. One session, fresh record.
+
+| turn | total_ms | calls | pass | reply |
+|---|---|---|---|---|
+| Note C8, sticky edges | 87 | add_note | y | Noted on C8. |
+| I want to make notes on C8 | 838 | - | y | What should I write on C8? |
+| Show me C8 | 1244 | open | y | Opened C8. |
+| C8 looks weird | 1548 | add_note | y | Got it — noted on C8. |
+| Open C8 and note bubbles | 1596 | open,add_note | y | Opened C8. Written down for C8. |
+| Let me see the timers | 1443 | show | y | Viewing: timer |
+| C8 is contaminated, exclude it | 699 | exclude_well | y | Drop C8? |
+| What is on C8 | 1795 | read_record,answer | y | Nice — C8 has sticky edges, looks weird, bubbles. |
+| Mark C8 done | 980 | mark_done | y | Nice, C8 are in. |
+| Go to the robot preview | 1031 | navigate | y | Showing Robot preview. |

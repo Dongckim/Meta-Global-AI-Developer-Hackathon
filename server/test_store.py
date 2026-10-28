@@ -245,14 +245,14 @@ class StoreTest(unittest.TestCase):
 
     def test_redo_confirms_into_affinity_group(self):
         r = self.apply([T("record_redo", wells=["C9"], note="backup")])
-        self.assertNotIn("C9", self.s.r["plan"]["groups"]["drug_A"]["wells"])
+        self.assertNotIn("C9", self.s.r["plan"]["conditions"]["drug_A"]["wells"])
         msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
         self.assertEqual(msg, "C9 marked for redo (backup)")
-        self.assertIn("C9", self.s.r["plan"]["groups"]["drug_A"]["wells"])
+        self.assertIn("C9", self.s.r["plan"]["conditions"]["drug_A"]["wells"])
         self.assertNotIn("C9", self.s.find_free_wells("C3", 12))
         r = self.apply([T("mark_done", wells=["C9"])])
         self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
-        self.assertIn("drug_A 1/5", self.s.model_state(self.sess)["groups"])
+        self.assertIn("Drug A 1/5", self.s.model_state(self.sess)["conditions"])
 
     def test_find_free_order(self):
         self.assertEqual(self.s.find_free_wells("C3", 6),

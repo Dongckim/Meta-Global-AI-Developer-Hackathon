@@ -1,0 +1,32 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 356 >>
+stream
+BT /F1 12 Tf 72 740 Td 16 TL (Methods) Tj T* () Tj T* (Plate map: control wells are B2, B3, B4, B5, B6.) Tj T* (Drug A wells are C2, C3, C4, C5, C6.) Tj T* (Seed 5 replicates per group.) Tj T* () Tj T* (Step 1: add 100 uL media to every used well.) Tj T* (Step 2: add 10 uL vehicle to control wells.) Tj T* (Step 3: add 10 uL Drug A to Drug A wells.) Tj ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000311 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+718
+%%EOF
