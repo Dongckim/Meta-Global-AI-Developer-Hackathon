@@ -65,13 +65,16 @@ smoke + iPad check.
 
 ### Replies: ungrounded-target rule (replaces the verb list)
 
-- After a turn whose reply would be raw model text (zero tool
-  calls), extract mentioned record targets: well refs (`[A-H]\d+`,
-  ranges), timer words (`timer` + optional label), step refs
-  (`step N`, `next step`), memo/note refs (`note on X`, `memo`).
-- Ground each mentioned target against THIS turn's writes and reads
-  (well args, read_record wells/notes/timers/steps filters + returned
-  rows). Any mentioned-but-untouched target discards the whole text.
+- Applies only when the reply would be raw model text with no
+  surviving tool calls (no writes or reads this turn), so any claimed
+  outcome is ungrounded by construction.
+- The text is discarded only when it has BOTH a completed-outcome
+  verb (`_OUTCOME_VERB` in grammar.py: marked, logged, saved, started,
+  done, dropped, moved, set, …) AND a named record target: well refs
+  (`[A-H]\d+`, ranges), `timer`, `step N`/`next step`, `note`/`memo`
+  (`ungrounded_targets`). Bare mentions without an outcome verb pass
+  ("C7 looks cloudy"); state words (running, left) are not outcome
+  verbs.
 - Replacement: if the user's utterance mentioned that target too →
   didnt_act naming the target ("I didn't log C7 — want me to?") and
   set asked so the follow-up grounds the intent; otherwise neutral
@@ -79,9 +82,9 @@ smoke + iPad check.
   state, the model must call read_record first.
 - The v2 `?` exemption stays: questions claim nothing
   ("Should I drop C7?" passes; "C7 is dropped." is discarded).
-- Expected fallout: smalltalk replies naming wells ("cool" →
-  "Nice, we're set on C2–C8") become "Got it!". The instruction
-  eval's smalltalk expectations change accordingly.
+- Expected fallout: only smalltalk that claims an outcome on a target
+  ("Nice, C2–C8 are set") becomes "Got it!"; plain smalltalk and bare
+  well mentions pass unchanged.
 
 ### View transitions
 
