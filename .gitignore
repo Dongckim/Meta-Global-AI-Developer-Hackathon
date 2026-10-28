@@ -11,3 +11,4 @@ DerivedData/
 .DS_Store
 Secrets.xcconfig
 server/data/
+.claude/settings.local.json
