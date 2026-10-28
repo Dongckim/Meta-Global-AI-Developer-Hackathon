@@ -145,7 +145,7 @@ with patch("httpx.AsyncClient", FakeClient):
         api.store.start_demo_run()
         ScriptClient.queue = [
             {"id": f"v6a{i}", "output": [
-                fc("find_free_wells", '{"near": "C3", "count": 3}', "c1")]},
+                fc("read_record", '{"kind": "free_wells", "filter": "C3", "limit": 3}', "c1")]},
             {"id": f"v6b{i}", "output": [
                 fc("exclude_well", '{"well": "C3", "reason": "bubble"}', "c2"),
                 fc("record_redo", '{"wells": ["C9"], "note": "bubble"}', "c3")]},
@@ -162,7 +162,7 @@ with patch("httpx.AsyncClient", FakeClient):
         fc("set_timer", '{"label": "x", "minutes": 2, "wells": "C5"}', "c1")]}
     c.post("/orchestrate", json={"text": "2 minute timer for C5", "session": "v7"})
     FakeClient.spark_payload = {"id": "v7b", "output": [
-        fc("manage_timers", '{"action": "cancel", "label": "C5"}', "c2"),
+        fc("cancel_timer", '{"label": "C5"}', "c2"),
         fc("set_timer", '{"label": "x", "minutes": 2, "wells": "D5"}', "c3")]}
     r = c.post("/orchestrate", json={"text": "oh no cancel C five I need D five", "session": "v7"})
     j = r.json()
@@ -190,7 +190,7 @@ with patch("httpx.AsyncClient", FakeClient):
     c.post("/orchestrate", json={"text": "note C3, big bubbles", "session": "v10"})
     ScriptClient.queue = [
         {"id": "v10a", "output": [fc("read_record", '{"kind": "wells", "filter": "C3"}', "c1")]},
-        {"id": "v10b", "output": [fc("answer", '{"text": "C3 has bubbles."}', "c2")]},
+        {"id": "v10b", "output": [{"type": "message", "content": [{"type": "output_text", "text": "C3 has bubbles."}]}]},
     ]
     seen = []
     orig_post = ScriptClient.post
@@ -220,7 +220,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert r.json()["route"] == "grammar", r.json()
     assert c.post("/input", json={"text": " ", "session": "v9"}).status_code == 400
     h = c.get("/health").json()
-    assert h["ok"] and h["commit"] and h["tools"] == 20 and h["prompt_hash"], h
+    assert h["ok"] and h["commit"] and h["tools"] == 3 and h["prompt_hash"], h
     assert h["memory"] == "summary", h
     FakeClient.spark_payload = {"id": "v9a", "output": [
         fc("exclude_well", '{"well": "C4"}', "c1")]}

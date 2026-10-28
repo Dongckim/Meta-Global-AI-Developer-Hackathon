@@ -17,7 +17,8 @@ from server.grammar import (
     fill_on_done,
     filter_timer_calls,
     final_pip_line,
-    honest_reply,
+    mentioned_targets,
+    ungrounded_targets,
     find_amounts,
     find_durations,
     is_failure_message,
@@ -192,7 +193,7 @@ class GrammarTests(unittest.TestCase):
 
     def test_left_routing_safety(self):
         self.assertEqual(match_grammar("cancel the remaining timer", ST)[0][0]["name"],
-                         "manage_timers")
+                         "cancel_timer")
         self.assertIsNone(match_grammar("C2 left", ST))
 
     def test_edit_last_note(self):
@@ -204,26 +205,26 @@ class GrammarTests(unittest.TestCase):
 
     def test_cancel(self):
         calls, reply = match_grammar("cancel the wash timer", ST)
-        self.assertEqual(calls, [{"name": "manage_timers",
-                                  "args": {"action": "cancel", "label": "wash"}}])
+        self.assertEqual(calls, [{"name": "cancel_timer",
+                                  "args": {"label": "wash"}}])
         self.assertEqual(reply, "Canceling the wash timer.")
         calls, reply = match_grammar("cancel drug A timer", ST)
-        self.assertEqual(calls[0]["args"], {"action": "cancel", "label": "drug A"})
+        self.assertEqual(calls[0]["args"], {"label": "drug A"})
         calls, reply = match_grammar("cancel the timer", ST)
-        self.assertEqual(calls[0]["args"], {"action": "cancel"})
+        self.assertEqual(calls[0]["args"], {})
         self.assertEqual(reply, "Canceling the timer.")
         calls, _ = match_grammar("cancel timer", ST)
-        self.assertEqual(calls[0]["args"], {"action": "cancel"})
+        self.assertEqual(calls[0]["args"], {})
 
     def test_extend(self):
         calls, reply = match_grammar("extend the wash timer by 10 min", ST)
-        self.assertEqual(calls, [{"name": "manage_timers",
-                                  "args": {"action": "extend", "label": "wash", "minutes": 10}}])
+        self.assertEqual(calls, [{"name": "extend_timer",
+                                  "args": {"label": "wash", "minutes": 10}}])
         self.assertEqual(reply, "Extending the wash timer by 10 minutes.")
         calls, _ = match_grammar("extend wash timer by five minutes", ST)
         self.assertEqual(calls[0]["args"]["minutes"], 5)
         calls, _ = match_grammar("extend the timer by half an hour", ST)
-        self.assertEqual(calls[0]["args"], {"action": "extend", "minutes": 30})
+        self.assertEqual(calls[0]["args"], {"minutes": 30})
         calls, _ = match_grammar("extend drug A timer by twenty five min", ST)
         self.assertEqual(calls[0]["args"]["minutes"], 25)
 
@@ -377,7 +378,7 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(filter_timer_calls([m], "mark B2 done, start the timer"), [m])
 
     def test_manage_timers_kept(self):
-        m = {"name": "manage_timers", "args": {"action": "cancel"}}
+        m = {"name": "cancel_timer", "args": {}}
         self.assertEqual(filter_timer_calls([m], "cancel the timer"), [m])
 
     def test_multi_intent_to_spark(self):
@@ -400,7 +401,7 @@ class AskGateTests(unittest.TestCase):
     def test_surviving_call_no_ask(self):
         t = {"name": "set_timer", "args": {"minutes": 5}}
         self.assertFalse(needs_minutes_ask([t], "set a timer"))
-        m = {"name": "manage_timers", "args": {"action": "cancel"}}
+        m = {"name": "cancel_timer", "args": {}}
         self.assertFalse(needs_minutes_ask([m], "cancel the timer"))
 
     def test_cancel_stop_extend_never_ask(self):
@@ -550,7 +551,7 @@ class ExpandToolWellsTests(unittest.TestCase):
         self.assertEqual(out, [])
 
     def test_other_tools_untouched(self):
-        m = {"name": "manage_timers", "args": {"action": "list"}}
+        m = {"name": "cancel_timer", "args": {}}
         self.assertEqual(expand_tool_wells([m]), [m])
 
 
@@ -711,26 +712,32 @@ class PipLineTests(unittest.TestCase):
         self.assertFalse(is_failure_message("✓ C2 done"))
 
 
-class HonestReplyTests(unittest.TestCase):
-    def test_claim_without_tools(self):
-        self.assertEqual(honest_reply([], "B2 done."), "I didn't record anything.")
-        self.assertEqual(honest_reply([], "C3 excluded, noted."), "I didn't record anything.")
-        self.assertEqual(honest_reply([], "Got it, C7 and D7 are dropped."),
-                         "I didn't record anything.")
-        self.assertEqual(honest_reply([], "Which one — drop C7?"), "Which one — drop C7?")
-        self.assertEqual(honest_reply(None, "Timer started."), "I didn't record anything.")
+class UngroundedTargetTests(unittest.TestCase):
+    def test_wells_flagged(self):
+        self.assertEqual(ungrounded_targets("B2 done.")["wells"], {"B2"})
+        self.assertEqual(ungrounded_targets("Got it, C7 and D7 are dropped.")["wells"],
+                         {"C7", "D7"})
+        self.assertEqual(ungrounded_targets("Logged C2.")["wells"], {"C2"})
 
-    def test_logged_moved_claim(self):
-        self.assertEqual(honest_reply([], "Logged C2."), "I didn't record anything.")
-        self.assertEqual(honest_reply([], "Moved to step 4."), "I didn't record anything.")
+    def test_kinds_flagged(self):
+        self.assertTrue(ungrounded_targets("Timer started.")["timer"])
+        self.assertTrue(ungrounded_targets("Moved to step 4.")["step"])
+        self.assertTrue(ungrounded_targets("Saved the note.")["memo"])
 
-    def test_pass_through(self):
-        self.assertEqual(honest_reply([{"name": "mark_done"}], "B2 done."), "B2 done.")
-        self.assertEqual(honest_reply([], "Want me to log it?"), "Want me to log it?")
-        self.assertEqual(honest_reply([], "You got it!"), "You got it!")
+    def test_questions_pass(self):
+        empty = {"wells": set(), "timer": False, "step": False, "memo": False}
+        self.assertEqual(ungrounded_targets("Which one — drop C7?"), empty)
+        self.assertEqual(ungrounded_targets("Want me to log it?"), empty)
 
-    def test_fallback(self):
-        self.assertEqual(honest_reply([], "B2 done.", fallback="X"), "X")
+    def test_plain_smalltalk_passes(self):
+        empty = {"wells": set(), "timer": False, "step": False, "memo": False}
+        self.assertEqual(ungrounded_targets("You got it!"), empty)
+        self.assertEqual(ungrounded_targets("cool, thanks"), empty)
+
+    def test_mentioned_targets(self):
+        tg = mentioned_targets("note C3, timer for step 2")
+        self.assertEqual(tg["wells"], {"C3"})
+        self.assertTrue(tg["timer"] and tg["step"] and tg["memo"])
 
 
 class UIGrammarTests(unittest.TestCase):

@@ -149,23 +149,30 @@ with patch("httpx.AsyncClient", FakeClient):
     print("C5 ok: double cut is didnt_catch")
 
     # C6. write contracts record reported facts, never bench instructions.
-    descs = {t["name"]: t["description"] for t in api.TOOLS if t.get("type") == "function"}
-    assert "REPORTS" in descs["mark_done"] and "wash the remaining" in descs["mark_done"]
-    assert "bench instructions" in descs["exclude_well"]
-    assert "reports damage" in descs["record_redo"]
-    assert "next physical action" in descs["next_step"]
+    perf = next(t for t in api.TOOLS if t.get("name") == "perform")
+    assert "REPORTED finished only" in perf["description"]
+    assert "record nothing" in perf["description"]
+    assert "Never answer_card" in perf["description"]
+    assert "answer_card" not in api.PERFORM_ACTIONS
     print("C6 ok: report-vs-instruction contracts locked")
 
-    # C7. text claiming action without tools: didnt_act + asked target, 0 writes.
+    # C7. text naming utterance targets without tools: didnt_act + asked target, 0 writes.
     before = snapshot()
     FakeClient.spark_payload = msg("Marked C2–C8 done")
     r = c.post("/orchestrate", json={"text": "Marked C2–C8 done", "session": "c7"})
     j = r.json()
-    assert j["reply"] == "I didn't log anything — want me to?", j
+    assert j["reply"] == "I didn't log C2, C8 — want me to?", j
     assert j["tool_calls"] == [] and snapshot() == before, j
     assert api._SESSIONS["c7"]["turns"][-1]["asked"] == {
         "question": j["reply"], "target": "C2, C8"}, j
     print("C7 ok: phantom claim becomes didnt_act")
+
+    # C7b. text naming targets the utterance lacks: neutral ack, no asked.
+    FakeClient.spark_payload = msg("Nice, we're set on C2–C8")
+    j = c.post("/orchestrate", json={"text": "cool", "session": "c7b"}).json()
+    assert j["reply"] in variants("ack"), j
+    assert api._SESSIONS["c7b"]["turns"][-1]["asked"] == {}, j
+    print("C7b ok: unmentioned targets become ack")
 
     # C8. silent round 2 over notes: found phrase carries the read data.
     c.post("/orchestrate", json={"text": "note C4, edge effect", "session": "c8"})
@@ -207,7 +214,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert api._render_record("history", {"history": [{"action": "mark_done", "wells": ["C2"],
                                                             "ago": "5m"}]}) == ["mark_done C2 5m ago"]
     assert api._render_r1_reads(
-        [{"name": "find_free_wells", "args": {}, "call_id": "x"}],
+        [{"name": "read_record", "args": {"kind": "free_wells"}, "call_id": "x"}],
         {"x": '{"near": "C3", "free": ["C9", "C10"]}'}) == ["Free near C3: C9, C10"]
     print("C11 ok: executed map + renderer shapes")
 

@@ -414,3 +414,56 @@ One session, live muse-spark-1.3 minimal. rounds = spark calls this turn.
 | question | how many wells have I finished | 1423 | 1332 | 2 | spark | read_record,answer | Nice — 2 finished: C2–C3. |
 
 questions_under_4s: True, commands_under_3s: True
+
+## Read vs command latency (goals: questions <= 4000ms, commands <= 3000ms)
+
+One session, live muse-spark-1.3 minimal. rounds = spark calls this turn.
+
+| kind | turn | total_ms | spark_ms | rounds | route | calls | reply |
+|---|---|---|---|---|---|---|---|
+| command | mark C2 and C3 done please | 2193 | 2076 | 1 | spark | mark_done | Nice, C2–C3 are in. |
+| command | note C4, slight edge effect | 74 | 0 | 0 | grammar | add_note | Noted on C4. |
+| command | start the timer for C5, five minutes | 1417 | 1361 | 1 | spark | set_timer | 5 minutes on C5. I'll ping you. |
+| question | what is on C6 | 1715 | 1622 | 2 | spark | read_record | Got it — C6 is Drug A, still planned. |
+| question | read all my notes | 2031 | 1940 | 2 | spark | read_record | Got it — one note on C4: slight edge effect. |
+| question | how many wells have I finished | 2005 | 1904 | 2 | spark | read_record | Nice — 2 done, C2–C3. |
+
+questions_under_4s: True, commands_under_3s: True
+
+## 10-turn conversation (summary mode, goal: every turn <= 3000ms)
+
+One session, live muse-spark-1.3 minimal. total = HTTP round trip, spark = model time inside it.
+
+| turn | total_ms | spark_ms | route | calls | reply |
+|---|---|---|---|---|---|
+| mark C2 and C3 done please | 2060 | 1945 | spark | mark_done | Nice, C2–C3 are in. |
+| note C3, big bubbles near the edge | 77 | 0 | grammar | add_note | Noted on C3. |
+| start a 25 minute timer for C4 | 1510 | 1457 | spark | set_timer | 25 minutes on C4. I'll ping you. |
+| how many wells have I finished | 1494 | 1407 | spark | read_record | Got it — 2 done, C2 and C3. |
+| D5 looks cloudy, drop it from the run | 1588 | 1515 | spark | exclude_well | Drop D5? |
+| yes(confirm) | 2 | 0 | confirm | - | D5 excluded (looks cloudy) |
+| C6 has a bubble, redo it in a backup well | 3024 | 2955 | spark | read_record,exclude_well | Exclude C6? |
+| what is on C6 | 2588 | 2503 | spark | read_record | Got it — C6 is planned for Drug A, still to do. |
+| cancel the C4 timer | 81 | 0 | grammar | cancel_timer | Okay, C4 timer's off. |
+| mark C4 through C8 done | 2570 | 2518 | spark | mark_done | Got it — C4–C8 done. |
+
+all_under_3s: False
+
+## 10-turn conversation (summary mode, goal: every turn <= 3000ms)
+
+One session, live muse-spark-1.3 minimal. total = HTTP round trip, spark = model time inside it.
+
+| turn | total_ms | spark_ms | route | calls | reply |
+|---|---|---|---|---|---|
+| mark C2 and C3 done please | 1775 | 1691 | spark | mark_done | Nice, C2–C3 are in. |
+| note C3, big bubbles near the edge | 64 | 0 | grammar | add_note | Noted on C3. |
+| start a 25 minute timer for C4 | 1512 | 1462 | spark | set_timer | 25 minutes on C4. I'll ping you. |
+| how many wells have I finished | 3277 | 3195 | spark | read_record | Nice, you've got 2 in — C2–C3. |
+| D5 looks cloudy, drop it from the run | 1454 | 1388 | spark | exclude_well | Drop D5? |
+| yes(confirm) | 5 | 0 | confirm | - | D5 excluded (looks cloudy) |
+| C6 has a bubble, redo it in a backup well | 3054 | 2956 | spark | read_record,exclude_well | Exclude C6? |
+| what is on C6 | 1901 | 1831 | spark | read_record | Got it — C6 is planned Drug A. |
+| cancel the C4 timer | 77 | 0 | grammar | cancel_timer | Okay, C4 timer's off. |
+| mark C4 through C8 done | 2155 | 2101 | spark | mark_done | Got it — C4–C8 done. |
+
+all_under_3s: False

@@ -207,27 +207,19 @@ enum PipError: Error, LocalizedError {
 
 enum PipClient {
     /// Must match server API_VERSION (test_snapshot_schema pins both sides).
-    static let EXPECTED_API_VERSION = 2
+    static let EXPECTED_API_VERSION = 3
 
-    static func orchestrate(text: String, screen: String = "main",
-                            selectedWell: String = "", openSheet: String = "",
-                            runId: String = "") async throws -> OrchestrateResponse {
+    static func orchestrate(text: String) async throws -> OrchestrateResponse {
         var req = URLRequest(url: Config.baseURL.appending(path: "orchestrate"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: [
-            "text": text, "screen": screen,
-            "selected_well": selectedWell, "open_sheet": openSheet,
-            "run_id": runId,
-        ])
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
         let (data, resp) = try await URLSession.shared.data(for: req)
         try check(resp, data)
         return try JSONDecoder().decode(OrchestrateResponse.self, from: data)
     }
 
-    static func voice(wav: Data, screen: String = "main",
-                      selectedWell: String = "", openSheet: String = "",
-                      runId: String = "") async throws -> VoiceResponse {
+    static func voice(wav: Data) async throws -> VoiceResponse {
         let boundary = "----pip\(UUID().uuidString)"
         var body = Data()
         func append(_ s: String) { body.append(Data(s.utf8)) }
@@ -241,10 +233,6 @@ enum PipClient {
         append("Content-Type: audio/wav\r\n\r\n")
         body.append(wav)
         append("\r\n")
-        field("screen", screen)
-        field("selected_well", selectedWell)
-        field("open_sheet", openSheet)
-        field("run_id", runId)
         append("--\(boundary)--\r\n")
 
         var req = URLRequest(url: Config.baseURL.appending(path: "voice"))
@@ -256,8 +244,16 @@ enum PipClient {
         return try JSONDecoder().decode(VoiceResponse.self, from: data)
     }
 
-    static func confirm(cardId: String, ok: Bool) async throws -> ConfirmResponse {
-        try await post("confirm", ["card_id": cardId, "ok": ok])
+    static func inputAction(id: String, args: [String: Any] = [:]) async throws -> OrchestrateResponse {
+        var req = URLRequest(url: Config.baseURL.appending(path: "input"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "action": ["id": id, "args": args],
+        ])
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try check(resp, data)
+        return try JSONDecoder().decode(OrchestrateResponse.self, from: data)
     }
 
     static func editNote(id: String, text: String) async throws -> EditNoteResponse {

@@ -3,12 +3,32 @@
   "title": "Pip record snapshot",
   "description": "record.json shape as served by /record and /events. Top level and node identities are strict; nodes tolerate additive keys. Bump api_version on any change here.",
   "type": "object",
-  "required": ["epoch", "version", "plan", "step_index", "done", "excluded", "redo",
+  "required": ["epoch", "version", "view", "plan", "step_index", "done", "excluded", "redo",
                "notes", "tips", "timers", "stamps", "cards", "recent"],
   "properties": {
     "epoch": {"type": "string",
               "description": "Record lineage id: minted when record.json is created, carried across start/end, new only on data reset or server move. The app resets its stale guard on change."},
     "version": {"type": "integer"},
+    "view": {
+      "type": "object",
+      "required": ["current", "stack", "tab", "sheet"],
+      "properties": {
+        "current": {"type": "object",
+                    "required": ["screen", "target"],
+                    "properties": {"screen": {"type": "string"},
+                                   "target": {"type": "string"}}},
+        "stack": {"type": "array",
+                  "items": {"type": "object",
+                            "required": ["screen", "target"],
+                            "properties": {"screen": {"type": "string"},
+                                           "target": {"type": "string"}}}},
+        "tab": {"type": "string"},
+        "sheet": {"type": "object",
+                  "required": ["name", "target"],
+                  "properties": {"name": {"type": "string"},
+                                 "target": {"type": "string"}}}
+      }
+    },
     "run": {
       "type": ["object", "null"],
       "required": ["run_id", "started_at"],

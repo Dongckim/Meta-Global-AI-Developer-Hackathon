@@ -596,7 +596,7 @@ struct SetupView: View {
             do {
                 let data = try Data(contentsOf: url)
                 try? FileManager.default.removeItem(at: url)
-                let r = try await PipClient.voice(wav: data, screen: "setup")
+                let r = try await PipClient.voice(wav: data)
                 heard = r.transcript.isEmpty ? "(nothing heard)" : r.transcript
                 SpeechBus.shared.speak(r.speak ?? r.reply)
             } catch {

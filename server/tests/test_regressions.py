@@ -77,7 +77,7 @@ with patch("httpx.AsyncClient", FakeClient):
     r = c.post("/orchestrate", json={"text": "start the timer for C5, five minutes", "session": "r1"})
     assert "I'll ping you" in r.json()["messages"][0], r.json()
     FakeClient.spark_payload = {"id": "r1b", "output": [
-        fc("manage_timers", '{"action": "cancel", "label": "C5"}', "c2"),
+        fc("cancel_timer", '{"label": "C5"}', "c2"),
         fc("set_timer", '{"label": "x", "minutes": 2, "wells": "D5"}', "c3")]}
     r = c.post("/orchestrate", json={"text": "cancel C5, I need D5 for 2 minutes", "session": "r1"})
     j = r.json()
@@ -111,15 +111,15 @@ with patch("httpx.AsyncClient", FakeClient):
     summary = "You have 2 notes: C3 has big bubbles, C5 is sticky."
     ScriptClient.queue = [
         {"id": "r3a", "output": [fc("read_record", '{"kind": "notes"}', "c1")]},
-        {"id": "r3b", "output": [fc("answer", json.dumps({"text": summary}), "c2"),
-                                 fc("navigate", '{"screen": "main"}', "c3")]},
+        {"id": "r3b", "output": [fc("navigate", '{"screen": "main"}', "c3"),
+                                 {"type": "message", "content": [{"type": "output_text", "text": summary}]}]},
     ]
     with patch("httpx.AsyncClient", ScriptClient):
         r = c.post("/orchestrate", json={"text": "read all my notes", "session": "r3"})
     j = r.json()
     assert j["reply"] == f"{summary} Showing Bench.", j
-    assert [x["name"] for x in j["tool_calls"]] == ["read_record", "answer", "navigate"], j
-    assert j["ui"] == [{"action": "navigate", "screen": "main"}], j
+    assert [x["name"] for x in j["tool_calls"]] == ["read_record", "navigate"], j
+    assert api.store.r["view"]["current"]["screen"] == "main", j
     print("R3 ok: notes summary + list screen")
 
     # R4. "change C5's memo" edits that well's note, keeping history.

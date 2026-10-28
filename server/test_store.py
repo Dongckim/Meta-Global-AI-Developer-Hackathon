@@ -177,24 +177,24 @@ class StoreTest(unittest.TestCase):
         r = self.apply([T("set_timer", label="x", minutes=5, each=True)])
         self.assertEqual(len(self.s.r["timers"]), 8)
 
-    def test_cancel_extend_list(self):
-        r = self.apply([T("manage_timers", action="cancel", label="wash")])
+    def test_cancel_extend(self):
+        r = self.apply([T("cancel_timer", label="wash")])
         self.assertEqual(r["messages"], ["Hmm, I don't see a wash timer. Want me to start one? No timers running."])
         self.apply([T("set_timer", label="x", minutes=5, wells=["C1"])])
         self.apply([T("set_timer", label="x", minutes=5, wells=["C10"])])
-        r = self.apply([T("manage_timers", action="cancel")])
+        r = self.apply([T("cancel_timer")])
         self.assertTrue(r["messages"][0].startswith("Which timer should I cancel?"))
-        r = self.apply([T("manage_timers", action="cancel", label="C1")])
+        r = self.apply([T("cancel_timer", label="C1")])
         self.assertEqual(r["messages"], ["Okay, C1 timer's off."])
         self.assertEqual(len(self.s.r["timers"]), 1)
-        r = self.apply([T("manage_timers", action="extend", label="C10")])
+        r = self.apply([T("extend_timer", label="C10")])
         self.assertEqual(r["messages"], ["+5 min: drug A · C10 · 5 min (10 min)"])
-        r = self.apply([T("manage_timers", action="list")])
-        self.assertEqual(r["messages"], ["Timers: drug A · C10 · 5 min 10 min"])
+        d = self.s.read_record("timers")
+        self.assertEqual(len(d["timers"]), 1)
 
     def test_cancel_finished(self):
         self.apply([T("set_timer", label="x", minutes=0, wells=["C4"])])
-        r = self.apply([T("manage_timers", action="cancel", label="C4")])
+        r = self.apply([T("cancel_timer", label="C4")])
         self.assertEqual(r["messages"], ["That timer already finished."])
 
     def test_next_card_and_last(self):
@@ -360,14 +360,21 @@ class StoreTest(unittest.TestCase):
     def test_navigate_open_back(self):
         r = self.apply([T("navigate", screen="robot_preview")])
         self.assertEqual(r["messages"], ["Showing Robot preview."])
-        self.assertEqual(r["ui"], [{"action": "navigate", "screen": "robot_preview"}])
-        self.sess["screen"] = "well_card"
+        self.assertEqual(r["ui"], [])
+        self.assertEqual(self.s.r["view"]["current"],
+                         {"screen": "robot_preview", "target": ""})
         r = self.apply([T("open", target="C5")])
         self.assertEqual(r["messages"], ["Opened C5."])
-        self.assertEqual(r["ui"], [{"action": "open", "target": "C5", "sheet": "well_card"}])
+        self.assertEqual(self.s.r["view"]["sheet"],
+                         {"name": "well_card", "target": "C5"})
+        self.assertEqual(r["ui"], [{"action": "flash", "wells": ["C5"]}])
+        r = self.apply([T("back")])
+        self.assertEqual(r["messages"], ["Closed."])
+        self.assertEqual(self.s.r["view"]["sheet"], {"name": "", "target": ""})
         r = self.apply([T("back")])
         self.assertEqual(r["messages"], ["Back to Bench."])
-        self.assertEqual(r["ui"], [{"action": "back", "screen": "main"}])
+        self.assertEqual(self.s.r["view"]["current"]["screen"], "main")
+        self.assertEqual(self.s.r["view"]["stack"], [])
 
     def test_ui_failures(self):
         r = self.apply([T("navigate", screen="pod bay")])
@@ -389,10 +396,12 @@ class StoreTest(unittest.TestCase):
             T("mark_done", wells=["C2"]), T("exclude_well", well="C4"),
             T("record_redo", wells=["C9"]), T("add_note", target="C2", text="x"),
             T("save_tip", step_id="s", text="x"), T("set_timer", label="x", minutes=1),
-            T("manage_timers", action="list"), T("where_am_i"), T("next_step"),
+            T("cancel_timer", label="zzz"), T("where_am_i"), T("next_step"),
             T("show", view="plate"), T("make_robot"), T("read_record", kind="wells", filter="C2"),
-            T("find_free_wells", near="C2"), T("answer", text="x"),
+            T("read_record", kind="free_wells", filter="C2"),
             T("navigate", screen="main"), T("open", target="C5"), T("back"),
+            {"name": "answer_card", "args": {"card_id": next(iter(before)), "ok": True},
+             "from_model": True},
         ], origin="x")
         self.assertTrue(before <= set(self.s.r["cards"]))
 

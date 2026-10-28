@@ -53,6 +53,7 @@ CHECKS = [
 END_TURNS = [
     ("say", "mark C2 and C3 done please"),
     ("say", "note C2, looks fine"),
+    ("tap", ("open", {"target": "C5"})),
     ("say", "end the run"),
     ("confirm", None),  # answer the end_run card yes, like the app
 ]
@@ -60,6 +61,8 @@ END_TURNS = [
 END_CHECKS = [
     lambda r: ({"C2", "C3"} <= set(r["done"]), "C2,C3 done"),
     lambda r: (len(r["notes"]) >= 1, "note saved"),
+    lambda r: (r["view"]["sheet"] == {"name": "well_card", "target": "C5"},
+               "tap opens sheet"),
     lambda r: (len(r["cards"]) >= 1, "end card"),
     lambda r: (r.get("run") is None and r.get("cards") == {},
                "run ended, cards empty, home"),
@@ -77,6 +80,10 @@ def run_fake(be, strict, turns=TURNS, checks=CHECKS):
         if kind == "say":
             j = be.say(text, session="t10")
             label = text
+        elif kind == "tap":
+            action, args = text
+            j = be.tap(action, args, session="t10")
+            label = f"tap:{action}"
         else:
             j = be.answer(pending_card, True, session="t10")
             label = "yes(confirm)"

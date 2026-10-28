@@ -299,21 +299,21 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
     m = re.fullmatch(r"\s*cancel\s+(?:the\s+)?(.*?)\s*timer\s*", low)
     if m:
         label = text[m.start(1):m.end(1)].strip(" \t.,!?;:")
-        args = {"action": "cancel"}
+        args = {}
         if label:
             args["label"] = label
-        return [{"name": "manage_timers", "args": args}], f"Canceling {timer_who(label)}."
+        return [{"name": "cancel_timer", "args": args}], f"Canceling {timer_who(label)}."
     m = re.fullmatch(r"\s*extend\s+(?:the\s+)?(.*?)\s*timer\s+by\s+(.+?)(?:\s*min(?:ute)?s?)?\s*", low)
     if m:
         minutes = words_to_minutes(text[m.start(2):m.end(2)])
         if minutes is not None:
             label = text[m.start(1):m.end(1)].strip(" \t.,!?;:")
-            args = {"action": "extend", "minutes": minutes}
+            args = {"minutes": minutes}
             if label:
                 args["label"] = label
             n = int(minutes) if float(minutes).is_integer() else minutes
             who = timer_who(label)
-            return [{"name": "manage_timers", "args": args}], f"Extending {who} by {n} minutes."
+            return [{"name": "extend_timer", "args": args}], f"Extending {who} by {n} minutes."
     if re.fullmatch(r"\s*back[?!]?\s*", low):
         return [{"name": "back", "args": {}}], "Back."
     m = re.fullmatch(r"\s*show\s+([a-h]\d{1,2})[?!]?\s*", low)
@@ -698,7 +698,7 @@ def needs_minutes_ask(tool_calls, text):
         _TIMER_WORD.search(text or "")
         and _ASK_VERB.search(text or "")
         and not _NO_ASK.search(text or "")
-        and not any(c.get("name") in ("set_timer", "manage_timers") for c in tool_calls)
+        and not any(c.get("name") in ("set_timer", "cancel_timer", "extend_timer") for c in tool_calls)
     )
 
 
@@ -833,18 +833,31 @@ def join_wells_ranges(wells) -> str:
     return ", ".join(f"{r}{a}" if a == b else f"{r}{a}–{r}{b}" for r, a, b in runs)
 
 
-_STATE_CLAIM = re.compile(
-    r"\b(noted|done|excluded|started|recorded|saved|finished|completed|canceled|cancelled"
-    r"|logged|moved|dropped|drop)\b",
-    re.IGNORECASE,
-)
+_TIMER_WORD = re.compile(r"\btimers?\b", re.IGNORECASE)
+_STEP_REF = re.compile(r"\bstep\s*\d+|\bnext step\b", re.IGNORECASE)
+_MEMO_REF = re.compile(r"\bnotes?\b|\bmemos?\b", re.IGNORECASE)
 
 
-def honest_reply(tool_calls, reply, fallback="I didn't record anything."):
-    """Replies may only claim results the tools actually produced."""
-    if not tool_calls and "?" not in (reply or "") and _STATE_CLAIM.search(reply or ""):
-        return fallback
-    return reply
+def mentioned_targets(text) -> dict:
+    """Record targets named in free text."""
+    t = text or ""
+    return {
+        "wells": find_well_mentions(t),
+        "timer": bool(_TIMER_WORD.search(t)),
+        "step": bool(_STEP_REF.search(t)),
+        "memo": bool(_MEMO_REF.search(t)),
+    }
+
+
+def ungrounded_targets(reply) -> dict:
+    """Targets a zero-tool-call reply names but the turn never touched.
+
+    No writes and no reads happened, so every named target is
+    ungrounded. Questions claim nothing and pass (empty sets).
+    """
+    if "?" in (reply or ""):
+        return {"wells": set(), "timer": False, "step": False, "memo": False}
+    return mentioned_targets(reply)
 
 
 def is_failure_message(s: str) -> bool:

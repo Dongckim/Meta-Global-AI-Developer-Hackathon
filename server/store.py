@@ -205,16 +205,26 @@ class RecordStore:
             if "epoch" not in self.r:
                 self.r["epoch"] = uuid.uuid4().hex[:16]
                 self._save()
+            if "view" not in self.r:
+                self.r["view"] = self._default_view(bool(self.r.get("run")))
+                self._save()
             return
         self.r = self._fresh_record({"conditions": {}, "steps": [], "backups": []})
         self.r["epoch"] = uuid.uuid4().hex[:16]
         self._save()
 
     @staticmethod
+    def _default_view(has_run: bool) -> dict:
+        return {"current": {"screen": "main" if has_run else "home", "target": ""},
+                "stack": [], "tab": "",
+                "sheet": {"name": "", "target": ""}}
+
+    @staticmethod
     def _fresh_record(plan: dict, current: int = 1, run: dict | None = None) -> dict:
         steps = plan.get("steps", []) if isinstance(plan, dict) else []
         return {
             "version": 0,
+            "view": RecordStore._default_view(bool(run)),
             "run": run,
             "plan": plan,
             "step_index": max(min(current - 1, len(steps) - 1), 0) if steps else 0,
@@ -246,23 +256,33 @@ class RecordStore:
             docs = [active] + [d for d in docs if d.get("run_id") != active["run_id"]]
         return docs
 
-    def _viewing_run(self, session: dict) -> dict | None:
-        """Session-selected run doc; stale ids heal to None (active)."""
-        rid = (session or {}).get("run_id")
-        if not rid:
+    def _viewing_run(self) -> dict | None:
+        """view-target run doc, or None for the active scope."""
+        v = (self.r.get("view") or {}).get("current") or {}
+        if v.get("screen") != "run_view" or not v.get("target"):
             return None
-        doc = runlog.resolve(rid, self.all_run_docs())
-        if doc is None:
-            session["run_id"] = None
-        return doc
+        return runlog.resolve(v["target"], self.all_run_docs())
+
+    def _push_view(self, screen: str, target: str = "") -> None:
+        """Server-owned navigation: push current, show the new screen."""
+        v = self.r["view"]
+        new = {"screen": screen, "target": target or ""}
+        if v["current"] == new:
+            v["sheet"] = {"name": "", "target": ""}
+            return
+        v["stack"].append(dict(v["current"]))
+        v["current"] = new
+        v["sheet"] = {"name": "", "target": ""}
 
     def _navigate_locked(self, res: dict, session: dict, screen: str, target) -> None:
-        """Navigate with target validation. run_id lives only on run_view."""
+        """Navigate with target validation; the app renders view."""
         t = target.strip() if isinstance(target, str) else ""
         if screen == "run_view":
             self._open_run(res, session, t or "latest")
             return
-        session["run_id"] = None
+        if screen == "protocol_review" and not self.r.get("draft"):
+            res["messages"].append("No draft open — import a protocol from Home.")
+            return
         if screen == "protocol_detail":
             doc = lib.get(t, self.root) if t else None
             if doc is None and t:
@@ -272,7 +292,7 @@ class RecordStore:
                     "I couldn't open that protocol: which one?" if not t
                     else f"I couldn't find the {t} protocol.")
                 return
-            res["ui"].append({"action": "navigate", "screen": screen, "target": doc["id"]})
+            self._push_view(screen, doc["id"])
             res["messages"].append(f"Showing {doc.get('name')}.")
             return
         if screen == "protocol_source":
@@ -281,10 +301,10 @@ class RecordStore:
             if not pid or lib.get(pid, self.root) is None:
                 res["messages"].append("I couldn't open that original: which protocol?")
                 return
-            res["ui"].append({"action": "navigate", "screen": screen, "target": t})
+            self._push_view(screen, t)
             res["messages"].append("Showing the original.")
             return
-        res["ui"].append({"action": "navigate", "screen": screen})
+        self._push_view(screen)
         res["messages"].append(f"Showing {title_of(screen)}.")
 
     def _open_protocol(self, res: dict, session: dict, selector: str) -> None:
@@ -302,14 +322,12 @@ class RecordStore:
                 "No runs yet — start one from Home." if not docs
                 else "I couldn't find that run.")
             return
-        session["run_id"] = doc["run_id"]
-        res["ui"].append({"action": "navigate", "screen": "run_view",
-                          "target": doc["run_id"]})
+        self._push_view("run_view", doc["run_id"])
         res["messages"].append(f"Showing run {doc['run_id']}.")
 
     def _open_source(self, res: dict, session: dict, t: str) -> None:
         """'The original' for the current (or named) step of the viewing run."""
-        doc = self._viewing_run(session or {})
+        doc = self._viewing_run()
         if doc is not None:
             rec, pid = doc.get("record") or {}, doc.get("protocol_id")
         else:
@@ -394,6 +412,7 @@ class RecordStore:
             doc = lib.save(plan, proto.resolve_name(draft),
                            (draft.get("meta") or {}).get("source") or "", self.root)
             self.r.pop("draft", None)
+            self._pop_view()
             self._commit()
             return True, doc
 
@@ -435,12 +454,22 @@ class RecordStore:
     def save_draft(self, draft: dict) -> None:
         with self._lock:
             self.r["draft"] = draft
+            if self.r["view"]["current"]["screen"] != "protocol_review":
+                self._push_view("protocol_review")
             self._commit()
 
     def clear_draft(self) -> None:
         with self._lock:
             self.r.pop("draft", None)
+            self._pop_view()
             self._commit()
+
+    def _pop_view(self) -> None:
+        """Leave the current screen without navigating (draft closed)."""
+        v = self.r["view"]
+        if v.get("stack"):
+            v["current"] = v["stack"].pop()
+        v["sheet"] = {"name": "", "target": ""}
 
     def start_run(self, session: dict):
         """Draft -> library, then start (cards when a run is active)."""
@@ -674,9 +703,7 @@ class RecordStore:
             "excluded": join_wells_ranges(self.r["excluded"]),
             "timers": timers,
             "recent": self.r["recent"][-5:],
-            "current_screen": session.get("screen", "main"),
-            "selected_well": session.get("selected_well", ""),
-            "open_sheet": session.get("open_sheet", ""),
+            "current_screen": (self.r.get("view") or {}).get("current", {}).get("screen", "main"),
             "pending_cards": len(self.r["cards"]),
             "draft_open": bool(self.r.get("draft")),
         }
@@ -794,8 +821,8 @@ class RecordStore:
         return res
 
     RUN_WRITES = frozenset({"mark_done", "exclude_well", "record_redo", "add_note",
-                                "edit_note", "save_tip", "set_timer", "manage_timers",
-                                "next_step", "make_robot", "end_run"})
+                                "edit_note", "save_tip", "set_timer", "cancel_timer",
+                                "extend_timer", "next_step", "make_robot", "end_run"})
 
     def _apply_call(self, call, source, origin, route, session, res, force: bool,
                     evidence=None):
@@ -804,8 +831,19 @@ class RecordStore:
         now = time.time()
         if evidence is None:
             evidence = build_evidence(origin, "", frozenset(), "")
+        if name == "answer_card":
+            if call.get("from_model"):
+                res["messages"].append("I couldn't do that.")
+                return
+            ok = args.get("ok", True)
+            if not isinstance(ok, bool):
+                ok = str(ok).strip().lower() not in ("no", "cancel", "false", "0", "dismiss")
+            message, fresh, _ = self._confirm_locked(args.get("card_id", ""), ok, source, session)
+            res["messages"].append(message)
+            res["cards"] += fresh
+            return
         if not force and name in self.RUN_WRITES:
-            viewing = self._viewing_run(session)
+            viewing = self._viewing_run()
             if viewing is not None and (viewing.get("run_id") != (self.r.get("run") or {}).get("run_id")):
                 res["messages"].append("That run is finished — read only.")
                 return
@@ -993,23 +1031,16 @@ class RecordStore:
                     self._single_timer(res, minutes, on_done, [w], source, now, force, session)
             else:
                 self._single_timer(res, minutes, on_done, explicit or ws or None, source, now, force, session)
-        elif name == "manage_timers":
+        elif name == "cancel_timer":
             self._purge(now)
-            action = str(args.get("action") or "").lower()
             label = args.get("label")
             label = label.strip() if isinstance(label, str) else None
-            if action == "list":
-                if not self.r["timers"]:
-                    res["messages"].append("No running timers")
-                else:
-                    bits = [f"{t['label']} {fmt_minutes(t['minutes'])} min" for t in self.r["timers"]]
-                    res["messages"].append("Timers: " + ", ".join(bits))
-            elif action == "cancel":
-                self._cancel(res, label, source, now, session)
-            elif action == "extend":
-                self._extend(res, label, args.get("minutes"), source, now)
-            else:
-                res["messages"].append(f"Unknown timer action: {args.get('action')}")
+            self._cancel(res, label, source, now, session)
+        elif name == "extend_timer":
+            self._purge(now)
+            label = args.get("label")
+            label = label.strip() if isinstance(label, str) else None
+            self._extend(res, label, args.get("minutes"), source, now)
         elif name == "where_am_i":
             # Grammar-only canned read (grammar has no round 2); the model reads steps instead.
             about = args.get("about")
@@ -1043,6 +1074,9 @@ class RecordStore:
         elif name == "show":
             view = args.get("view", "?")
             res["messages"].append(f"Viewing: {view} {args.get('target')}" if args.get("target") else f"Viewing: {view}")
+            wells = parse_wellref(args.get("target")) if args.get("target") else []
+            if wells:
+                res["ui"].append({"action": "flash", "wells": wells})
         elif name == "navigate":
             raw = args.get("screen")
             screen = canonical(raw) if isinstance(raw, str) else None
@@ -1080,7 +1114,8 @@ class RecordStore:
                 res["messages"].append("Opening the importer.")
                 return
             if is_well(t):
-                res["ui"].append({"action": "open", "target": t.upper(), "sheet": "well_card"})
+                self.r["view"]["sheet"] = {"name": "well_card", "target": t.upper()}
+                res["ui"].append({"action": "flash", "wells": [t.upper()]})
                 res["messages"].append(f"Opened {t.upper()}.")
                 return
             screen = canonical(t)
@@ -1092,40 +1127,33 @@ class RecordStore:
                 self._navigate_locked(res, session, "protocol_detail", proto_doc["id"])
                 return
             res["messages"].append(f"I couldn't open {t}: not a plate well or screen.")
+        elif name == "set_tab":
+            tab = args.get("tab")
+            if tab in ("liquids", "steps", "layout"):
+                self.r["view"]["tab"] = tab
+            else:
+                res["messages"].append("I couldn't open that tab.")
         elif name == "back":
-            here = session.get("screen", "main")
-            if here not in SCREENS:
-                here = "main"
-            parent = parent_of(here)
-            if parent == here:
-                res["messages"].append("Already on the main screen.")
+            v = self.r["view"]
+            if (v.get("sheet") or {}).get("name"):
+                v["sheet"] = {"name": "", "target": ""}
+                res["messages"].append("Closed.")
                 return
-            if parent != "run_view":
-                session["run_id"] = None
-            res["ui"].append({"action": "back", "screen": parent})
-            res["messages"].append(f"Back to {title_of(parent)}.")
-        elif name == "end_run":
-            self._card(res, "end_run", say("end_run", session), None,
-                       {"op": "end_run",
-                        "run_id": (self.r.get("run") or {}).get("run_id")})
+            if v.get("stack"):
+                v["current"] = v["stack"].pop()
+                res["messages"].append(f"Back to {title_of(v['current']['screen'])}.")
+                return
+            here = (v.get("current") or {}).get("screen", "main")
+            res["messages"].append("Already on the main screen." if here == "main"
+                                   else f"Already on {title_of(here)}.")
         elif name == "make_robot":
             res["messages"].append("Building robot protocol…")
             res["info"]["robot"] = True
+            self._push_view("robot_preview")
         elif name == "read_record":
             if args.get("kind") not in self.READ_KINDS:
                 res["messages"].append("I couldn't read that: unknown section.")
             # Success is silent; the data rides the call outcome.
-        elif name == "find_free_wells":
-            near = args.get("near")
-            if not isinstance(near, str) or not parse_wellref(near):
-                res["messages"].append(invalid_message([near], session))
-        elif name == "answer":
-            text = args.get("text")
-            if not isinstance(text, str) or not text.strip():
-                res["info"]["dropped"] += 1
-                res["info"]["drop_reasons"].append({"call": name, "args": args, "reason": "missing text"})
-            else:
-                res["messages"].append(text.strip()[:200])
         elif name == "edit_draft":
             draft = self.r.get("draft")
             parsed = proto.parse_draft_path(args.get("path"))
@@ -1260,6 +1288,7 @@ class RecordStore:
             return "That card is gone.", [], None
         if not ok:
             self._commit()
+            self._refresh_card_output(card, ok, "Canceled.", session)
             return "Canceled.", [], card
         p = card.get("payload") or {}
         op = p.get("op")
@@ -1308,11 +1337,24 @@ class RecordStore:
         else:
             res["messages"].append("That card is gone.")
         self._commit()
-        return " ".join(res["messages"]) or "Done.", res["cards"], card
+        message = " ".join(res["messages"]) or "Done."
+        self._refresh_card_output(card, ok, message, session)
+        return message, res["cards"], card
+
+    @staticmethod
+    def _refresh_card_output(card, ok: bool, message: str, session: dict) -> None:
+        """Chain mode: bind the answered card's call to its outcome."""
+        cid = (card.get("payload") or {}).get("_call_id") if card else None
+        if not cid:
+            return
+        for p in session.get("pending_outputs") or []:
+            if p["call_id"] == cid:
+                p["output"] = json.dumps(
+                    {"ok": ok, "message": message if ok else "declined by user"})
 
     # --- memos / recent / timers ---
 
-    READ_KINDS = ("wells", "notes", "timers", "steps", "history", "source")
+    READ_KINDS = ("wells", "notes", "timers", "steps", "history", "source", "free_wells")
 
     def filter_wells(self, filt: str, rec: dict | None = None) -> list[str]:
         """Well range, condition key/label, 'all', or blank (= current step)."""
@@ -1327,28 +1369,28 @@ class RecordStore:
                 return sort_wells((g or {}).get("wells", []))
         return parse_wellref(f)
 
-    def _read_scope(self, run, session: dict | None):
-        """(record, run_id|None, error|None) for run selectors + session."""
-        sel = run if isinstance(run, str) and run.strip() else (session or {}).get("run_id")
-        if not sel:
-            return self.r, (self.r.get("run") or {}).get("run_id"), None
-        doc = runlog.resolve(sel.strip(), self.all_run_docs())
+    def _read_scope(self):
+        """(record, run_id|None): the viewing run, else the active record."""
+        doc = self._viewing_run()
         if doc is None:
-            return None, None, "I couldn't find that run."
-        rec = doc.get("record") or {}
-        return rec, doc.get("run_id"), None
+            return self.r, (self.r.get("run") or {}).get("run_id")
+        return doc.get("record") or {}, doc.get("run_id")
 
-    def read_record(self, kind: str, filt="", limit=10, run=None, session=None) -> dict:
-        """One free read over the active or a selected run's record."""
+    def read_record(self, kind: str, filt="", limit=10) -> dict:
+        """One free read over the viewing (or active) run's record."""
         n = _num(limit)
         n = 10 if n is None else max(1, min(50, int(n)))
         f = filt.strip() if isinstance(filt, str) else ""
         if kind not in self.READ_KINDS:
             return {"error": f"unknown kind: {kind}. Use {', '.join(self.READ_KINDS)}."}
-        rec, rid, err = self._read_scope(run, session)
-        if err:
-            return {"error": err}
+        rec, rid = self._read_scope()
         rec = rec or {}
+        if kind == "free_wells":
+            near = f or "A1"
+            if not parse_wellref(near):
+                return {"error": f"{near} isn't on the plate."}
+            return {"run": rid, "near": near.strip().upper(),
+                    "free": self.find_free_wells(near, n)}
         if kind == "wells":
             return {"run": rid,
                     "wells": [self.get_well_data(w, rec) for w in self.filter_wells(f, rec)][:n]}

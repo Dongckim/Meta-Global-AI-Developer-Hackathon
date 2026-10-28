@@ -100,3 +100,20 @@ Accuracy: 10/10. One session, fresh record.
 | What is on C8 | 1860 | read_record,answer | y | Nice — C8 is drug A, planned, notes: sticky edges, looks weird, bubble |
 | Mark C8 done | 806 | mark_done | y | Nice, C8 are in. |
 | Go to the robot preview | 1149 | navigate | y | Showing Robot preview. |
+
+## Write-vs-view tool choice (live muse-spark-1.3 minimal)
+
+Accuracy: 10/10. One session, fresh record.
+
+| turn | total_ms | calls | pass | reply |
+|---|---|---|---|---|
+| Note C8, sticky edges | 79 | add_note | y | Noted on C8. |
+| I want to make notes on C8 | 1675 | - | y | What should I write on C8? |
+| Show me C8 | 1694 | open | y | Opened C8. |
+| C8 looks weird | 2808 | add_note | y | Got it — noted on C8. |
+| Open C8 and note bubbles | 3796 | open,add_note | y | Opened C8. Written down for C8. |
+| Let me see the timers | 1251 | read_record | y | Got it — no timers running right now. |
+| C8 is contaminated, exclude it | 1137 | exclude_well | y | Drop C8? |
+| What is on C8 | 2106 | read_record | y | Got it — C8 has sticky edges, looks weird, bubbles. |
+| Mark C8 done | 1843 | mark_done | y | Nice, C8 are in. |
+| Go to the robot preview | 1648 | navigate | y | Showing Robot preview. |

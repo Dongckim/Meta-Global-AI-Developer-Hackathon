@@ -34,7 +34,8 @@ from server.grammar import (
     final_pip_line,
     find_well_mentions,
     grounded,
-    honest_reply,
+    mentioned_targets,
+    ungrounded_targets,
     is_failure_message,
     mark_each_timers,
     match_card_answer,
@@ -50,7 +51,6 @@ from server.grammar import (
 )
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
-from server.screens import canonical as canonical_screen
 from server import library as lib
 from server import protocol as proto
 from server import runs as runlog
@@ -68,7 +68,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 2
+API_VERSION = 3
 
 BASE_URL = "https://api.meta.ai/v1"
 SPARK_MODEL = "muse-spark-1.3"
@@ -99,19 +99,18 @@ SYSTEM = (
     "do the Pip-side part (timer, guidance) or ask. "
     "If no tool fits (thanks, greeting), answer in one short sentence. "
     "Text beside tool calls is ignored. "
-    "A run-plan draft may be open (draft_open): change it only with edit_draft "
-    "using exact paths from the draft, never with record tools. "
+    "A run-plan draft may be open (draft_open): change it only with perform edit_draft "
+    "using exact paths from the draft, never with record actions. "
     "Wells are WellRefs (\"C2-C8\"). \"Those\" and \"it\" refer to recent wells. "
     "One set_timer per distinct duration; the server fans each out per well. "
     "Ground every value in this message, the plan, or read results. "
-    "For questions about the record, call read_record once, then answer(text) briefly for speech. "
-    "If the list is long, navigate to show it all and summarize aloud. "
-    "After a write, the screen updates itself; never call open to confirm. "
+    "For questions about the record, call read_record once, then answer briefly for speech. "
+    "If the list is long, perform navigate to show it all and summarize aloud. "
+    "After a write, the screen updates itself; never open to confirm. "
     "Ask the user with ask(question) only when you must. "
     "asked: is your last question; this message may answer it. "
     "Emit direct calls in run order; if a later step needs an earlier result, do only the first step now. "
-    "For another or backup well, call find_free_wells first, then act on the first candidate at once (redo: exclude_well + record_redo); the server confirms via cards. "
-    "Robot protocol: make_robot."
+    "For another or backup well, read free_wells first, then act on the first candidate at once (redo: exclude_well + record_redo); the server confirms via cards."
 )
 if WEB_SEARCH_ENABLED:
     SYSTEM += " For factual questions use web_search, then ask(question) offering to attach."
@@ -144,194 +143,67 @@ def _tool(name: str, desc: str, props: dict) -> dict:
 
 WELLREF = {"type": "string", "description": 'WellRef: "C5" | "C2-C8" | "C2,C5,C7"'}
 
+#: Actions the model may perform. answer_card is deliberately absent: only
+#: taps and the voice card discriminator emit it (pinned by test).
+PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
+                   "edit_note", "save_tip", "set_timer", "cancel_timer",
+                   "extend_timer", "next_step", "end_run", "show", "navigate",
+                   "open", "back", "make_robot", "edit_draft"]
+
 TOOLS = [
-    _tool("mark_done",
-          "Use when the user REPORTS wells finished (done, finished, added, I put, washed). "
-          "Don't use for instructions about bench work to do ('wash the remaining', 'add drug A') "
-          "— record nothing; guide or ask instead. "
-          "Example: 'C2 to C8 done'.",
-          {"wells": WELLREF}),
     _tool(
-        "exclude_well",
-        "Use when the user drops a well from the run. "
-        "Don't use for redo (use record_redo), done (use mark_done), "
-        "or bench instructions ('wash C6'). "
-        "Example: 'C3 looks cloudy, drop it'.",
+        "perform",
+        "Do one bench action per call; emit in run order. "
+        "mark_done{wells}: REPORTED finished only (done/finished/added/I put); "
+        "bench instructions (wash/add/do) record nothing. "
+        "exclude_well{well,reason?}; record_redo{wells,note?} (+exclude when elsewhere); "
+        "add_note{target,text} (stated observation; nothing to write -> ask); "
+        "edit_note{well?,text}; save_tip{step_id,text}; "
+        "set_timer{minutes,wells?,on_done?} (minutes stated, else ask); "
+        "cancel_timer{label?}; extend_timer{label?,minutes?} (+5 default); "
+        "next_step; end_run; show{view?,target?}; navigate{screen,target?}; "
+        "open{target} (well/screen/run/original/importer); back; make_robot; "
+        "edit_draft{path,value} (draft_open only). Never answer_card. "
+        "Screens: home, setup, protocol_detail, run_view(+target), "
+        "protocol_source(+target), protocol_review, main, well_card, robot_preview. "
+        "Backup well: read free_wells first, then act on the first candidate at once.",
         {
-            "well": WELLREF,
-            "reason": _opt({"type": "string", "description": "Why, if stated"}),
-        },
-    ),
-    _tool(
-        "record_redo",
-        "Use when the user reports damage needing a rerun. "
-        "Don't use without excluding the damaged well when redoing elsewhere. "
-        "Don't use for run-ahead instructions ('run the next ones'). "
-        "Example: 'C3 has a bubble, redo it in a backup well'.",
-        {"wells": WELLREF, "note": _opt({"type": "string", "description": "What went wrong"})},
-    ),
-    _tool(
-        "add_note",
-        "Use when the user states an observation to record on a well or step. "
-        "Don't use when there is nothing to write ('I want to make notes on C8') — "
-        "ask what to write instead. "
-        "Example: 'Note C8, sticky edges'.",
-        {
-            "target": {"type": "string", "description": 'WellRef, or a step/sample name. "C8"'},
-            "text": {"type": "string", "description": "Clean one-line memo of what was said"},
-        },
-    ),
-    _tool(
-        "edit_note",
-        "Use when the user corrects a note. "
-        "Don't use for new notes (use add_note). "
-        "Example: 'change C5's memo, no longer sticky'.",
-        {
-            "well": _opt({"type": "string", "description": 'WellRef, if stated. "C5"'}),
-            "text": {"type": "string", "description": "Replacement memo text"},
-        },
-    ),
-    _tool(
-        "save_tip",
-        "Use when the user states a bench tip for a step, or confirms attaching a searched answer. "
-        "Don't use for well observations (use add_note). "
-        "Example: 'attach it to step 3'.",
-        {"step_id": {"type": "string"}, "text": {"type": "string"}},
-    ),
-    _tool(
-        "set_timer",
-        "Use when the user starts a countdown with stated minutes. "
-        "Don't use without minutes — ask instead. "
-        "Don't use to cancel or extend (use manage_timers). "
-        "Example: 'two minutes for C7'.",
-        {
-            "label": {"type": "string"},
-            "minutes": {"type": "number", "description": "Minutes from now"},
-            "on_done": _opt({"type": "string", "description": "Next action, if stated"}),
+            "action": {"type": "string", "enum": PERFORM_ACTIONS},
             "wells": _opt(WELLREF),
+            "well": _opt(WELLREF),
+            "target": _opt({"type": "string"}),
+            "text": _opt({"type": "string"}),
+            "minutes": _opt({"type": "number"}),
+            "label": _opt({"type": "string"}),
+            "note": _opt({"type": "string"}),
+            "reason": _opt({"type": "string"}),
+            "screen": _opt({"type": "string"}),
+            "path": _opt({"type": "string"}),
+            "value": _opt({"type": "string"}),
+            "step_id": _opt({"type": "string"}),
+            "on_done": _opt({"type": "string"}),
+            "view": _opt({"type": "string"}),
         },
     ),
     _tool(
-        "manage_timers",
-        "Use to list, cancel, or extend timers. Extend adds 5 min unless minutes given. "
-        "Don't use to start one (use set_timer). "
-        "Example: 'cancel the wash timer'.",
+        "read_record",
+        "Use when you need record facts to answer or decide. "
+        "kinds: wells, notes, timers, steps, history, source (step quote+page), "
+        "free_wells (backup candidates near a WellRef). "
+        "Don't use when the state you have already answers it.",
         {
-            "action": {"type": "string", "description": "list, cancel, or extend"},
-            "label": _opt({"type": "string", "description": "Timer label"}),
-            "minutes": _opt({"type": "number", "description": "Minutes to add"}),
-        },
-    ),
-    _tool("next_step",
-          "Use when the user moves to the next step. "
-          "Don't use to ask what the next step is (read steps instead). "
-          "Don't use for the next physical action ('do the next wash'). "
-          "Example: 'move to step 4'.", {}),
-    _tool(
-        "show",
-        "Use when the user wants something highlighted on screen. "
-        "Don't use after a write — the screen updates itself. "
-        "Example: 'show column 8'.",
-        {
-            "view": {"type": "string", "description": "plate, timer, protocol"},
-            "target": _opt({"type": "string", "description": 'WellRef/step, if any. "C8"'}),
+            "kind": {"type": "string", "enum": ["wells", "notes", "timers", "steps",
+                                                "history", "source", "free_wells"]},
+            "filter": _opt({"type": "string",
+                            "description": "WellRef, condition, step, or label; blank for natural scope"}),
+            "limit": _opt({"type": "integer", "description": "Max entries (default 10)"}),
         },
     ),
     _tool(
         "ask",
         "Use when you must ask the user something to proceed. "
-        "Don't use when you can act or answer already. "
-        "Example: 'Which well?'.",
+        "Don't use when you can act or answer already.",
         {"question": {"type": "string"}},
-    ),
-    _tool("make_robot",
-          "Use when the user wants the robot protocol built. "
-          "Don't use for anything else. "
-          "Example: 'make the robot protocol'.", {}),
-    _tool(
-        "read_record",
-        "Use when you need record facts to answer or decide. "
-        "kind source reads a step's original quote and page (filter blank "
-        "for the current step, or a step number). "
-        "Don't use when the state you have already answers it. "
-        "Example: 'what is on C6'.",
-        {
-            "kind": {"type": "string", "enum": ["wells", "notes", "timers", "steps", "history", "source"]},
-            "filter": _opt({"type": "string",
-                            "description": "WellRef, condition, step, or label; blank for natural scope"}),
-            "limit": _opt({"type": "integer", "description": "Max entries (default 10)"}),
-            "run": _opt({"type": "string",
-                         "description": "Run id, latest, today, yesterday, or date; blank for current scope"}),
-        },
-    ),
-    _tool(
-        "find_free_wells",
-        "Use when the user wants another or backup well. "
-        "After the lookup, act on the first candidate at once (redo: exclude_well + record_redo); "
-        "the server confirms via cards, so don't ask which candidate. Ask only if none. "
-        "A range near searches past its end. Don't guess free wells yourself. "
-        "Example: 'redo it in a backup well'.",
-        {
-            "near": {"type": "string", "description": 'Reference WellRef. "C3"'},
-            "count": _opt({"type": "integer", "description": "How many (default 3)"}),
-        },
-    ),
-    _tool(
-        "answer",
-        "Use to answer the user's question briefly after reading. "
-        "Don't use beside a write — the write wins. "
-        "Don't use to narrate tool calls. "
-        "Example: 'Yes, 6 of 5 left.'.",
-        {"text": {"type": "string"}},
-    ),
-    _tool(
-        "navigate",
-        "Use when the user asks to go somewhere (go to). "
-        "Screens: home (protocol library, Import, past runs), "
-        "setup (first-run checklist), "
-        "protocol_detail (one protocol, Start new run), "
-        "run_view (a past run; needs target), "
-        "protocol_source (the original PDF; needs target), "
-        "protocol_review (the open draft), main (the bench), "
-        "well_card, robot_preview. "
-        "Don't use to confirm a write — the screen updates itself. "
-        "Example: 'go to the robot preview'.",
-        {"screen": {"type": "string", "enum": SCREEN_IDS,
-                    "description": "Screen id from the registry"},
-         "target": _opt({"type": "string",
-                         "description": "run_id, protocol id, or #fragment for the screen"})},
-    ),
-    _tool(
-        "open",
-        "Use when the user asks to view something (open, show, let me see). "
-        "Targets: WellRef, a screen name, 'the original' (protocol source "
-        "for the current step), yesterday's / latest run, "
-        "the importer (file picker). "
-        "Don't use after a write — the screen shows it. "
-        "Example: 'open C8'.",
-        {"target": {"type": "string", "description": "WellRef, screen name, source fragment, or run selector"}},
-    ),
-    _tool("back",
-          "Use when the user says back. "
-          "Don't use after other actions in the same turn. "
-          "Example: 'back'.", {}),
-    _tool("end_run",
-          "Use when the user says the run is over (end the run, finish). "
-          "Don't use to pause mid-run. "
-          "Example: 'end the run'.", {}),
-    _tool(
-        "edit_draft",
-        "Use to change the open run-plan draft, only when draft_open is true. "
-        "Path is conditions.<id>.replicates (.wells), liquids.<id>, or steps.N.minutes "
-        "(.temp_c/.caution/.text/.pipette.volume/.pipette.target) with exact ids and the "
-        "N from the draft's [N] step labels; value is text (digits for counts/minutes, "
-        "a WellRef or 'row X' for wells, wells:<WellRef>|condition:<id>|all|other for targets). "
-        "Don't use when no draft is open. Don't use for the live record. "
-        "Example: 'change drug A to row E'.",
-        {
-            "path": {"type": "string", "description": "Draft path to set"},
-            "value": {"type": "string", "description": "New value as text"},
-        },
     ),
 ]
 if WEB_SEARCH_ENABLED:
@@ -419,10 +291,6 @@ class OrchestrateIn(BaseModel):
     text: str = Field(min_length=1)
     state: dict = {}
     session: str = "bench"
-    screen: str = "main"
-    selected_well: str = ""
-    open_sheet: str = ""
-    run_id: str | None = None
 
 
 class ConfirmIn(BaseModel):
@@ -431,15 +299,17 @@ class ConfirmIn(BaseModel):
     session: str = "bench"
 
 
+class ActionIn(BaseModel):
+    id: str = Field(min_length=1)
+    args: dict = {}
+
+
 class InputIn(BaseModel):
     text: str = ""
     card_id: str = ""
     answer: str = ""
+    action: ActionIn | None = None
     session: str = "bench"
-    screen: str = "main"
-    selected_well: str = ""
-    open_sheet: str = ""
-    run_id: str | None = None
 
 
 class EditNoteIn(BaseModel):
@@ -676,16 +546,37 @@ def _answer_cards(ans: str, session: dict):
             reply = _which_one(pool)
             return [], [reply], reply, 0, "card", [], {"dropped": 0, "drop_reasons": []}, []
         targets = [(pool[0]["id"], ans == "yes")]
-    messages, new_cards = [], []
-    for cid, ok in targets:
-        message, fresh, card = store.confirm(cid, ok, "card", session)
-        messages.append(message)
-        new_cards += fresh
-        call_id = (card.get("payload") or {}).get("_call_id") if card else None
-        if call_id:
-            _refresh_output(session, call_id, ok, message)
-    reply = " ".join(messages) or "Done."
-    return [], messages, reply, 0, "card", new_cards, {"dropped": 0, "drop_reasons": []}, []
+    calls = [{"name": "answer_card", "args": {"card_id": cid, "ok": ok}}
+             for cid, ok in targets]
+    res = store.apply_calls(calls, "card", "", "card", session)
+    reply = " ".join(res["messages"]) or "Done."
+    return [], res["messages"], reply, 0, "card", res["cards"], res["info"], []
+
+
+def _expand_perform(calls: list) -> list:
+    """perform(action, args) -> the action call the handler takes.
+
+    Unknown actions flow through (the handler drops them, as with unknown
+    tools before); answer_card from the model flows through too and is
+    rejected by the handler, so no model path can touch card state.
+    """
+    out = []
+    for c in calls:
+        if c.get("name") != "perform":
+            out.append(c)
+            continue
+        a = c.get("args") or {}
+        action = a.get("action")
+        rest = {k: v for k, v in a.items() if k != "action" and v is not None}
+        if action not in PERFORM_ACTIONS:
+            _log_drop("perform", a,
+                      "rejected: answer_card" if action == "answer_card"
+                      else f"unknown action: {action}")
+        new = {"name": action, "args": rest, "from_model": True}
+        if c.get("call_id"):
+            new["call_id"] = c["call_id"]
+        out.append(new)
+    return out
 
 
 async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session: dict, source: str):
@@ -713,6 +604,7 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         client, key, text, store.model_state(session), session)
     if cut:
         return [], [], say("didnt_catch", session), ms, "spark", [], {"dropped": 0, "drop_reasons": []}, []
+    calls = _expand_perform(calls)
     sentence, sources = web_answer(searches) if searches else ("", [])
     if sentence:
         session["last_web"] = sentence
@@ -721,8 +613,8 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     plan_allowed = relevant_plan_numbers(
         text, [(s.get("text") or s.get("name", ""), s.get("minutes"))
                for s in store.r["plan"]["steps"]])
-    has_reads = any(c.get("name") in ("read_record", "find_free_wells") and c.get("call_id") for c in calls)
-    pre_all_reads = bool(calls) and all(c.get("name") in ("read_record", "find_free_wells") for c in calls)
+    has_reads = any(c.get("name") == "read_record" and c.get("call_id") for c in calls)
+    pre_all_reads = bool(calls) and all(c.get("name") == "read_record" for c in calls)
     calls, question, outcomes, gdrop = _validate(calls, text, 1, plan_allowed, summary=summary,
                                                  blind=has_reads)
     if not calls and not question:
@@ -736,9 +628,27 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             return [], [], sentence, ms, "spark", [], {"dropped": 0, "drop_reasons": []}, sources
         if texts.strip():
             t = _short_text(texts)
-            if honest_reply([], t) != t:
-                return _didnt_act(text, ms, session, sources)
-            return [], [], t, ms, "spark", [], {"dropped": 0, "drop_reasons": []}, sources
+            bad = ungrounded_targets(t)
+            if not bad["wells"] and not bad["timer"] and not bad["step"] and not bad["memo"]:
+                return [], [], t, ms, "spark", [], {"dropped": 0, "drop_reasons": []}, sources
+            ut = mentioned_targets(text)
+            shared_wells = sorted(bad["wells"] & ut["wells"])
+            if shared_wells:
+                label = wells_label(shared_wells)
+            elif bad["timer"] and ut["timer"]:
+                label = "the timer"
+            elif bad["step"] and ut["step"]:
+                label = "that step"
+            elif bad["memo"] and ut["memo"]:
+                label = "that note"
+            else:
+                return [], [], say("ack", session), ms, "spark", [], \
+                    {"dropped": 0, "drop_reasons": []}, sources
+            reply = say("didnt_act_target", session, target=label)
+            asked = {"question": reply,
+                     "target": wells_label(shared_wells) if shared_wells else ""}
+            return [], [], reply, ms, "spark", [], \
+                {"dropped": 0, "drop_reasons": [], "asked": asked}, sources
         dropped = _dropped_replies(r1raw, outcomes)
         if dropped:
             return [], [], dropped, ms, "spark", [], {"dropped": 0, "drop_reasons": []}, sources
@@ -750,12 +660,12 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     _store_outputs(session, ordered_ids, outcomes)
     fire_lookup = (
         has_reads and question is None
-        and any(c.get("name") in ("read_record", "find_free_wells") and c.get("call_id") for c in calls)
+        and any(c.get("name") == "read_record" and c.get("call_id") for c in calls)
     )
     if fire_lookup:
         reads_text = " ".join(
             outcomes[cid] for c in calls
-            if c.get("name") in ("read_record", "find_free_wells")
+            if c.get("name") == "read_record"
             and (cid := c.get("call_id")) and cid in outcomes
         )
         ms2, more = await _lookup_round(client, key, text, session, source, plan_allowed, reads_text,
@@ -763,6 +673,20 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         ms += ms2
         if more is not None:
             rc, res2, question2, ordered2, outcomes2, gdrop2, t2 = more
+            if question is None and question2 is None and pre_all_reads and not res2["cards"]:
+                nav_only = all(c.get("name") in ("navigate", "open", "back", "show") for c in rc)
+                if t2.strip() and (not rc or nav_only):
+                    res2["messages"].insert(0, _short_text(t2))
+                elif not t2.strip() and not rc:
+                    for c in calls:
+                        a = c.get("args") or {}
+                        if c.get("name") != "read_record" or a.get("kind") != "wells":
+                            continue
+                        if store._viewing_run() is not None:
+                            continue  # scoped reads answer from their own data, never the live record
+                        filt = a.get("filter") or ""
+                        for w in store.filter_wells(filt if isinstance(filt, str) else "")[:4]:
+                            res["messages"].append(store.describe_well(w))
             calls = calls + rc
             res["messages"] += res2["messages"]
             res["cards"] += res2["cards"]
@@ -781,19 +705,6 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             else:
                 gdrop = gdrop or gdrop2
             _store_outputs(session, ordered2, outcomes2)
-            if question is None and pre_all_reads and not rc and not res2["messages"] and not res2["cards"]:
-                if t2.strip():
-                    res["messages"].append(_short_text(t2))
-                else:
-                    for c in calls:
-                        a = c.get("args") or {}
-                        if c.get("name") != "read_record" or a.get("kind") != "wells":
-                            continue
-                        if (a.get("run") or "") or (session.get("run_id") or ""):
-                            continue  # scoped reads answer from their own data, never the live record
-                        filt = a.get("filter") or ""
-                        for w in store.filter_wells(filt if isinstance(filt, str) else "")[:4]:
-                            res["messages"].append(store.describe_well(w))
     calls = _strip_ids(calls)
     asked: dict = {}
     if question is not None:
@@ -835,6 +746,7 @@ async def _lookup_round(client, key, text, session, source, plan_numbers, reads_
         client, key, text, store.model_state(session), session, lookup=True, echo_calls=r1raw)
     if cut:
         return ms, None
+    rc = _expand_perform(rc)
     ordered2 = [c.get("call_id") for c in rc]
     rc, question2, outcomes2, gdrop2 = _validate(rc, text, 2, plan_numbers, reads_text, summary)
     res2: dict = {"messages": [], "cards": [], "outcomes": [], "ui": [],
@@ -872,10 +784,8 @@ def _tag_timer_sources(tool_calls, evidence):
 
 def _validate(calls, text, depth, plan_numbers=frozenset(), reads_text="",
               summary="", blind: bool = False):
-    """expand -> ask/answer partition -> evidence-graded timer filter.
-    Returns (calls, question, outcomes, grounded_drop).
-    blind: a lookup round follows, so round-1 answers (written without the
-    looked-up data) are dropped; the lookup round answers instead."""
+    """expand -> ask split -> evidence-graded timer filter.
+    Returns (calls, question, outcomes, grounded_drop)."""
     outcomes: dict[str, str] = {}
     calls = fill_on_done(calls, text)
     before, calls = calls, expand_tool_wells(calls)
@@ -885,16 +795,9 @@ def _validate(calls, text, depth, plan_numbers=frozenset(), reads_text="",
         if c.get("name") == "ask" and c.get("call_id"):
             outcomes[c["call_id"]] = "asked user"
     calls = kept
-    calls, dropped_answers = _partition_answer(calls, question is not None, blind)
-    for c in dropped_answers:
-        if c.get("call_id"):
-            pending = blind and question is None
-            reason = "dropped: lookup pending" if pending else "dropped: action wins"
-            outcomes[c["call_id"]] = _result(False, reason)
-            _log_drop(c.get("name"), c.get("args"), reason)
     if depth >= 2:
-        deep = [c for c in calls if c.get("name") in ("read_record", "find_free_wells")]
-        calls = [c for c in calls if c.get("name") not in ("read_record", "find_free_wells")]
+        deep = [c for c in calls if c.get("name") == "read_record"]
+        calls = [c for c in calls if c.get("name") != "read_record"]
         for c in deep:
             if c.get("call_id"):
                 outcomes[c["call_id"]] = _result(False, "lookup depth exceeded")
@@ -926,17 +829,6 @@ def _validate(calls, text, depth, plan_numbers=frozenset(), reads_text="",
     return calls, question, outcomes, grounded_drop
 
 
-def _partition_answer(calls, has_question, blind=False):
-    answers = [c for c in calls if c.get("name") == "answer"]
-    if not answers:
-        return calls, []
-    rest = [c for c in calls if c.get("name") != "answer"]
-    non_competing = ("read_record", "find_free_wells", "navigate", "open", "back", "show")
-    if blind or has_question or any(c.get("name") not in non_competing for c in rest):
-        return rest, answers
-    return calls, []
-
-
 def _apply_outcomes(calls, res, outcomes, session=None):
     for i, c in enumerate(calls):
         cid = c.get("call_id")
@@ -946,17 +838,7 @@ def _apply_outcomes(calls, res, outcomes, session=None):
             a = c.get("args") or {}
             if a.get("kind") in store.READ_KINDS:
                 outcomes[cid] = json.dumps(
-                    store.read_record(a["kind"], a.get("filter", ""), a.get("limit", 10),
-                                      run=a.get("run", ""), session=session),
-                    ensure_ascii=False)
-                continue
-        if c.get("name") == "find_free_wells":
-            a = c.get("args") or {}
-            near = a.get("near")
-            if isinstance(near, str) and parse_wellref(near):
-                outcomes[cid] = json.dumps(
-                    {"near": near.strip().upper(),
-                     "free": store.find_free_wells(near, a.get("count", 3))},
+                    store.read_record(a["kind"], a.get("filter", ""), a.get("limit", 10)),
                     ensure_ascii=False)
                 continue
         oc = res["outcomes"][i]
@@ -998,12 +880,6 @@ def _strip_ids(calls: list) -> list:
     return [{"name": c.get("name"),
              "args": {k: v for k, v in (c.get("args") or {}).items() if not k.startswith("_")}}
             for c in calls]
-
-
-def _refresh_output(session: dict, cid: str, ok: bool, message: str):
-    for p in session.get("pending_outputs") or []:
-        if p["call_id"] == cid:
-            p["output"] = _result(ok, message if ok else "declined by user")
 
 
 def _didnt_act(text: str, ms: int, session: dict, sources: list):
@@ -1054,6 +930,11 @@ def _render_record(kind: str, data: dict) -> list[str]:
         if not q:
             return []
         return [f"Step {data.get('step')}: {q} (page {data.get('quote_page')})"]
+    if kind == "free_wells":
+        free = data.get("free") or []
+        if not free:
+            return []
+        return [f"Free near {data.get('near', '')}: {', '.join(free[:4])}"]
     return []
 
 
@@ -1070,10 +951,6 @@ def _render_r1_reads(calls: list, outcomes: dict) -> list[str]:
             continue
         if c.get("name") == "read_record":
             lines += _render_record((c.get("args") or {}).get("kind"), data)
-        elif c.get("name") == "find_free_wells" and isinstance(data, dict):
-            free = data.get("free") or []
-            if free:
-                lines.append(f"Free near {data.get('near', '')}: {', '.join(free[:4])}")
     return lines
 
 
@@ -1089,7 +966,7 @@ def _executed_reply(calls: list, read_lines: list, session: dict) -> str:
             return say(key, session)
     if read_lines:
         return say("found", session, detail=": " + "; ".join(read_lines[:3]) + ".")
-    if any(c.get("name") in ("read_record", "find_free_wells") for c in calls):
+    if any(c.get("name") == "read_record" for c in calls):
         return say("found_empty", session)
     return ""
 
@@ -1118,7 +995,6 @@ _COULDNT = {
     "add_note": "save the note",
     "save_tip": "save the tip",
     "set_timer": "start the timer",
-    "answer": "answer that",
     "mark_done": "record that",
     "record_redo": "mark that for redo",
     "edit_draft": "edit the draft",
@@ -1157,21 +1033,6 @@ def _utterance_response(calls, messages, reply, ms, route, cards, info, sources,
     return out
 
 
-def set_screen(session: dict, screen: str, selected_well: str = "", open_sheet: str = "",
-               run_id: str | None = None):
-    """App-reported screen, validated against the registry. Unknown -> main.
-
-    run_id echoes the run in view: None leaves the session scope alone
-    (voice navigation stays sticky), "" returns to the live record.
-    Stale ids heal to None on use.
-    """
-    session["screen"] = canonical_screen(screen) or "main"
-    session["selected_well"] = selected_well or ""
-    session["open_sheet"] = open_sheet or ""
-    if run_id is not None:
-        session["run_id"] = run_id or None
-
-
 async def _handle_text(text: str, session: dict, source: str):
     """Shared text path for /input and the /orchestrate alias."""
     key = _key()
@@ -1189,24 +1050,30 @@ async def _handle_text(text: str, session: dict, source: str):
 def _resolve_card(card_id: str, answer: str, session: dict):
     """Shared card path for /input and the /confirm alias."""
     ok = answer.strip().lower() not in ("no", "cancel", "false", "0", "dismiss")
-    message, new_cards, card = store.confirm(card_id, ok, "card", session)
-    cid = (card.get("payload") or {}).get("_call_id") if card else None
-    if cid:
-        _refresh_output(session, cid, ok, message)
+    message, new_cards, _ = store.confirm(card_id, ok, "card", session)
     return message, new_cards
 
 
 @app.post("/input")
 async def input_entry(body: InputIn):
     session = get_session(body.session)
-    set_screen(session, body.screen, body.selected_well, body.open_sheet, body.run_id)
+    if body.action is not None:
+        calls = [{"name": body.action.id, "args": body.action.args or {}}]
+        calls = expand_tool_wells(calls)
+        res = store.apply_calls(calls, "tap", "", "tap", session)
+        reply = _compose_reply(calls, res, store.prompt_state(session), session)
+        if not reply:
+            reply = _executed_reply(calls, [], session)
+        log_turn(session, f"tap:{body.action.id}", calls, [reply] if reply else [])
+        return _utterance_response(calls, res["messages"], reply, {"spark": 0}, "tap",
+                                   res["cards"], res["info"], [], store.r["version"])
     if body.card_id:
         message, new_cards = _resolve_card(body.card_id, body.answer or "yes", session)
         log_turn(session, f"card:{body.card_id} {body.answer or 'yes'}", [], [message])
         return _utterance_response([], [message], message, {"spark": 0}, "card", new_cards,
                                    {"dropped": 0, "drop_reasons": []}, [], store.r["version"])
     if not body.text.strip():
-        raise HTTPException(400, "text or card_id required")
+        raise HTTPException(400, "text, card_id, or action required")
     return await _handle_text(body.text, session, "input")
 
 
@@ -1214,14 +1081,11 @@ async def input_entry(body: InputIn):
 async def orchestrate(body: OrchestrateIn):
     """Alias: forwards into /input's text path (same shapes)."""
     session = get_session(body.session)
-    set_screen(session, body.screen, body.selected_well, body.open_sheet, body.run_id)
     return await _handle_text(body.text, session, "spark")
 
 
 @app.post("/voice")
-async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session: str = Form("bench"),
-                screen: str = Form("main"), selected_well: str = Form(""),
-                open_sheet: str = Form(""), run_id: str | None = Form(None)):
+async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session: str = Form("bench")):
     try:
         state_obj = json.loads(state)
     except json.JSONDecodeError:
@@ -1248,7 +1112,6 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session:
     }
     total0 = time.perf_counter()
     sess = get_session(session)
-    set_screen(sess, screen, selected_well, open_sheet, run_id)
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         t0 = time.perf_counter()
         resp = await _post(

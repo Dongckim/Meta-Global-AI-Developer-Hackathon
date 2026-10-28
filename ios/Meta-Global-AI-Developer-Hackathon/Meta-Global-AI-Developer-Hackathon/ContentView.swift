@@ -69,6 +69,8 @@ struct ContentView: View {
     @State private var busy = false
     @State private var selectedWell: WellSelect?
     @State private var peekGen = 0
+    @State private var peekTarget: String?
+    @State private var lastViewScreen = ""
     @State private var robotState = RobotState.idle
     @State private var draftState = DraftState.idle
     @State private var reviewTab = 0
@@ -89,24 +91,45 @@ struct ContentView: View {
     @State private var apiMismatch: String?
     private let screens = loadScreens()
 
-    /// Screen the server reasons about. Drills overlay the run/no-run root.
+    /// Screen for hints: the server-owned view (setup boots app-local).
     private var currentScreen: String {
         if !setupDone { return "setup" }
-        if viewingSource != nil { return "protocol_source" }
-        if viewingRun != nil { return "run_view" }
-        if selectedProtocol != nil { return "protocol_detail" }
-        if case .idle = robotState {} else { return "robot_preview" }
-        if case .idle = draftState {} else { return "protocol_review" }
-        if selectedWell != nil { return "well_card" }
-        return (showHome || lab.run == nil) ? "home" : "main"
+        let s = lab.view.current.screen
+        return s.isEmpty ? ((showHome || lab.run == nil) ? "home" : "main") : s
     }
 
-    private func clearDrills() {
-        selectedWell = nil
-        robotState = .idle
-        selectedProtocol = nil
-        viewingRun = nil
-        viewingSource = nil
+    /// Mirror the server-owned view into local presentation state.
+    /// Runs after every snapshot sync; taps send Actions instead of
+    /// setting this state directly.
+    private func renderView() {
+        let v = lab.view
+        let cur = v.current.screen, tgt = v.current.target
+        guard !cur.isEmpty else { return }
+        let sheetWell = v.sheet.name == "well_card" && !v.sheet.target.isEmpty ? v.sheet.target
+            : (cur == "well_card" && !tgt.isEmpty ? tgt : nil)
+        if let w = sheetWell {
+            if selectedWell?.id != w { selectedWell = WellSelect(id: w) }
+        } else if selectedWell != nil, selectedWell?.id != peekTarget {
+            selectedWell = nil
+        }
+        viewingRun = cur == "run_view" && !tgt.isEmpty ? tgt : nil
+        selectedProtocol = cur == "protocol_detail" && !tgt.isEmpty ? tgt : nil
+        if cur == "protocol_source", !tgt.isEmpty {
+            if viewingSource?.target != tgt { openSourceTarget(tgt) }
+        } else {
+            viewingSource = nil
+        }
+        if cur == "robot_preview" {
+            if case .idle = robotState { runRobot() }
+        } else if case .idle = robotState {} else { robotState = .idle }
+        if cur == "protocol_review" {
+            if lab.draft != nil, case .idle = draftState { draftState = .reviewing }
+        }
+        showHome = cur == "home"
+        if cur == "setup", setupDone, lastViewScreen != "setup" { setupDone = false }
+        if let i = ["liquids", "steps", "layout"].firstIndex(of: v.tab) { reviewTab = i }
+        if cur != lastViewScreen, cur == "home" || cur == "protocol_detail" { loadLists() }
+        lastViewScreen = cur
     }
 
     var body: some View {
@@ -114,11 +137,14 @@ struct ContentView: View {
             contractBanners
             Group {
                 if !setupDone {
-                SetupView() { setupDone = true }
+                SetupView() {
+                    setupDone = true
+                    if lab.view.current.screen == "setup" { sendAction("back") }
+                }
             } else if let src = viewingSource {
                 VStack(spacing: 8) {
                     HStack {
-                        Button { viewingSource = nil } label: {
+                        Button { sendAction("back") } label: {
                             Image(systemName: "chevron.left").font(.headline)
                         }
                         .buttonStyle(.borderless)
@@ -132,7 +158,7 @@ struct ContentView: View {
                 }
             } else if let rid = viewingRun {
                 VStack(spacing: 0) {
-                    PastRunView(runId: rid, onBack: { viewingRun = nil },
+                    PastRunView(runId: rid, onBack: { sendAction("back") },
                                 onSource: openSource)
                     hintsBar.padding(.horizontal)
                     inputBar.padding(.horizontal).padding(.bottom)
@@ -141,9 +167,9 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     ProtocolDetailView(
                         protocolId: pid, cards: lab.cards, notice: detailNotice,
-                        onBack: { selectedProtocol = nil },
+                        onBack: { sendAction("back") },
                         onStart: startProtocolRun,
-                        onRun: { viewingRun = $0 },
+                        onRun: { sendAction("open", ["target": "run:\($0)"]) },
                         onAnswer: answer(id:ok:), onAnswerAll: answerAll)
                     hintsBar.padding(.horizontal)
                     inputBar.padding(.horizontal).padding(.bottom)
@@ -153,12 +179,12 @@ struct ContentView: View {
                     HomeView(
                         protocols: protocols, runs: runs, cards: lab.cards,
                         onImport: { showImporter = true },
-                        onReview: { draftState = .reviewing },
+                        onReview: { sendAction("navigate", ["screen": "protocol_review"], quiet: false) },
                         hasDraft: lab.draft != nil,
-                        onProtocol: { selectedProtocol = $0 },
-                        onRun: { viewingRun = $0 },
+                        onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
+                        onRun: { sendAction("open", ["target": "run:\($0)"]) },
                         onAnswer: answer(id:ok:), onAnswerAll: answerAll,
-                        onSetup: { setupDone = false },
+                        onSetup: { sendAction("navigate", ["screen": "setup"]) },
                         onRefresh: loadLists)
                     hintsBar.padding(.horizontal)
                     inputBar.padding(.horizontal).padding(.bottom)
@@ -167,7 +193,10 @@ struct ContentView: View {
                 experimentView
             }
         }
-        .sheet(item: $selectedWell) { sel in WellSheet(well: sel.id, lab: lab) { say($0) } }
+        .sheet(item: $selectedWell, onDismiss: {
+            peekTarget = nil
+            if lab.view.sheet.name == "well_card" { sendAction("back") }
+        }) { sel in WellSheet(well: sel.id, lab: lab) { say($0) } }
         .sheet(isPresented: robotSheet) { robotPanel }
         .sheet(isPresented: draftSheet) { draftPanel }
         .sheet(isPresented: $showSettings) { VoiceSettingsView() }
@@ -220,7 +249,10 @@ struct ContentView: View {
                             .font(.caption2).foregroundStyle(.secondary)
                         Spacer()
                     }
-                    PlateView(lab: lab, selected: $selectedWell)
+                    PlateView(lab: lab, selected: Binding(
+                        get: { selectedWell },
+                        set: { if let id = $0?.id { sendAction("open", ["target": id]) } }
+                    ))
                     ConditionBars(lab: lab)
                 }
                 .frame(width: left)
@@ -228,7 +260,7 @@ struct ContentView: View {
                     StepCard(lab: lab, onEndRun: endRun, onSource: openCurrentSource)
                     responseCard
                     TimerList(lab: lab)
-                    MemoList(lab: lab) { selectedWell = WellSelect(id: $0) }
+                    MemoList(lab: lab) { sendAction("open", ["target": $0]) }
                     logSection.frame(maxHeight: .infinity)
                     hintsBar
                     inputBar
@@ -242,14 +274,24 @@ struct ContentView: View {
     private var robotSheet: Binding<Bool> {
         Binding(
             get: { if case .idle = robotState { false } else { true } },
-            set: { if !$0 { robotState = .idle } }
+            set: {
+                if !$0 {
+                    robotState = .idle
+                    if lab.view.current.screen == "robot_preview" { sendAction("back") }
+                }
+            }
         )
     }
 
     private var draftSheet: Binding<Bool> {
         Binding(
             get: { if case .idle = draftState { false } else { true } },
-            set: { if !$0 { draftState = .idle } }
+            set: {
+                if !$0 {
+                    draftState = .idle
+                    if lab.view.current.screen == "protocol_review" { sendAction("back") }
+                }
+            }
         )
     }
 
@@ -355,7 +397,10 @@ struct ContentView: View {
                 Button("Discard") { discard() }
                     .buttonStyle(.bordered).controlSize(.small)
                     .disabled(reviewBusy)
-                Button("Close") { draftState = .idle }
+                Button("Close") {
+                    draftState = .idle
+                    if lab.view.current.screen == "protocol_review" { sendAction("back") }
+                }
                     .buttonStyle(.bordered).controlSize(.small)
             }
             switch draftState {
@@ -377,7 +422,12 @@ struct ContentView: View {
                         Text(title).font(.headline)
                     }
                     Text(reviewSummary(d)).font(.callout).foregroundStyle(.secondary)
-                    TabView(selection: $reviewTab) {
+                    TabView(selection: Binding(
+                        get: { reviewTab },
+                        set: { reviewTab = $0
+                            sendAction("set_tab", ["tab": ["liquids", "steps", "layout"][$0]])
+                        }
+                    )) {
                         reviewLiquids(d).tabItem { Text("Liquids") }.tag(0)
                         reviewSteps(d).tabItem { Text("Steps") }.tag(1)
                         reviewLayout(d).tabItem { Text("Layout") }.tag(2)
@@ -675,6 +725,7 @@ struct ContentView: View {
         Task { @MainActor in
             do {
                 lab.sync(try await PipClient.record())
+                renderView()
                 syncError = nil
             } catch {
                 syncError = syncReason(error)
@@ -706,6 +757,7 @@ struct ContentView: View {
         switch ev {
         case .snapshot(let snap):
             lab.sync(snap)
+            renderView()
             syncError = nil
         case .broken(let reason):
             syncError = reason
@@ -740,60 +792,9 @@ struct ContentView: View {
     @discardableResult
     private func applyUI(_ a: UIAction) -> Bool {
         switch a.action {
-        case "navigate":
-            switch a.screen {
-            case "robot_preview":
-                clearDrills()
-                if case .idle = robotState { runRobot() }
-                return true
-            case "main":
-                clearDrills()
-                showHome = false
-                return true
-            case "home":
-                clearDrills()
-                showHome = true
-                loadLists()
-                return true
-            case "setup":
-                setupDone = false
-                return true
-            case "protocol_detail":
-                guard let t = a.target, !t.isEmpty else {
-                    return uiFail("I couldn't open that protocol: which one?")
-                }
-                clearDrills()
-                selectedProtocol = t
-                return true
-            case "run_view":
-                guard let t = a.target, !t.isEmpty else {
-                    return uiFail("I couldn't open that run: which one?")
-                }
-                clearDrills()
-                viewingRun = t
-                return true
-            case "protocol_source":
-                guard let t = a.target, !t.isEmpty, parseSourceTarget(t) != nil else {
-                    return uiFail("I couldn't open that original.")
-                }
-                openSourceTarget(t)
-                return true
-            case "protocol_review":
-                guard lab.draft != nil else {
-                    return uiFail("No draft open — import a protocol from Home.")
-                }
-                draftState = .reviewing
-                return true
-            case "well_card":
-                return true // nothing to move without a target; open carries one
-            default:
-                return uiFail("I couldn't open the \(a.screen ?? "?") screen.")
-            }
-        case "open":
-            guard let t = a.target, !t.isEmpty else { return uiFail("I couldn't open that.") }
-            robotState = .idle
-            selectedWell = WellSelect(id: t)
-            return true
+        case "navigate", "open", "back":
+            // The server drives these through view now; a ui copy is stale.
+            return uiFail("I couldn't do that.")
         case "import":
             showImporter = true
             return true
@@ -804,21 +805,16 @@ struct ContentView: View {
             guard let t = a.target, !t.isEmpty else { return uiFail("I couldn't open that.") }
             robotState = .idle
             selectedWell = WellSelect(id: t)
+            peekTarget = t
             peekGen += 1
             let g = peekGen
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(a.seconds ?? 3))
-                if peekGen == g, selectedWell?.id == t { selectedWell = nil }
+                if peekGen == g, selectedWell?.id == t {
+                    selectedWell = nil
+                    peekTarget = nil
+                }
             }
-            return true
-        case "back":
-            if viewingSource != nil { viewingSource = nil }
-            else if viewingRun != nil { viewingRun = nil }
-            else if selectedProtocol != nil { selectedProtocol = nil }
-            else if showHome, lab.run != nil { showHome = false }
-            else if case .idle = draftState {} else { draftState = .idle }
-            selectedWell = nil
-            robotState = .idle
             return true
         default:
             return uiFail("I couldn't do that.")
@@ -1057,27 +1053,35 @@ struct ContentView: View {
         if log.count > 100 { log.removeFirst(log.count - 100) }
     }
 
-    private func answer(id: String, ok: Bool) {
+    /// Taps travel as Actions; the server updates view and broadcasts.
+    private func sendAction(_ id: String, _ args: [String: Any] = [:], quiet: Bool = true) {
         Task { @MainActor in
             do {
-                let r = try await PipClient.confirm(cardId: id, ok: ok)
-                say(r.message)
+                let r = try await PipClient.inputAction(id: id, args: args)
+                if !quiet {
+                    for msg in r.messages { say(msg) }
+                    if !r.reply.isEmpty {
+                        lastReply = r.reply
+                        say("Pip: \(r.reply)")
+                    }
+                    _ = (r.ui ?? []).allSatisfy { applyUI($0) }
+                    sayAloud(r.speak)
+                } else {
+                    _ = (r.ui ?? []).allSatisfy { applyUI($0) }
+                }
             } catch {
                 say("Error: \(error.localizedDescription)")
             }
         }
     }
 
+    private func answer(id: String, ok: Bool) {
+        sendAction("answer_card", ["card_id": id, "ok": ok], quiet: false)
+    }
+
     private func answerAll() {
-        let ids = lab.cards.map(\.id)
-        Task { @MainActor in
-            for id in ids {
-                do {
-                    say(try await PipClient.confirm(cardId: id, ok: true).message)
-                } catch {
-                    say("Error: \(error.localizedDescription)")
-                }
-            }
+        for id in lab.cards.map(\.id) {
+            sendAction("answer_card", ["card_id": id, "ok": true], quiet: false)
         }
     }
 
@@ -1094,13 +1098,10 @@ struct ContentView: View {
         busy = true
         defer { busy = false }
         do {
-            let r = try await PipClient.orchestrate(text: text, screen: currentScreen,
-                                                    selectedWell: selectedWell?.id ?? "",
-                                                    openSheet: selectedWell == nil ? "" : "well_card",
-                                                    runId: viewingRun ?? "")
+            let r = try await PipClient.orchestrate(text: text)
             handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
                    route: r.route, input: text, sources: r.sources,
-                   robot: r.robot == true, dropped: r.dropped ?? 0,
+                   dropped: r.dropped ?? 0,
                    ui: r.ui, speak: r.speak, recordVersion: r.record_version)
         } catch {
             say("Error: \(error.localizedDescription)")
@@ -1153,14 +1154,11 @@ struct ContentView: View {
                 return
             }
             guard loud >= 0.001 else { say("No sound reached the mic — on the simulator, check the Mac mic permission and input"); return }
-            let r = try await PipClient.voice(wav: data, screen: currentScreen,
-                                              selectedWell: selectedWell?.id ?? "",
-                                              openSheet: selectedWell == nil ? "" : "well_card",
-                                              runId: viewingRun ?? "")
+            let r = try await PipClient.voice(wav: data)
             say("🎙 \(r.transcript)")
             handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
                    route: r.route, input: r.transcript, sources: r.sources,
-                   robot: r.robot == true, dropped: r.dropped ?? 0,
+                   dropped: r.dropped ?? 0,
                    ui: r.ui, speak: r.speak, recordVersion: r.record_version)
         } catch {
             say("Error: \(error.localizedDescription)")
@@ -1169,7 +1167,7 @@ struct ContentView: View {
 
     private func handle(calls: [ToolCall], messages: [String], reply: String, ms: [String: Int],
                         route: String?, input: String, sources: [Source],
-                        robot: Bool, dropped: Int,
+                        dropped: Int,
                         ui: [UIAction]?, speak: String?, recordVersion: Int) {
         for msg in messages { say(msg) }
         if !reply.isEmpty {
@@ -1178,12 +1176,7 @@ struct ContentView: View {
         }
         let uiOk = (ui ?? []).allSatisfy { applyUI($0) }
         if uiOk { sayAloud(speak) }
-        if let show = calls.first(where: { $0.name == "show" }) {
-            lab.lastShown = "plate \(show.args["target"]?.string ?? "")"
-            lab.flash(parseShowTarget(show.args["target"]?.string))
-        }
         if dropped > 0 { say("Ignored \(dropped) bad call(s)") }
-        if robot { runRobot() }
         debug = DebugRun(
             input: input,
             calls: calls.map { ($0.name, "{" + $0.args.map { "\"\($0.key)\": \($0.value.compact)" }.sorted().joined(separator: ", ") + "}") },
@@ -1199,7 +1192,8 @@ struct ContentView: View {
         robotState = .building
         Task { @MainActor in
             do {
-                robotState = .done(try await PipClient.robot())
+                let doc = try await PipClient.robot()
+                if lab.view.current.screen == "robot_preview" { robotState = .done(doc) }
                 say("Robot protocol ready")
             } catch {
                 robotState = .idle

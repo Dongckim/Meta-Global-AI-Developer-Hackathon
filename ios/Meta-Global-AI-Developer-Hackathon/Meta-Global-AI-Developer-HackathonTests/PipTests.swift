@@ -200,6 +200,25 @@ struct PipTests {
         #expect(lab.done.isEmpty && lab.version == 8)
     }
 
+    @Test @MainActor func viewDecodes() {
+        let lab = LabState()
+        let snap = """
+        {"epoch": "a", "version": 1, "run": null,
+         "view": {"current": {"screen": "run_view", "target": "run-1"},
+                  "stack": [{"screen": "main", "target": ""}],
+                  "tab": "steps",
+                  "sheet": {"name": "well_card", "target": "C5"}},
+         "plan": {"conditions": {}, "steps": []},
+         "done": [], "cards": {}}
+        """
+        lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(snap.utf8)))
+        #expect(lab.view.current == ViewTarget(screen: "run_view", target: "run-1"))
+        #expect(lab.view.stack == [ViewTarget(screen: "main", target: "")])
+        #expect(lab.view.tab == "steps")
+        #expect(lab.view.sheet == ViewSheet(name: "well_card", target: "C5"))
+        #expect(Self.snapshot().view == ViewState())
+    }
+
     @Test @MainActor func epochChangeResetsStaleGuard() {
         let lab = LabState()
         let live = """

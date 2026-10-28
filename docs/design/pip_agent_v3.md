@@ -28,7 +28,7 @@ smoke + iPad check.
   (SSE+POST vs a running server); text bench render; `smoke_turns.py
   --fake` (strict) / `--fake-live` (consistency-only).
 
-## Piece 2: server-owned view + one action path
+## Piece 2 (done, pending iPad check): server-owned view + one action path
 
 ### State
 
@@ -131,12 +131,32 @@ smoke + iPad check.
 ### Piece 2 gates
 
 - Unit + probe suites migrated (grammar/action shapes, card paths,
-  view transitions, no-model-card-approval).
+  view transitions, no-model-card-approval). DONE, all green.
 - fake_app smoke in Action mode (fake_app speaks Actions, renders
-  server view).
-- Live re-runs: tool_choice, smoke, latency, instruction (model-facing
-  change; smalltalk expectations updated per the new reply rule).
-- iPad check, then commit.
+  server view). DONE (--fake and --fake-end strict ALL PASS).
+- Live re-runs: tool_choice 10/10, smoke 9/10 under 3s (worst turn
+  varies run to run — model jitter; over-budget turns are 2-round
+  read questions, inside their 4s budget), latency (questions <=4s,
+  commands <=3s PASS), instruction 10/10 + smalltalk 3/3. DONE.
+- iPad check, then commit. PENDING.
+
+### Piece 2 deviations (as built)
+
+- Transport is `{action: {id, args}}`, but the internal call shape
+  stays `{name, args}` (id maps to name at the /input boundary);
+  one handler either way, no test churn for a key rename.
+- `manage_timers` split into `cancel_timer` / `extend_timer`
+  (the perform wrapper already owns the `action` field); listing is
+  a `read_record` timers read.
+- `answer` tool deleted: round-2 answers are raw model text.
+  Round-2 text beside nav-only calls is prepended (summary first);
+  beside writes it stays ignored (write wins).
+- `find_free_wells` folded into `read_record` kind `free_wells`
+  (filter=near, limit=count).
+- `/confirm` and `/orchestrate` aliases kept (evals + old builds);
+  deletion moves to piece 3.
+- Token win: 20 model tools -> 3. Observed in_tok ~1950-2000
+  on bench turns (was ~2600+).
 
 ## Piece 3: unified registry + safe iteration
 

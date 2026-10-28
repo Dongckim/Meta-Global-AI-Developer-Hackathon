@@ -40,8 +40,15 @@ class TestBackend(Backend):
         return self.c.post("/orchestrate", json={"text": text, "session": session}).json()
 
     def answer(self, card_id, ok, session="fake"):
-        return self.c.post("/confirm", json={"card_id": card_id, "ok": ok,
-                                             "session": session}).json()
+        return self.c.post("/input", json={
+            "action": {"id": "answer_card",
+                       "args": {"card_id": card_id, "ok": ok}},
+            "session": session}).json()
+
+    def tap(self, action, args=None, session="fake"):
+        return self.c.post("/input", json={
+            "action": {"id": action, "args": args or {}},
+            "session": session}).json()
 
     def wait_version(self, after, timeout=10):
         import queue as _q
@@ -89,8 +96,15 @@ class LiveBackend(Backend):
         return self.c.post("/orchestrate", json={"text": text, "session": session}).json()
 
     def answer(self, card_id, ok, session="fake"):
-        return self.c.post("/confirm", json={"card_id": card_id, "ok": ok,
-                                             "session": session}).json()
+        return self.c.post("/input", json={
+            "action": {"id": "answer_card",
+                       "args": {"card_id": card_id, "ok": ok}},
+            "session": session}).json()
+
+    def tap(self, action, args=None, session="fake"):
+        return self.c.post("/input", json={
+            "action": {"id": action, "args": args or {}},
+            "session": session}).json()
 
     def wait_version(self, after, timeout=10):
         import queue as _q
@@ -128,8 +142,11 @@ def render(snap: dict) -> str:
     timers = ",".join(f"{t.get('label', '?')}" for t in snap.get("timers") or []) or "-"
     cards = ";".join(c.get("question", "?") for c in (snap.get("cards") or {}).values()) or "-"
     notes = len(snap.get("notes") or [])
-    screen = "home" if not snap.get("run") else "bench"
-    head = (f"v{snap.get('version')} {screen} step {idx + 1}/{len(steps)} {name} | "
+    cur = (snap.get("view") or {}).get("current") or {}
+    screen = f"{cur.get('screen', '?')}:{cur.get('target') or '-'}"
+    sh = (snap.get("view") or {}).get("sheet") or {}
+    sheet = f"{sh.get('name') or '-'}:{sh.get('target') or '-'}" if sh.get("name") else "-"
+    head = (f"v{snap.get('version')} [{screen}] sheet {sheet} step {idx + 1}/{len(steps)} {name} | "
             f"wells: {','.join(marks) or '-'} | timers: {timers} | "
             f"cards: {cards} | notes: {notes}")
     rows = []
@@ -162,7 +179,14 @@ def check_screen_matches_record(text: str, record: dict) -> list[str]:
     want_notes = len(record.get("notes") or [])
     if f"notes: {want_notes}" not in head:
         errs.append("notes count mismatch")
-    want_screen = "home" if not record.get("run") else "bench"
-    if f" {want_screen} step " not in head:
-        errs.append(f"screen mismatch in {head[:40]!r}")
+    cur = (record.get("view") or {}).get("current") or {}
+    want_screen = f"[{cur.get('screen', '?')}:{cur.get('target') or '-'}]"
+    if want_screen not in head:
+        errs.append(f"screen mismatch in {head[:60]!r}")
+    if not record.get("run") and cur.get("screen") not in ("home", "setup", ""):
+        errs.append(f"no run but screen {cur.get('screen')!r}")
+    sh = (record.get("view") or {}).get("sheet") or {}
+    want_sheet = f"{sh.get('name') or '-'}:{sh.get('target') or '-'}" if sh.get("name") else "-"
+    if f"sheet {want_sheet} step " not in head:
+        errs.append("sheet mismatch")
     return errs

@@ -195,6 +195,38 @@ struct ServerCard: Decodable, Equatable, Identifiable {
     var ts: Double
 }
 
+// MARK: - Server view
+
+struct ViewTarget: Decodable, Equatable {
+    var screen: String = ""
+    var target: String = ""
+}
+
+struct ViewSheet: Decodable, Equatable {
+    var name: String = ""
+    var target: String = ""
+}
+
+struct ViewState: Decodable, Equatable {
+    var current = ViewTarget()
+    var stack: [ViewTarget] = []
+    var tab = ""
+    var sheet = ViewSheet()
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        current = try c.decodeIfPresent(ViewTarget.self, forKey: .current) ?? ViewTarget()
+        stack = try c.decodeIfPresent([ViewTarget].self, forKey: .stack) ?? []
+        tab = try c.decodeIfPresent(String.self, forKey: .tab) ?? ""
+        sheet = try c.decodeIfPresent(ViewSheet.self, forKey: .sheet) ?? ViewSheet()
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case current, stack, tab, sheet
+    }
+}
+
 // MARK: - Library + runs
 
 struct RunBlock: Decodable, Equatable {
@@ -387,6 +419,7 @@ struct ProtocolDraft: Decodable {
 
 struct RecordSnapshot: Decodable {
     var epoch: String?
+    var view = ViewState()
     var version: Int
     var plan: Plan
     var stepIndex: Int
@@ -403,13 +436,14 @@ struct RecordSnapshot: Decodable {
     var recent: [HistoryEntry]
 
     enum CodingKeys: String, CodingKey {
-        case epoch, version, plan, stepIndex = "step_index", done, excluded, redo,
+        case epoch, view, version, plan, stepIndex = "step_index", done, excluded, redo,
              notes, tips, timers, stamps, cards, draft, run, recent
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         epoch = try c.decodeIfPresent(String.self, forKey: .epoch)
+        view = (try? c.decodeIfPresent(ViewState.self, forKey: .view)) ?? ViewState()
         version = try c.decode(Int.self, forKey: .version)
         plan = try c.decode(Plan.self, forKey: .plan)
         // Additive tolerance: missing/null collections default, but present
@@ -498,6 +532,7 @@ func wellRangeLabel(_ wells: [String]) -> String? {
 @Observable
 final class LabState {
     var epoch: String?
+    var view = ViewState()
     var version = -1
     var planSteps: [PlanStep] = []
     var conditions: [String: PlanCondition] = [:]
@@ -530,6 +565,7 @@ final class LabState {
             guard snap.version > version else { return }
         }
         version = snap.version
+        view = snap.view
         planSteps = snap.plan.steps
         conditions = snap.plan.conditions
         if !snap.plan.steps.isEmpty { steps = snap.plan.steps.map(\.text) }

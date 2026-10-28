@@ -110,5 +110,14 @@
   "protocol_saved": [
     "Saved {name} to the library.",
     "{name} is in the library now."
+  ],
+  "ack": [
+    "Got it!",
+    "Okay!",
+    "Sure thing!"
+  ],
+  "didnt_act_target": [
+    "I didn't log {target} — want me to?",
+    "Hmm, nothing logged on {target} — should I log it?"
   ]
 }

@@ -177,24 +177,28 @@ with patch("httpx.AsyncClient", FakeClient):
     assert c.get("/runs/nope").status_code == 404
     print("RUN3 ok: finish-first card + archive + list")
 
-    # RUN4. yesterday's run opens; writes refused, reads scoped + echoed.
+    # RUN4. yesterday's run opens; writes refused, reads follow the view.
     backdate(run1, 1)
     FakeClient.spark_payload = spark(fc("open", '{"target": "yesterday\'s run"}', "c1"))
     j = c.post("/orchestrate", json={"text": "show yesterday's run",
                                      "session": "run4"}).json()
-    assert j["ui"] == [{"action": "navigate", "screen": "run_view",
-                        "target": run1}], j
-    assert api._SESSIONS["run4"]["run_id"] == run1, api._SESSIONS["run4"]
+    assert api.store.r["view"]["current"] == {"screen": "run_view",
+                                              "target": run1}, j
     j = c.post("/orchestrate", json={"text": "C3 done", "session": "run4"}).json()
     assert j["reply"] == "That run is finished — read only.", j
     assert api.store.r["done"] == [] and run1 not in [
         d.get("run_id") for d in [api.store.active_run_doc()]], "active untouched"
-    d = api.store.read_record("wells", "B2", 10, run="yesterday", session={})
+    d = api.store.read_record("wells", "B2", 10)
     assert d["run"] == run1 and d["wells"][0]["status"] == "done", d
-    d = api.store.read_record("wells", "B2", 10, session={"run_id": run1})
-    assert d["run"] == run1 and d["wells"][0]["status"] == "done", d
-    d = api.store.read_record("wells", "", 10, run="nope", session={})
-    assert d == {"error": "I couldn't find that run."}, d
+    FakeClient.spark_payload = spark(fc("open", '{"target": "run nope"}', "c9"))
+    j = c.post("/orchestrate", json={"text": "open run nope",
+                                     "session": "run4"}).json()
+    assert j["reply"] == "I couldn't find that run.", j
+    c.post("/input", json={"action": {"id": "back", "args": {}},
+                           "session": "run4"})
+    assert api.store.r["view"]["current"]["screen"] == "main"
+    d = api.store.read_record("wells", "B2", 10)
+    assert d["run"] == run2, d
     print("RUN4 ok: past-run scope gate + scoped reads")
 
     # RUN5. Import/Discard and Import/Save leave the active run alone.
@@ -216,15 +220,16 @@ with patch("httpx.AsyncClient", FakeClient):
     api.store.r["step_index"] = 2
     st = api.store.r["plan"]["steps"][2]
     st["quote"], st["quote_page"] = "add drug A now", 2
-    d = api.store.read_record("source", "", 10, session={})
+    d = api.store.read_record("source", "", 10)
     assert (d["step"], d["quote"], d["quote_page"]) == (3, "add drug A now", 2), d
-    d = api.store.read_record("source", "1", 10, session={})
+    d = api.store.read_record("source", "1", 10)
     assert d["step"] == 1, d
     FakeClient.spark_payload = spark(fc("open", '{"target": "the original"}', "c1"))
     j = c.post("/orchestrate", json={"text": "show me the original",
                                      "session": "run7"}).json()
-    assert j["ui"] == [{"action": "navigate", "screen": "protocol_source",
-                        "target": f"protocol:{demo_id}#step:3"}], j
+    assert api.store.r["view"]["current"] == {
+        "screen": "protocol_source",
+        "target": f"protocol:{demo_id}#step:3"}, j
     print("RUN7 ok: source kind + original navigation")
 
     # RUN6. end_run cards; confirm finishes; empty again after.
@@ -271,16 +276,20 @@ with patch("httpx.AsyncClient", FakeClient):
     assert j.get("ui") in (None, []), j
     print("RUN8 ok: legacy original is honest")
 
-    # RUN9. request run_id echoes the viewing run: past refuses, "" applies.
+    # RUN9. view target scopes taps: past refuses, main applies.
     api.store.start_demo_run()
-    j = c.post("/orchestrate", json={"text": "C3 done", "session": "run9",
-                                     "run_id": "legacy"}).json()
+    backdate(run1, 2)
+    c.post("/input", json={"action": {"id": "open", "args": {"target": run1}},
+                           "session": "run9"})
+    assert api.store.r["view"]["current"] == {"screen": "run_view",
+                                              "target": run1}
+    j = c.post("/orchestrate", json={"text": "C3 done", "session": "run9"}).json()
     assert j["reply"] == "That run is finished — read only.", j
-    assert api._SESSIONS["run9"]["run_id"] == "legacy"
     assert api.store.r["done"] == [], api.store.r["done"]
-    j = c.post("/orchestrate", json={"text": "C3 done", "session": "run9",
-                                     "run_id": ""}).json()
+    c.post("/input", json={"action": {"id": "back", "args": {}},
+                           "session": "run9"})
+    j = c.post("/orchestrate", json={"text": "C3 done", "session": "run9"}).json()
     assert api.store.r["done"] == ["C3"], j
-    print("RUN9 ok: run_id echo scopes taps")
+    print("RUN9 ok: view target scopes taps")
 
 print("ALL PASS")

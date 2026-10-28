@@ -19,7 +19,8 @@ import server.api as api  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
 WRITES = {"mark_done", "exclude_well", "record_redo", "add_note", "edit_note",
-          "save_tip", "set_timer", "manage_timers", "next_step", "make_robot"}
+          "save_tip", "set_timer", "cancel_timer", "extend_timer", "next_step",
+          "make_robot"}
 
 TURNS = [
     ("Note C8, sticky edges", {"must": ["add_note"], "must_not": ["open", "navigate", "show"]}),
