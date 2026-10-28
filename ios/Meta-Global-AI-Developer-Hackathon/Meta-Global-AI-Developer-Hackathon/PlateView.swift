@@ -17,7 +17,7 @@ struct WellSelect: Identifiable {
 // MARK: - Plate
 
 struct PlateView: View {
-    let lab: LabState
+    @Bindable var lab: LabState
     @Binding var selected: WellSelect?
 
     var body: some View {
@@ -54,7 +54,7 @@ struct PlateView: View {
 struct WellDot: View {
     @Environment(\.colorScheme) private var scheme
     let well: String
-    let lab: LabState
+    @Bindable var lab: LabState
     let d: CGFloat
     let onTap: () -> Void
 
@@ -110,7 +110,7 @@ struct WellDot: View {
 // MARK: - Group bars
 
 struct ConditionBars: View {
-    let lab: LabState
+    @Bindable var lab: LabState
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -136,7 +136,7 @@ struct ConditionBars: View {
 struct WellSheet: View {
     @Environment(\.dismiss) private var dismiss
     let well: String
-    let lab: LabState
+    @Bindable var lab: LabState
     var readOnly = false
     let onLog: (String) -> Void
     @State private var editText = ""
@@ -197,7 +197,7 @@ struct WellSheet: View {
 
     private func saveEdit(id: String) {
         saving = true
-        Task {
+        Task { @MainActor in
             do {
                 let r = try await PipClient.editNote(id: id, text: editText)
                 onLog(r.message)
@@ -222,7 +222,7 @@ struct WellSheet: View {
 // MARK: - Side panel
 
 struct StepCard: View {
-    let lab: LabState
+    @Bindable var lab: LabState
     var onEndRun: (() -> Void)?
     var onSource: (() -> Void)?
 
@@ -267,7 +267,7 @@ struct StepCard: View {
 }
 
 struct TimerList: View {
-    let lab: LabState
+    @Bindable var lab: LabState
     @State private var expanded = false
 
     var body: some View {
@@ -333,7 +333,7 @@ private func isWellID(_ s: String) -> Bool {
 }
 
 struct MemoList: View {
-    let lab: LabState
+    @Bindable var lab: LabState
     let onSelect: (String) -> Void
     @State private var expanded = false
 

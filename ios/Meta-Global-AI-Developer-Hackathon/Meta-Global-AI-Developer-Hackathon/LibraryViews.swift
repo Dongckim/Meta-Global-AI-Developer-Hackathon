@@ -226,6 +226,7 @@ struct ProtocolDetailView: View {
         return bits.joined(separator: " · ")
     }
 
+    @MainActor
     private func load() async {
         error = ""
         do {
@@ -259,7 +260,7 @@ struct PastRunView: View {
                 .buttonStyle(.borderless)
                 Text(doc?.protocolName ?? "Past run").font(.title2.bold())
                 Spacer()
-                Text("read only").font(.caption).foregroundStyle(.secondary)
+                Text("VIEWING past run \(runId) (read-only)").font(.caption2).foregroundStyle(.orange)
                     .padding(4).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
             }
             if !error.isEmpty {
@@ -328,6 +329,7 @@ struct PastRunView: View {
         onSource("protocol:\(pid)#step:\(rlab.stepIndex + 1)", s.quotePage, s.quote)
     }
 
+    @MainActor
     private func load() async {
         error = ""
         do {
@@ -432,7 +434,7 @@ struct GlassesAudioSection: View {
         guard !testing else { return }
         testing = true
         testResult = ""
-        Task {
+        Task { @MainActor in
             defer { testing = false }
             guard await Recorder.requestPermission() else {
                 testResult = "Mic permission needed"
@@ -546,13 +548,13 @@ struct SetupView: View {
     }
 
     private func checkMic() {
-        Task {
+        Task { @MainActor in
             mic = await Recorder.requestPermission() ? "Granted" : "Denied — enable in Settings"
         }
     }
 
     private func checkServer() {
-        Task {
+        Task { @MainActor in
             do {
                 let h = try await PipClient.health()
                 server = h.ok ? "Connected (\(h.tools ?? 0) tools)" : "Unhealthy"
@@ -564,7 +566,7 @@ struct SetupView: View {
 
     private func startHold() {
         guard !recording, !busy else { return }
-        Task {
+        Task { @MainActor in
             guard await Recorder.requestPermission() else {
                 heard = "Microphone permission needed"
                 return
@@ -589,7 +591,7 @@ struct SetupView: View {
             return
         }
         busy = true
-        Task {
+        Task { @MainActor in
             defer { busy = false }
             do {
                 let data = try Data(contentsOf: url)

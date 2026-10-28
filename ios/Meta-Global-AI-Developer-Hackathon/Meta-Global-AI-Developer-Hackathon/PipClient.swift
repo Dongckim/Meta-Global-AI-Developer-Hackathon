@@ -193,6 +193,7 @@ enum SSEvent {
     case timerWarning(message: String, speak: String?)
     case timerDone(message: String, speak: String?)
     case ui(UIAction)
+    case broken(String)
 }
 
 enum PipError: Error, LocalizedError {
@@ -205,6 +206,9 @@ enum PipError: Error, LocalizedError {
 }
 
 enum PipClient {
+    /// Must match server API_VERSION (test_snapshot_schema pins both sides).
+    static let EXPECTED_API_VERSION = 2
+
     static func orchestrate(text: String, screen: String = "main",
                             selectedWell: String = "", openSheet: String = "",
                             runId: String = "") async throws -> OrchestrateResponse {
@@ -314,9 +318,13 @@ enum PipClient {
     }
 
     static func runs(protocolId: String? = nil) async throws -> [RunSummary] {
-        let path = protocolId.map { "runs?protocol_id=\($0)" } ?? "runs"
-        let r: RunListResponse = try await get(path)
-        return r.runs
+        var url = Config.baseURL.appending(path: "runs")
+        if let p = protocolId {
+            url = url.appending(queryItems: [URLQueryItem(name: "protocol_id", value: p)])
+        }
+        let (data, resp) = try await URLSession.shared.data(from: url)
+        try check(resp, data)
+        return try JSONDecoder().decode(RunListResponse.self, from: data).runs
     }
 
     static func runDetail(id: String) async throws -> RunDoc {
@@ -370,8 +378,10 @@ enum PipClient {
                     else { continue }
                     switch kind {
                     case "snapshot":
-                        if let snap = try? JSONDecoder().decode(RecordSnapshot.self, from: payload) {
-                            cont.yield(.snapshot(snap))
+                        do {
+                            cont.yield(.snapshot(try JSONDecoder().decode(RecordSnapshot.self, from: payload)))
+                        } catch {
+                            cont.yield(.broken(syncReason(error)))
                         }
                     case "timer_warning":
                         let msg = obj["message"]?.string ?? "⏰ \(obj["label"]?.string ?? "timer"): 5 minutes left"

@@ -12,7 +12,7 @@ struct PipTests {
                   "steps": [{"kind": "pipette", "text": "s1", "minutes": null, "temp_c": null,
                              "tip": null, "caution": null, "pipette": null, "wells": ["B2"]},
                             {"kind": "pipette", "text": "s2", "minutes": null, "temp_c": null,
-                             "tip": null, "caution": null, "pipette": null, "wells": ["C2", "C3"]}]}},
+                             "tip": null, "caution": null, "pipette": null, "wells": ["C2", "C3"]}]},
          "step_index": 1, "done": ["C2"], "excluded": {}, "redo": {},
          "notes": [{"id": "m1", "target": "C2", "text": "bubbles", "ts": 1.0, "history": []}],
          "tips": [], "timers": [{"id": "t1", "label": "s2 · C2 · 30 min", "minutes": 30,
@@ -34,7 +34,7 @@ struct PipTests {
         #expect(lab.steps == ["s1", "s2"])
         #expect(lab.stepIndex == 1)
         #expect(lab.timers.map(\.label) == ["s2 · C2 · 30 min"])
-        #expect(lab.cards.map(\.question) == ["Exclude C3?", "Redo C4?"])
+        #expect(lab.cards.map(\.question) == ["Redo C4?", "Exclude C3?"])
     }
 
     @Test @MainActor func olderSnapshotIgnored() {
@@ -137,6 +137,31 @@ struct PipTests {
         #expect(abs(box.peak - 0.5) < 0.0001)
     }
 
+    @Test func syncReasonNamesBreaks() {
+        let bad = Data(#"{"plan": {"conditions": {}, "steps": []}}"#.utf8)
+        do {
+            _ = try JSONDecoder().decode(RecordSnapshot.self, from: bad)
+            Issue.record("missing version should throw")
+        } catch {
+            #expect(syncReason(error) == "version missing")
+        }
+        let bad2 = Data(#"{"version": 1, "plan": {"conditions": {}, "steps": []}, "done": "C2"}"#.utf8)
+        do {
+            _ = try JSONDecoder().decode(RecordSnapshot.self, from: bad2)
+            Issue.record("wrong-typed done should throw")
+        } catch {
+            #expect(syncReason(error) == "done wrong type")
+        }
+        let ok = try! JSONDecoder().decode(
+            RecordSnapshot.self,
+            from: Data(#"{"version": 3, "plan": {"conditions": {}, "steps": []}}"#.utf8))
+        #expect(ok.version == 3 && ok.done.isEmpty && ok.stepIndex == 0)
+        let rc = try! JSONDecoder().decode(
+            PlanCondition.self,
+            from: Data(#"{"label": "X", "treatments": [], "replicates": null, "wells": ["A1", "A2"]}"#.utf8))
+        #expect(rc.replicates == 2)
+    }
+
     @Test func libraryShapesDecode() {
         let p = """
         {"id": "abc", "name": "Demo protocol", "conditions": 3, "steps": 5}
@@ -149,5 +174,58 @@ struct PipTests {
         """
         let rs = try! JSONDecoder().decode(RunSummary.self, from: Data(r.utf8))
         #expect(rs.runId == "run-1" && rs.summary?.notes == 2)
+    }
+
+    @Test @MainActor func emptyRecordAfterEndSyncs() {
+        let live = """
+        {"version": 7, "run": {"run_id": "run-1", "protocol_id": "p",
+         "protocol_name": "Demo", "started_at": 1.0},
+         "plan": {"conditions": {}, "steps": []}, "step_index": 1,
+         "done": ["C2"], "cards": {"c1": {"id": "c1", "kind": "end_run",
+          "question": "End this run?", "detail": null, "ts": 2.0}}}
+        """
+        let lab = LabState()
+        lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(live.utf8)))
+        #expect(lab.run?.runId == "run-1" && lab.cards.count == 1)
+        let empty = """
+        {"version": 8, "run": null,
+         "plan": {"conditions": {}, "steps": [], "backups": []},
+         "step_index": 0, "done": [], "excluded": {}, "redo": {},
+         "notes": [], "tips": [], "timers": [], "stamps": {},
+         "recent": [], "cards": {}}
+        """
+        lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(empty.utf8)))
+        #expect(lab.run == nil)
+        #expect(lab.cards.isEmpty)
+        #expect(lab.done.isEmpty && lab.version == 8)
+    }
+
+    @Test @MainActor func epochChangeResetsStaleGuard() {
+        let lab = LabState()
+        let live = """
+        {"epoch": "aaa", "version": 7, "run": {"run_id": "run-1",
+         "protocol_id": "p", "protocol_name": "Demo", "started_at": 1.0},
+         "plan": {"conditions": {}, "steps": []},
+         "done": ["C2"], "cards": {}}
+        """
+        lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(live.utf8)))
+        #expect(lab.version == 7 && lab.epoch == "aaa")
+        // Data reset: lower version, new epoch -> accept anyway.
+        let reset = """
+        {"epoch": "bbb", "version": 2, "run": null,
+         "plan": {"conditions": {}, "steps": []},
+         "done": [], "cards": {}}
+        """
+        lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(reset.utf8)))
+        #expect(lab.version == 2 && lab.epoch == "bbb")
+        #expect(lab.run == nil && lab.done.isEmpty)
+        // Same epoch: older version still ignored.
+        let stale = """
+        {"epoch": "bbb", "version": 1, "run": null,
+         "plan": {"conditions": {}, "steps": []},
+         "done": ["C9"], "cards": {}}
+        """
+        lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(stale.utf8)))
+        #expect(lab.version == 2 && lab.done.isEmpty)
     }
 }

@@ -66,6 +66,10 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
+#: Snapshot/action contract version. Bump on any shared/schemas or
+#: view/action-shape change; the app compares at startup.
+API_VERSION = 2
+
 BASE_URL = "https://api.meta.ai/v1"
 SPARK_MODEL = "muse-spark-1.3"
 REASONING_EFFORT = "minimal"  # shortest pass; Spark rejects "none" (HTTP 400)
@@ -1549,7 +1553,7 @@ async def draft_delete(body: DraftStartIn):
 @app.get("/health")
 async def health():
     return {"ok": True, "commit": git_commit(), "tools": len(TOOLS),
-            "prompt_hash": prefix_hash(),
+            "prompt_hash": prefix_hash(), "api_version": API_VERSION,
             "memory": "chain" if CHAIN_ENABLED else "summary"}
 
 

@@ -242,6 +242,25 @@ with patch("httpx.AsyncClient", FakeClient):
     assert r.status_code == 400, r.text
     print("RUN6 ok: end card finishes the run")
 
+    # RUN10. version never regresses across start/end (the app drops
+    # older snapshots; a regressed end snapshot left the dead card up).
+    v_pre = api.store.r["version"]
+    api.store.start_demo_run()
+    assert api.store.r["version"] > v_pre, api.store.r["version"]
+    v_run = api.store.r["version"]
+    FakeClient.spark_payload = spark(fc("end_run", "{}", "c1"))
+    j = c.post("/orchestrate", json={"text": "end the run",
+                                     "session": "run10"}).json()
+    cid = [x["id"] for x in j["cards"] if x["kind"] == "end_run"][0]
+    v_card = api.store.r["version"]
+    assert v_card > v_run, (v_run, v_card)
+    j = c.post("/confirm", json={"card_id": cid, "ok": True,
+                                 "session": "run10"}).json()
+    assert api.store.r.get("run") is None, j
+    assert api.store.r["version"] > v_card, api.store.r["version"]
+    assert api.store.r["cards"] == {}, api.store.r["cards"]
+    print("RUN10 ok: version monotonic across start/end")
+
     # RUN8. legacy run (no protocol) names the gap honestly.
     api.store.r["run"] = {"run_id": "legacy", "protocol_id": None,
                           "protocol_name": None, "started_at": time.time()}

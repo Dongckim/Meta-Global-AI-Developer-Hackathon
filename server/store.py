@@ -202,8 +202,12 @@ class RecordStore:
                                      "started_at": self.path.stat().st_mtime}
                 else:
                     self.r["run"] = None
+            if "epoch" not in self.r:
+                self.r["epoch"] = uuid.uuid4().hex[:16]
+                self._save()
             return
         self.r = self._fresh_record({"conditions": {}, "steps": [], "backups": []})
+        self.r["epoch"] = uuid.uuid4().hex[:16]
         self._save()
 
     @staticmethod
@@ -342,7 +346,11 @@ class RecordStore:
         draft = self.r.get("draft")
         run = {"run_id": runlog.new_run_id(), "protocol_id": protocol_id,
                "protocol_name": protocol_name, "started_at": time.time()}
+        prev_version = self.r.get("version", 0)
+        prev_epoch = self.r.get("epoch") or uuid.uuid4().hex[:16]
         self.r = self._fresh_record(plan, 1, run)
+        self.r["version"] = prev_version  # _commit() bumps; version never regresses
+        self.r["epoch"] = prev_epoch  # same record lineage, not a reset
         if draft is not None:
             self.r["draft"] = draft
         self._save()
@@ -361,7 +369,11 @@ class RecordStore:
                "record": {k: v for k, v in self.r.items() if k != "draft"}}
         runlog.write_run(doc, self.root)
         draft = self.r.get("draft")
+        prev_version = self.r.get("version", 0)
+        prev_epoch = self.r.get("epoch") or uuid.uuid4().hex[:16]
         self.r = self._fresh_record({"conditions": {}, "steps": [], "backups": []})
+        self.r["version"] = prev_version  # _commit() bumps; version never regresses
+        self.r["epoch"] = prev_epoch  # same record lineage, not a reset
         if draft is not None:
             self.r["draft"] = draft
         self._save()

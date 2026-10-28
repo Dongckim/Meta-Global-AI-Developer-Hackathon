@@ -31,6 +31,23 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(self.s.steps()), 5)
         self.assertEqual(self.s.r["done"], [])
 
+    def test_epoch_lineage(self):
+        first = self.s.r["epoch"]
+        self.assertTrue(first)
+        # Restart on the same file keeps the epoch.
+        again = RecordStore(path=Path(self.tmp.name) / "r.json")
+        self.assertEqual(again.r["epoch"], first)
+        # Start/end carry it (same lineage, not a reset).
+        self.s._begin_locked({"conditions": {}, "steps": []}, None, None)
+        self.assertEqual(self.s.r["epoch"], first)
+        self.s._finish_locked("finished")
+        self.assertEqual(self.s.r["epoch"], first)
+        # Data reset mints a new one.
+        (Path(self.tmp.name) / "r.json").unlink()
+        reset = RecordStore(path=Path(self.tmp.name) / "r.json")
+        self.assertNotEqual(reset.r["epoch"], first)
+        self.assertEqual(reset.r["version"], 0)
+
     def test_mark_planned(self):
         r = self.apply([T("mark_done", wells=["C2", "C3"])])
         self.assertEqual(r["messages"], ["Nice, C2–C3 are in."])

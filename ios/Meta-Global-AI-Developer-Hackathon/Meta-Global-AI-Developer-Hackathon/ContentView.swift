@@ -85,6 +85,8 @@ struct ContentView: View {
     @State private var reviewError = ""
     @State private var reviewBusy = false
     @State private var detailNotice = ""
+    @State private var syncError: String?
+    @State private var apiMismatch: String?
     private let screens = loadScreens()
 
     /// Screen the server reasons about. Drills overlay the run/no-run root.
@@ -108,8 +110,10 @@ struct ContentView: View {
     }
 
     var body: some View {
-        Group {
-            if !setupDone {
+        VStack(spacing: 0) {
+            contractBanners
+            Group {
+                if !setupDone {
                 SetupView() { setupDone = true }
             } else if let src = viewingSource {
                 VStack(spacing: 8) {
@@ -175,11 +179,32 @@ struct ContentView: View {
             if new != nil {
                 showHome = false
                 selectedProtocol = nil
+            } else {
+                showHome = true
+                selectedWell = nil
+                debug = nil
             }
             loadLists()
         }
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
             refreshRoute()
+        }
+        }
+    }
+
+    /// Contract banners (hidden on setup: it has its own server check).
+    private var contractBanners: some View {
+        VStack(spacing: 0) {
+            if setupDone, let err = syncError {
+                Text("Out of sync: \(err)")
+                    .font(.callout.bold()).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).padding(6).background(.red)
+            }
+            if setupDone, let mm = apiMismatch {
+                Text(mm)
+                    .font(.callout.bold()).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).padding(6).background(.orange)
+            }
         }
     }
 
@@ -189,6 +214,12 @@ struct ContentView: View {
             let left = inner * 0.58
             HStack(spacing: 12) {
                 VStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Circle().fill(.green).frame(width: 8, height: 8)
+                        Text("LIVE · run \(lab.run?.runId ?? "–") · v\(lab.version)")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Spacer()
+                    }
                     PlateView(lab: lab, selected: $selectedWell)
                     ConditionBars(lab: lab)
                 }
@@ -641,11 +672,23 @@ struct ContentView: View {
     // MARK: - Logic
 
     private func connect() {
-        Task {
+        Task { @MainActor in
             do {
                 lab.sync(try await PipClient.record())
+                syncError = nil
             } catch {
+                syncError = syncReason(error)
                 say("Record unavailable: \(error.localizedDescription)")
+            }
+            do {
+                let h = try await PipClient.health()
+                if let v = h.apiVersion, v != PipClient.EXPECTED_API_VERSION {
+                    apiMismatch = "API mismatch: app \(PipClient.EXPECTED_API_VERSION), server \(v) — update one."
+                } else {
+                    apiMismatch = nil
+                }
+            } catch {
+                apiMismatch = nil // unreachable server already shows as out of sync
             }
             while !Task.isCancelled {
                 do {
@@ -663,6 +706,9 @@ struct ContentView: View {
         switch ev {
         case .snapshot(let snap):
             lab.sync(snap)
+            syncError = nil
+        case .broken(let reason):
+            syncError = reason
         case .timerWarning(let message, let speak):
             say(message)
             sayAloud(speak)
@@ -804,7 +850,7 @@ struct ContentView: View {
                 OriginalStore.save(data, protocolId: "_draft")
             }
             draftState = .importing
-            Task {
+            Task { @MainActor in
                 do {
                     let r = try await PipClient.importProtocol(data: data,
                                                                filename: url.lastPathComponent)
@@ -822,7 +868,7 @@ struct ContentView: View {
     }
 
     private func patch(path: String, value: Any) {
-        Task {
+        Task { @MainActor in
             do {
                 let r = try await PipClient.patchDraft(path: path, value: value)
                 if !r.ok { say(r.reason ?? "Edit failed") }
@@ -856,7 +902,7 @@ struct ContentView: View {
         guard !reviewBusy else { return }
         reviewBusy = true
         reviewError = ""
-        Task {
+        Task { @MainActor in
             defer { reviewBusy = false }
             do {
                 let r = try await PipClient.startRun()
@@ -886,7 +932,7 @@ struct ContentView: View {
         guard !reviewBusy else { return }
         reviewBusy = true
         reviewError = ""
-        Task {
+        Task { @MainActor in
             defer { reviewBusy = false }
             do {
                 let r = try await PipClient.saveDraft()
@@ -923,7 +969,7 @@ struct ContentView: View {
         guard !reviewBusy else { return }
         reviewBusy = true
         reviewError = ""
-        Task {
+        Task { @MainActor in
             defer { reviewBusy = false }
             do {
                 try await PipClient.discardDraft()
@@ -939,7 +985,7 @@ struct ContentView: View {
 
     private func startProtocolRun(_ id: String) {
         detailNotice = ""
-        Task {
+        Task { @MainActor in
             do {
                 let r = try await PipClient.runsStart(protocolId: id)
                 say(r.reply)
@@ -957,7 +1003,7 @@ struct ContentView: View {
     }
 
     private func endRun() {
-        Task {
+        Task { @MainActor in
             do {
                 let r = try await PipClient.runsEnd()
                 say(r.reply)
@@ -969,7 +1015,7 @@ struct ContentView: View {
     }
 
     private func loadLists() {
-        Task {
+        Task { @MainActor in
             do {
                 async let p = PipClient.protocols()
                 async let r = PipClient.runs()
@@ -1012,7 +1058,7 @@ struct ContentView: View {
     }
 
     private func answer(id: String, ok: Bool) {
-        Task {
+        Task { @MainActor in
             do {
                 let r = try await PipClient.confirm(cardId: id, ok: ok)
                 say(r.message)
@@ -1024,7 +1070,7 @@ struct ContentView: View {
 
     private func answerAll() {
         let ids = lab.cards.map(\.id)
-        Task {
+        Task { @MainActor in
             for id in ids {
                 do {
                     say(try await PipClient.confirm(cardId: id, ok: true).message)
@@ -1043,6 +1089,7 @@ struct ContentView: View {
         Task { await sendText(text) }
     }
 
+    @MainActor
     private func sendText(_ text: String) async {
         busy = true
         defer { busy = false }
@@ -1064,7 +1111,7 @@ struct ContentView: View {
         SpeechBus.shared.stop()
         pressing = true
         guard !recording, !busy else { return }
-        Task {
+        Task { @MainActor in
             guard await Recorder.requestPermission() else { say("Microphone permission needed"); return }
             guard pressing else { return } // released before the mic was ready
             do {
@@ -1091,6 +1138,7 @@ struct ContentView: View {
         }
     }
 
+    @MainActor
     private func sendVoice(_ url: URL, held: Double) async {
         busy = true
         defer { busy = false }
@@ -1149,7 +1197,7 @@ struct ContentView: View {
 
     private func runRobot() {
         robotState = .building
-        Task {
+        Task { @MainActor in
             do {
                 robotState = .done(try await PipClient.robot())
                 say("Robot protocol ready")

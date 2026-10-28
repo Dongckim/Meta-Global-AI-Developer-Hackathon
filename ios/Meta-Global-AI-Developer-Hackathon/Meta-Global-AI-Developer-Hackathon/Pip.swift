@@ -72,6 +72,20 @@ struct PlanStep: Decodable {
         case kind, text, minutes, tempC = "temp_c", tip, caution, pipette, wells,
              quote, quotePage = "quote_page"
     }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(String.self, forKey: .kind)
+        text = try c.decode(String.self, forKey: .text)
+        minutes = try c.decodeIfPresent(Double.self, forKey: .minutes)
+        tempC = try c.decodeIfPresent(Double.self, forKey: .tempC)
+        tip = try c.decodeIfPresent(String.self, forKey: .tip)
+        caution = try c.decodeIfPresent(String.self, forKey: .caution)
+        pipette = try c.decodeIfPresent(PlanPipette.self, forKey: .pipette)
+        wells = try c.decodeIfPresent([String].self, forKey: .wells) ?? []
+        quote = try c.decodeIfPresent(String.self, forKey: .quote)
+        quotePage = try c.decodeIfPresent(Int.self, forKey: .quotePage)
+    }
 }
 
 struct PlanCondition: Decodable {
@@ -79,6 +93,18 @@ struct PlanCondition: Decodable {
     var treatments: [String]
     var replicates: Int
     var wells: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case label, treatments, replicates, wells
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
+        treatments = try c.decodeIfPresent([String].self, forKey: .treatments) ?? []
+        wells = try c.decodeIfPresent([String].self, forKey: .wells) ?? []
+        replicates = try c.decodeIfPresent(Int.self, forKey: .replicates) ?? wells.count
+    }
 }
 
 struct Plan: Decodable {
@@ -259,6 +285,11 @@ struct HealthInfo: Decodable {
     var ok: Bool
     var commit: String?
     var tools: Int?
+    var apiVersion: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, commit, tools, apiVersion = "api_version"
+    }
 }
 
 struct DraftLiquid: Decodable {
@@ -355,6 +386,7 @@ struct ProtocolDraft: Decodable {
 }
 
 struct RecordSnapshot: Decodable {
+    var epoch: String?
     var version: Int
     var plan: Plan
     var stepIndex: Int
@@ -371,27 +403,57 @@ struct RecordSnapshot: Decodable {
     var recent: [HistoryEntry]
 
     enum CodingKeys: String, CodingKey {
-        case version, plan, stepIndex = "step_index", done, excluded, redo,
+        case epoch, version, plan, stepIndex = "step_index", done, excluded, redo,
              notes, tips, timers, stamps, cards, draft, run, recent
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        epoch = try c.decodeIfPresent(String.self, forKey: .epoch)
         version = try c.decode(Int.self, forKey: .version)
         plan = try c.decode(Plan.self, forKey: .plan)
-        stepIndex = try c.decode(Int.self, forKey: .stepIndex)
-        done = try c.decode([String].self, forKey: .done)
-        excluded = try c.decode([String: String].self, forKey: .excluded)
-        redo = try c.decode([String: String].self, forKey: .redo)
-        notes = try c.decode([Memo].self, forKey: .notes)
-        tips = try c.decode([SavedTip].self, forKey: .tips)
-        timers = try c.decode([TimerEntry].self, forKey: .timers)
-        stamps = try c.decode([String: Stamp].self, forKey: .stamps)
-        cards = try c.decode([String: ServerCard].self, forKey: .cards).values.sorted { $0.ts > $1.ts }
-        draft = try c.decodeIfPresent(ProtocolDraft.self, forKey: .draft)
+        // Additive tolerance: missing/null collections default, but present
+        // wrong types still throw so the banner names the break (draft is
+        // auxiliary: its errors never take down the bench).
+        stepIndex = try c.decodeIfPresent(Int.self, forKey: .stepIndex) ?? 0
+        done = try c.decodeIfPresent([String].self, forKey: .done) ?? []
+        excluded = try c.decodeIfPresent([String: String].self, forKey: .excluded) ?? [:]
+        redo = try c.decodeIfPresent([String: String].self, forKey: .redo) ?? [:]
+        notes = try c.decodeIfPresent([Memo].self, forKey: .notes) ?? []
+        tips = try c.decodeIfPresent([SavedTip].self, forKey: .tips) ?? []
+        timers = try c.decodeIfPresent([TimerEntry].self, forKey: .timers) ?? []
+        stamps = try c.decodeIfPresent([String: Stamp].self, forKey: .stamps) ?? [:]
+        cards = (try c.decodeIfPresent([String: ServerCard].self, forKey: .cards) ?? [:])
+            .values.sorted { $0.ts > $1.ts }
+        draft = (try? c.decodeIfPresent(ProtocolDraft.self, forKey: .draft)) ?? nil
         run = try c.decodeIfPresent(RunBlock.self, forKey: .run)
-        recent = (try? c.decode([HistoryEntry].self, forKey: .recent)) ?? []
+        recent = try c.decodeIfPresent([HistoryEntry].self, forKey: .recent) ?? []
     }
+}
+
+/// One-line reason for the out-of-sync banner: "plan.steps[2].wells missing".
+func syncReason(_ error: Error) -> String {
+    guard let de = error as? DecodingError else { return "unreadable snapshot" }
+    let path: String
+    let what: String
+    switch de {
+    case .keyNotFound(let k, let ctx):
+        path = ((ctx.codingPath.map(\.stringValue) + [k.stringValue]).joined(separator: "."))
+        what = "missing"
+    case .typeMismatch(_, let ctx):
+        path = ctx.codingPath.map(\.stringValue).joined(separator: ".")
+        what = "wrong type"
+    case .valueNotFound(_, let ctx):
+        path = ctx.codingPath.map(\.stringValue).joined(separator: ".")
+        what = "null"
+    case .dataCorrupted(let ctx):
+        path = ctx.codingPath.map(\.stringValue).joined(separator: ".")
+        what = ctx.debugDescription
+    @unknown default:
+        return "unreadable snapshot"
+    }
+    let reason = path.isEmpty ? what : "\(path) \(what)"
+    return String(reason.prefix(80))
 }
 
 let plateRows = ["A", "B", "C", "D", "E", "F", "G", "H"]
@@ -432,8 +494,10 @@ func wellRangeLabel(_ wells: [String]) -> String? {
 
 // MARK: - Lab state (render model; the server owns the record)
 
+@MainActor
 @Observable
 final class LabState {
+    var epoch: String?
     var version = -1
     var planSteps: [PlanStep] = []
     var conditions: [String: PlanCondition] = [:]
@@ -456,9 +520,15 @@ final class LabState {
     var flashing: Set<String> = []
     private var flashGen = 0
 
-    /// Replace everything with a server snapshot. Older versions are ignored.
+    /// Replace everything with a server snapshot. A new epoch (data reset,
+    /// server move) resets the stale guard; within an epoch, older versions
+    /// are ignored.
     func sync(_ snap: RecordSnapshot) {
-        guard snap.version > version else { return }
+        if snap.epoch != epoch {
+            epoch = snap.epoch
+        } else {
+            guard snap.version > version else { return }
+        }
         version = snap.version
         planSteps = snap.plan.steps
         conditions = snap.plan.conditions

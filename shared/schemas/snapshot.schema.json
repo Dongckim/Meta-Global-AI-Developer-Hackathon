@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pip record snapshot",
+  "description": "record.json shape as served by /record and /events. Top level and node identities are strict; nodes tolerate additive keys. Bump api_version on any change here.",
+  "type": "object",
+  "required": ["epoch", "version", "plan", "step_index", "done", "excluded", "redo",
+               "notes", "tips", "timers", "stamps", "cards", "recent"],
+  "properties": {
+    "epoch": {"type": "string",
+              "description": "Record lineage id: minted when record.json is created, carried across start/end, new only on data reset or server move. The app resets its stale guard on change."},
+    "version": {"type": "integer"},
+    "run": {
+      "type": ["object", "null"],
+      "required": ["run_id", "started_at"],
+      "properties": {
+        "run_id": {"type": "string"},
+        "protocol_id": {"type": ["string", "null"]},
+        "protocol_name": {"type": ["string", "null"]},
+        "started_at": {"type": "number"}
+      }
+    },
+    "plan": {
+      "type": "object",
+      "required": ["conditions", "steps"],
+      "properties": {
+        "conditions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["label", "treatments", "replicates", "wells"],
+            "properties": {
+              "label": {"type": "string"},
+              "treatments": {"type": "array", "items": {"type": "string"}},
+              "replicates": {"type": "integer"},
+              "wells": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "text", "wells"],
+            "properties": {
+              "kind": {"type": "string"},
+              "text": {"type": "string"},
+              "minutes": {"type": ["number", "null"]},
+              "temp_c": {"type": ["number", "null"]},
+              "tip": {"type": ["string", "null"]},
+              "caution": {"type": ["string", "null"]},
+              "quote": {"type": "string"},
+              "quote_page": {"type": ["integer", "null"]},
+              "wells": {"type": "array", "items": {"type": "string"}},
+              "pipette": {
+                "type": ["object", "null"],
+                "required": ["liquid", "wells"],
+                "properties": {
+                  "liquid": {"type": "string"},
+                  "volume": {"type": ["number", "null"]},
+                  "unit": {"type": ["string", "null"]},
+                  "wells": {"type": "array", "items": {"type": "string"}},
+                  "target_label": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "backups": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "step_index": {"type": "integer"},
+    "done": {"type": "array", "items": {"type": "string"}},
+    "excluded": {"type": "object", "additionalProperties": {"type": "string"}},
+    "redo": {"type": "object", "additionalProperties": {"type": "string"}},
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "target", "text", "ts"],
+        "properties": {
+          "id": {"type": "string"},
+          "target": {"type": "string"},
+          "text": {"type": "string"},
+          "raw": {"type": "string"},
+          "ts": {"type": "number"},
+          "route": {"type": "string"},
+          "wells": {"type": "array", "items": {"type": "string"}},
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["text", "ts"],
+              "properties": {"text": {"type": "string"}, "ts": {"type": "number"}}
+            }
+          }
+        }
+      }
+    },
+    "tips": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "step": {"type": "string"},
+          "text": {"type": "string"},
+          "ts": {"type": "number"},
+          "route": {"type": "string"}
+        }
+      }
+    },
+    "timers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "minutes", "started_at", "wells"],
+        "properties": {
+          "id": {"type": "string"},
+          "label": {"type": "string"},
+          "minutes": {"type": "number"},
+          "on_done": {"type": ["string", "null"]},
+          "started_at": {"type": "number"},
+          "step": {"type": "string"},
+          "wells": {"type": "string"}
+        }
+      }
+    },
+    "stamps": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["source", "ts"],
+        "properties": {"source": {"type": "string"}, "ts": {"type": "number"}}
+      }
+    },
+    "cards": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["id", "kind", "question", "ts"],
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"type": "string"},
+          "question": {"type": "string"},
+          "detail": {"type": ["string", "null"]},
+          "ts": {"type": "number"},
+          "payload": {"type": "object"}
+        }
+      }
+    },
+    "draft": {
+      "type": ["object", "null"],
+      "required": ["plan"],
+      "properties": {
+        "plan": {"type": "object"},
+        "errors": {"type": "array"},
+        "review": {"type": "array"},
+        "meta": {"type": "object"}
+      }
+    },
+    "recent": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ts"],
+        "properties": {
+          "route": {"type": "string"},
+          "action": {"type": "string"},
+          "wells": {"type": "array", "items": {"type": "string"}},
+          "ts": {"type": "number"}
+        }
+      }
+    }
+  }
+}

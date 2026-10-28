@@ -1189,7 +1189,8 @@ def build_start_plan(plan: dict) -> dict:
             "label": c.get("label") or key,
             "treatments": [(liquids.get(t) or {}).get("name", t)
                            for t in (c.get("treatments") or [])],
-            "replicates": c.get("replicates"),
+            "replicates": c.get("replicates") if isinstance(c.get("replicates"), int)
+            else len(list(c.get("wells") or [])),
             "wells": list(c.get("wells") or []),
             "quote": c.get("quote") or "",
             "quote_page": c.get("quote_page"),
