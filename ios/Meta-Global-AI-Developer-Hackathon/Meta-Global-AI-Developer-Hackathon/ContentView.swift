@@ -90,6 +90,7 @@ struct ContentView: View {
     @State private var syncError: String?
     @State private var apiMismatch: String?
     private let screens = loadScreens()
+    var dat: GlassesDAT? = nil
 
     /// Screen for hints: the server-owned view (setup boots app-local).
     private var currentScreen: String {
@@ -137,7 +138,7 @@ struct ContentView: View {
             contractBanners
             Group {
                 if !setupDone {
-                SetupView() {
+                SetupView(dat: dat) {
                     setupDone = true
                     if lab.view.current.screen == "setup" { sendAction("back") }
                 }
@@ -218,6 +219,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
             refreshRoute()
         }
+        .onOpenURL { url in dat?.handleCallback(url) }
         }
     }
 

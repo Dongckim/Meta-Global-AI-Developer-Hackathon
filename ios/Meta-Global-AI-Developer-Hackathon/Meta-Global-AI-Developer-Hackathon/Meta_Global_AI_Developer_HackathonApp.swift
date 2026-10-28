@@ -5,11 +5,30 @@
 //  Created by dongchankim on 10/26/26.
 //
 
-import SwiftUI
+import MWDATCore
 import SwiftData
+import SwiftUI
 
 @main
 struct Meta_Global_AI_Developer_HackathonApp: App {
+    @State private var dat: GlassesDAT
+
+    init() {
+        var configError: String?
+        do {
+            try Wearables.configure()
+        } catch let error as WearablesError {
+            configError = error.description
+        } catch {
+            configError = error.localizedDescription
+        }
+        let d = GlassesDAT(wearables: Wearables.shared)
+        if let configError {
+            d.noteError(configError)
+        }
+        _dat = State(initialValue: d)
+    }
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             Item.self,
@@ -25,7 +44,7 @@ struct Meta_Global_AI_Developer_HackathonApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(dat: dat)
         }
         .modelContainer(sharedModelContainer)
     }

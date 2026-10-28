@@ -481,6 +481,7 @@ struct LevelBar: View {
 // MARK: - Setup
 
 struct SetupView: View {
+    var dat: GlassesDAT? = nil
     var onDone: () -> Void
     @State private var mic = "Not checked"
     @State private var server = "Not checked"
@@ -524,11 +525,7 @@ struct SetupView: View {
                         .padding(6).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
                 }
             }
-            HStack {
-                Text("DAT registration").font(.headline)
-                Text("next").font(.caption).foregroundStyle(.secondary)
-                    .padding(4).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
-            }
+            GlassesDATSection(dat: dat)
             Spacer()
             Button("Done") { onDone() }
                 .buttonStyle(.borderedProminent)
