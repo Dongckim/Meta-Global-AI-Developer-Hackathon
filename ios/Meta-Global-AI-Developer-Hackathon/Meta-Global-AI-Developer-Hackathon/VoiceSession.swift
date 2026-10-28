@@ -1,5 +1,6 @@
 import AudioToolbox
 import Foundation
+import os
 import Observation
 import SwiftUI
 
@@ -146,6 +147,7 @@ final class VoiceSession {
     func activate() {
         activated = true
         refreshWakeStatus()
+        Log.voice.info("[voice] activate support=\(String(describing: self.support()), privacy: .public)")
         if support() == .undetermined {
             Task {
                 _ = await WakeListener.requestAccess()

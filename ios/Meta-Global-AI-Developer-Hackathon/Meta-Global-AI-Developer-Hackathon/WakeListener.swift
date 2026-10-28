@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import os
 import Speech
 
 /// Always-on "Hey Pip" spotter. Feeds a shared-engine sink through a 16kHz
@@ -52,17 +53,46 @@ final class WakeListener {
         }
     }
 
+    /// In-flight prompt: system permission UI is one-shot, so concurrent
+    /// callers (launch auto-ask + Setup Check) join one request.
+    private static var inflight: Task<Bool, Never>?
+
     /// Asks for speech + mic access. True when both granted.
     static func requestAccess() async -> Bool {
-        let speech = await withCheckedContinuation { cont in
-            SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0) }
+        if let t = inflight {
+            Log.wake.info("[wake] requestAccess join inflight")
+            return await t.value
         }
-        guard speech == .authorized else { return false }
-        #if os(iOS)
-        return await Recorder.requestPermission()
-        #else
-        return true
-        #endif
+        Log.wake.info("[wake] requestAccess begin")
+        let t = Task<Bool, Never> {
+            let speech = await withCheckedContinuation { cont in
+                SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0) }
+            }
+            Log.wake.info("[wake] speech=\(speechString(speech), privacy: .public)")
+            guard speech == .authorized else { return false }
+            #if os(iOS)
+            let mic = await Recorder.requestPermission()
+            Log.wake.info("[wake] mic=\(mic ? "granted" : "denied", privacy: .public)")
+            return mic
+            #else
+            return true
+            #endif
+        }
+        inflight = t
+        let granted = await t.value
+        inflight = nil
+        Log.wake.info("[wake] requestAccess end granted=\(granted)")
+        return granted
+    }
+
+    private static func speechString(_ s: SFSpeechRecognizerAuthorizationStatus) -> String {
+        switch s {
+        case .authorized: "authorized"
+        case .denied: "denied"
+        case .restricted: "restricted"
+        case .notDetermined: "notDetermined"
+        @unknown default: "unknown"
+        }
     }
 
     /// Fired once per detection; the owner stops the listener when opening.

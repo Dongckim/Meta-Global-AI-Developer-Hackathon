@@ -4,6 +4,7 @@
 // CameraAccess sample (WearablesViewModel / RegistrationView).
 
 import Foundation
+import os
 import MWDATCore
 import Observation
 import SwiftUI
@@ -66,14 +67,17 @@ final class GlassesDAT {
         self.devices = wearables.devices
         monitorDevices(devices)
 
+        Log.dat.info("[dat] start registration=\(String(describing: self.registrationState), privacy: .public) devices=\(self.devices.count)")
         registrationTask = Task {
             for await state in wearables.registrationStateStream() {
+                Log.dat.info("[dat] registration -> \(String(describing: state), privacy: .public)")
                 self.registrationState = state
                 self.clearError()
             }
         }
         deviceStreamTask = Task {
             for await ids in wearables.devicesStream() {
+                Log.dat.info("[dat] devices -> \(ids.count)")
                 self.devices = ids
                 self.monitorDevices(ids)
                 self.clearError()

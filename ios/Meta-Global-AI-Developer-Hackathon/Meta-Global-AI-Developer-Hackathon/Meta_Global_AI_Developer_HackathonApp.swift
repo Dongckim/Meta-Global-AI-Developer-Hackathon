@@ -6,6 +6,7 @@
 //
 
 import MWDATCore
+import os
 import SwiftData
 import SwiftUI
 
@@ -22,6 +23,7 @@ struct Meta_Global_AI_Developer_HackathonApp: App {
         } catch {
             configError = error.localizedDescription
         }
+        Log.dat.info("[dat] configure: \(configError ?? "ok", privacy: .public)")
         let d = GlassesDAT(wearables: Wearables.shared)
         if let configError {
             d.noteError(configError)
