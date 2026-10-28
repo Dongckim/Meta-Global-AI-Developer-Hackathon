@@ -594,8 +594,11 @@ struct SetupView: View {
                 let data = try Data(contentsOf: url)
                 try? FileManager.default.removeItem(at: url)
                 let r = try await PipClient.voice(wav: data)
+                guard r.ignored != true else { return }
                 heard = r.transcript.isEmpty ? "(nothing heard)" : r.transcript
                 SpeechBus.shared.speak(r.speak ?? r.reply)
+            } catch is PipClient.VoiceError {
+                heard = "Too short — press and hold to speak"
             } catch {
                 heard = "Error: \(error.localizedDescription)"
             }

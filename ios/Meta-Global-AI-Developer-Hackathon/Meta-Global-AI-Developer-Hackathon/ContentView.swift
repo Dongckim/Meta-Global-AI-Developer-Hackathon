@@ -1146,22 +1146,23 @@ struct ContentView: View {
         busy = true
         defer { busy = false }
         do {
-            let dur = Recorder.duration(of: url) ?? 0
             let loud = Recorder.rms(of: url) ?? 0
             let data = try Data(contentsOf: url)
             try? FileManager.default.removeItem(at: url)
-            guard dur >= 0.3 else {
-                say(held >= 1 ? "Held it but nothing recorded — check the simulator audio input"
-                    : String(format: "Too short (%.1fs) — press and hold to speak", dur))
-                return
-            }
             guard loud >= 0.001 else { say("No sound reached the mic — on the simulator, check the Mac mic permission and input"); return }
             let r = try await PipClient.voice(wav: data)
+            guard r.ignored != true else { return }
             say("🎙 \(r.transcript)")
             handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
                    route: r.route, input: r.transcript, sources: r.sources,
                    dropped: r.dropped ?? 0,
                    ui: r.ui, speak: r.speak, recordVersion: r.record_version)
+        } catch let e as PipClient.VoiceError {
+            switch e {
+            case .tooShort(let dur):
+                say(held >= 1 ? "Held it but nothing recorded — check the simulator audio input"
+                    : String(format: "Too short (%.1fs) — press and hold to speak", dur))
+            }
         } catch {
             say("Error: \(error.localizedDescription)")
         }

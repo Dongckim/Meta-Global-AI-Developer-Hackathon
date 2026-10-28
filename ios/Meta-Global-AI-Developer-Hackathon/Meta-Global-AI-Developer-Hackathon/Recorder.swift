@@ -152,6 +152,15 @@ final class Recorder {
         return Double(f.length) / f.fileFormat.sampleRate
     }
 
+    /// Clip length from WAV bytes (standard 44-byte header), or nil when malformed.
+    static func duration(of wav: Data) -> Double? {
+        guard wav.count >= 44 else { return nil }
+        let byteRate = UInt32(wav[28]) | UInt32(wav[29]) << 8
+            | UInt32(wav[30]) << 16 | UInt32(wav[31]) << 24
+        guard byteRate > 0 else { return nil }
+        return Double(wav.count - 44) / Double(byteRate)
+    }
+
     /// Loudness 0...1, or nil when unreadable. Exact 0 means digital silence.
     static func rms(of url: URL) -> Float? {
         guard let f = try? AVAudioFile(forReading: url), f.length > 0,

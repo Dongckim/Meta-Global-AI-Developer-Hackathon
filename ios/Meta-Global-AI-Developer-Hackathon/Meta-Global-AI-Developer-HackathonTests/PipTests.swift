@@ -247,4 +247,17 @@ struct PipTests {
         lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(stale.utf8)))
         #expect(lab.version == 2 && lab.done.isEmpty)
     }
+
+    @Test func wavBytesDuration() {
+        func wav(frames: Int) -> Data {
+            var d = Data(count: 44 + frames * 2) // 16kHz mono 16-bit
+            var rate: UInt32 = 32000 // byteRate at [28..<32]
+            withUnsafeBytes(of: &rate) { d.replaceSubrange(28..<32, with: $0) }
+            return d
+        }
+        #expect(Recorder.duration(of: wav(frames: 0)) == 0)
+        #expect(abs((Recorder.duration(of: wav(frames: 1600)) ?? -1) - 0.1) < 0.001)
+        #expect(abs((Recorder.duration(of: wav(frames: 16000)) ?? -1) - 1.0) < 0.001)
+        #expect(Recorder.duration(of: Data(count: 10)) == nil)
+    }
 }

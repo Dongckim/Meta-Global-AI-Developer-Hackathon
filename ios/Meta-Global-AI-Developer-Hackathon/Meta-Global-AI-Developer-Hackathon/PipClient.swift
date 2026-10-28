@@ -64,6 +64,7 @@ struct VoiceResponse: Decodable {
     let dropped: Int?
     let ui: [UIAction]?
     let speak: String?
+    let ignored: Bool?
 }
 
 struct ConfirmResponse: Decodable {
@@ -209,6 +210,14 @@ enum PipClient {
     /// Must match server API_VERSION (test_snapshot_schema pins both sides).
     static let EXPECTED_API_VERSION = 3
 
+    /// Below this clip length nothing is sent (single choke point for all
+    /// mic buttons; the server additionally ignores zero-frame audio).
+    static let minVoiceDuration = 0.3
+
+    enum VoiceError: Error {
+        case tooShort(duration: Double)
+    }
+
     static func orchestrate(text: String) async throws -> OrchestrateResponse {
         var req = URLRequest(url: Config.baseURL.appending(path: "orchestrate"))
         req.httpMethod = "POST"
@@ -220,6 +229,9 @@ enum PipClient {
     }
 
     static func voice(wav: Data) async throws -> VoiceResponse {
+        if let dur = Recorder.duration(of: wav), dur < minVoiceDuration {
+            throw VoiceError.tooShort(duration: dur)
+        }
         let boundary = "----pip\(UUID().uuidString)"
         var body = Data()
         func append(_ s: String) { body.append(Data(s.utf8)) }
