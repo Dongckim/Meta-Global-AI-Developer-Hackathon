@@ -14,14 +14,58 @@ final class Recorder {
             AVAudioSession.sharedInstance().requestRecordPermission { cont.resume(returning: $0) }
         }
     }
+
+    /// A2DP output when on. Warning: with A2DP the mic may stay on the iPad.
+    static var a2dpEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "pip.a2dp") as? Bool ?? false }
+        set { UserDefaults.standard.set(newValue, forKey: "pip.a2dp") }
+    }
+
+    /// "auto" (prefer glasses HFP) or an input port UID.
+    static var preferredInputUID: String {
+        get { UserDefaults.standard.string(forKey: "pip.preferredInput") ?? "auto" }
+        set { UserDefaults.standard.set(newValue, forKey: "pip.preferredInput") }
+    }
+
+    static func configureSession() throws {
+        var opts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
+        if a2dpEnabled { opts.insert(.allowBluetoothA2DP) }
+        try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default, options: opts)
+    }
+
+    static func hfpInput() -> AVAudioSessionPortDescription? {
+        AVAudioSession.sharedInstance().availableInputs?.first { $0.portType == .bluetoothHFP }
+    }
+
+    /// Applies the stored input choice. Safe on every route change: asking
+    /// for the already-active input is a no-op. Returns true when it asked
+    /// for a switch (the caller should let the route settle before tapping).
+    @discardableResult
+    static func ensurePreferredInput() -> Bool {
+        let session = AVAudioSession.sharedInstance()
+        guard let inputs = session.availableInputs else { return false }
+        let uid = preferredInputUID
+        let want: AVAudioSessionPortDescription? =
+            uid == "auto" ? inputs.first { $0.portType == .bluetoothHFP }
+                           : inputs.first { $0.uid == uid }
+        let current = session.preferredInput ?? session.currentRoute.inputs.first
+        guard want?.uid != current?.uid else { return false }
+        try? session.setPreferredInput(want)
+        return true
+    }
     #endif
 
-    func start() throws {
+    var currentPeak: Float { box?.peak ?? 0 }
+
+    func start() async throws {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.allowBluetooth, .allowBluetoothA2DP])
+        try Self.configureSession()
+        let switched = Self.ensurePreferredInput()
         try session.setActive(true)
+        if switched {
+            try? await Task.sleep(for: .milliseconds(350))
+        }
         #endif
         let engine = AVAudioEngine()
         let input = engine.inputNode
@@ -36,7 +80,7 @@ final class Recorder {
             guard let ch = buffer.floatChannelData else { return }
             let box = sink.value
             if box.samples.count < 16_000_000 { // ~5min at 48kHz; commands are seconds
-                box.samples.append(contentsOf: UnsafeBufferPointer(start: ch[0], count: Int(buffer.frameLength)))
+                box.append(UnsafeBufferPointer(start: ch[0], count: Int(buffer.frameLength)))
             }
         }
         engine.prepare()
@@ -146,9 +190,20 @@ enum RecorderError: Error, LocalizedError {
     }
 }
 
-/// Sample accumulator. Only touched on the tap thread while recording.
+/// Sample accumulator. `samples` only on the tap thread while recording;
+/// `peak` is lock-guarded because the level meter reads it from the UI.
 final class SampleBox {
     var samples: [Float] = []
+    private let peakLock = NSLock()
+    private var _peak: Float = 0
+    var peak: Float { peakLock.withLock { _peak } }
+
+    func append(_ ptr: UnsafeBufferPointer<Float>) {
+        samples.append(contentsOf: ptr)
+        var m: Float = 0
+        for s in ptr { let a = abs(s); if a > m { m = a } }
+        peakLock.withLock { _peak = m }
+    }
 }
 
 /// Sendable box for values the audio tap hands to a nonisolated function.

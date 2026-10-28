@@ -129,6 +129,14 @@ struct PipTests {
         #expect(loosePhrase("10 µL  at  37 °C") == "10 ul at 37 c")
     }
 
+    @Test func sampleBoxPeak() {
+        let box = SampleBox()
+        let samples: [Float] = [0.1, -0.5, 0.2]
+        samples.withUnsafeBufferPointer { box.append($0) }
+        #expect(box.samples.count == 3)
+        #expect(abs(box.peak - 0.5) < 0.0001)
+    }
+
     @Test func libraryShapesDecode() {
         let p = """
         {"id": "abc", "name": "Demo protocol", "conditions": 3, "steps": 5}

@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 func fmtDate(_ ts: Double?) -> String {
@@ -339,10 +340,145 @@ struct PastRunView: View {
     }
 }
 
+// MARK: - Glasses audio (iOS Bluetooth; no DAT dependency)
+
+struct GlassesAudioSection: View {
+    @State private var inputs: [AVAudioSessionPortDescription] = []
+    @State private var routeText = "—"
+    @State private var pick = Recorder.preferredInputUID
+    @State private var a2dp = Recorder.a2dpEnabled
+    @State private var testing = false
+    @State private var testResult = ""
+    @State private var player: AVAudioPlayer?
+    @State private var tester = Recorder()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Glasses audio").font(.headline)
+            Text(routeText).font(.callout)
+            Text(hfpLine).font(.callout).foregroundStyle(hfpFound ? .green : .secondary)
+            Picker("Microphone", selection: $pick) {
+                Text("Auto (prefer glasses)").tag("auto")
+                ForEach(inputs, id: \.uid) { p in
+                    Text("\(p.portName) (\(shortType(p.portType)))").tag(p.uid)
+                }
+            }
+            .pickerStyle(.menu)
+            .onChange(of: pick) { _, v in
+                Recorder.preferredInputUID = v
+                Recorder.ensurePreferredInput()
+                refresh()
+            }
+            Toggle("A2DP output (better sound, mic may stay on iPad)", isOn: $a2dp)
+                .font(.callout)
+                .onChange(of: a2dp) { _, v in
+                    Recorder.a2dpEnabled = v
+                    try? Recorder.configureSession()
+                    refresh()
+                }
+            TimelineView(.animation(minimumInterval: 1.0 / 15)) { _ in
+                LevelBar(level: tester.currentPeak)
+            }
+            .frame(height: 10)
+            HStack {
+                Button(testing ? "Testing…" : "3s record → play") { loopbackTest() }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(testing)
+                Button("Hear Pip") {
+                    SpeechBus.shared.speak("Glasses audio check. Can you hear Pip?")
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+            }
+            if !testResult.isEmpty {
+                Text(testResult).font(.callout).foregroundStyle(.secondary)
+            }
+            Text("Pair glasses in Settings; pick their audio in Control Center.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .onAppear { refresh() }
+        .onReceive(NotificationCenter.default.publisher(
+            for: AVAudioSession.routeChangeNotification)) { _ in refresh() }
+    }
+
+    private var hfpFound: Bool { Recorder.hfpInput() != nil }
+
+    private var hfpLine: String {
+        if let h = Recorder.hfpInput() { return "Glasses mic: \(h.portName) ✓" }
+        return "Glasses mic: not found"
+    }
+
+    private func shortType(_ t: AVAudioSession.Port) -> String {
+        switch t {
+        case .bluetoothHFP: return "HFP"
+        case .bluetoothA2DP: return "A2DP"
+        case .bluetoothLE: return "BLE"
+        case .builtInMic: return "built-in"
+        default: return "other"
+        }
+    }
+
+    private func refresh() {
+        let session = AVAudioSession.sharedInstance()
+        inputs = session.availableInputs ?? []
+        let ins = session.currentRoute.inputs
+            .map { "\($0.portName) (\(shortType($0.portType)))" }.joined(separator: ", ")
+        let outs = session.currentRoute.outputs
+            .map { "\($0.portName) (\(shortType($0.portType)))" }.joined(separator: ", ")
+        let khz = String(format: "%.1f", session.sampleRate / 1000)
+        routeText = "in: \(ins.isEmpty ? "—" : ins) · out: \(outs.isEmpty ? "—" : outs) · \(khz) kHz"
+    }
+
+    private func loopbackTest() {
+        guard !testing else { return }
+        testing = true
+        testResult = ""
+        Task {
+            defer { testing = false }
+            guard await Recorder.requestPermission() else {
+                testResult = "Mic permission needed"
+                return
+            }
+            do {
+                try await tester.start()
+                try? await Task.sleep(for: .seconds(3))
+                let url = try tester.stop()
+                testResult = fileLine(url)
+                try AVAudioSession.sharedInstance().setActive(true)
+                player = try AVAudioPlayer(contentsOf: url)
+                player?.play()
+            } catch {
+                testResult = "Failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// The HFP→WAV proof: whatever the input rate, the file must be 16 kHz mono.
+    private func fileLine(_ url: URL) -> String {
+        guard let f = try? AVAudioFile(forReading: url) else { return "Unreadable file" }
+        let fmt = f.fileFormat
+        let ok = fmt.sampleRate == 16000 && fmt.channelCount == 1
+        let dur = String(format: "%.1f", Recorder.duration(of: url) ?? 0)
+        let rms = Recorder.rms(of: url).map { String(format: "%.2f", $0) } ?? "?"
+        return "\(dur)s · \(Int(fmt.sampleRate)) Hz \(fmt.channelCount)ch \(ok ? "✓" : "⚠ expected 16 kHz mono") · rms \(rms)"
+    }
+}
+
+struct LevelBar: View {
+    var level: Float
+
+    var body: some View {
+        GeometryReader { g in
+            RoundedRectangle(cornerRadius: 3).fill(.quaternary)
+            RoundedRectangle(cornerRadius: 3)
+                .fill(level > 0.6 ? .red : .green)
+                .frame(width: g.size.width * CGFloat(min(1, level * 3)))
+        }
+    }
+}
+
 // MARK: - Setup
 
 struct SetupView: View {
-    var routeLine: String
     var onDone: () -> Void
     @State private var mic = "Not checked"
     @State private var server = "Not checked"
@@ -360,12 +496,7 @@ struct SetupView: View {
             row("Server", status: server) {
                 Button("Check") { checkServer() }.buttonStyle(.bordered).controlSize(.small)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Bluetooth audio").font(.headline)
-                Text(routeLine.isEmpty ? "—" : routeLine).font(.callout)
-                Text("Pick glasses audio in Control Center, then re-check.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            GlassesAudioSection()
             VStack(alignment: .leading, spacing: 4) {
                 Text("Voice check").font(.headline)
                 Text("Hold the mic and say “Hey Pip”.").font(.callout)
@@ -439,7 +570,7 @@ struct SetupView: View {
                 return
             }
             do {
-                try recorder.start()
+                try await recorder.start()
                 recording = true
             } catch {
                 heard = "Recording failed"

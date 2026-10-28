@@ -110,7 +110,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             if !setupDone {
-                SetupView(routeLine: routeLine) { setupDone = true }
+                SetupView() { setupDone = true }
             } else if let src = viewingSource {
                 VStack(spacing: 8) {
                     HStack {
@@ -253,8 +253,8 @@ struct ContentView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
+            Text(routeLine).font(.caption2).foregroundStyle(.secondary)
             if showDebug {
-                Text(routeLine).font(.caption2).foregroundStyle(.secondary)
                 Text("voice: \(SpeechBus.shared.voiceInfo)").font(.caption2).foregroundStyle(.secondary)
             }
             if showDebug, let d = debug {
@@ -676,6 +676,7 @@ struct ContentView: View {
     }
 
     private func refreshRoute() {
+        Recorder.ensurePreferredInput()
         let session = AVAudioSession.sharedInstance()
         let ins = session.currentRoute.inputs.map(\.portName).joined(separator: ", ")
         let outs = session.currentRoute.outputs.map(\.portName).joined(separator: ", ")
@@ -1067,7 +1068,7 @@ struct ContentView: View {
             guard await Recorder.requestPermission() else { say("Microphone permission needed"); return }
             guard pressing else { return } // released before the mic was ready
             do {
-                try recorder.start()
+                try await recorder.start()
                 recordStart = Date()
                 recording = true
             } catch {
