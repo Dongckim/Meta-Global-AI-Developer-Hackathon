@@ -119,5 +119,13 @@
   "didnt_act_target": [
     "I didn't log {target} — want me to?",
     "Hmm, nothing logged on {target} — should I log it?"
+  ],
+  "sync_retry": [
+    "Re-checking the glasses.",
+    "Checking the glasses again."
+  ],
+  "sync_skip": [
+    "Skipped — using the iPad mic.",
+    "No problem — iPad mic it is."
   ]
 }

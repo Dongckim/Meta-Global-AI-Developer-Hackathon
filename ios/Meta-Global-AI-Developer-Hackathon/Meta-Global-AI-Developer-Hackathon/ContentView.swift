@@ -89,6 +89,8 @@ struct ContentView: View {
     @State private var apiMismatch: String?
     private let screens = loadScreens()
     var dat: GlassesDAT? = nil
+    @State private var showSplash = true
+    @State private var syncRefreshGen = 0
 
     /// Screen for hints: the server-owned view (setup boots app-local).
     private var currentScreen: String {
@@ -125,19 +127,67 @@ struct ContentView: View {
             if lab.draft != nil, case .idle = draftState { draftState = .reviewing }
         }
         showHome = cur == "home"
-        if cur == "setup", setupDone, lastViewScreen != "setup" { setupDone = false }
+        if (cur == "setup" || cur == "sync"), setupDone, lastViewScreen != cur {
+            setupDone = false
+        }
         if let i = ["liquids", "steps", "layout"].firstIndex(of: v.tab) { reviewTab = i }
         if cur != lastViewScreen, cur == "home" || cur == "protocol_detail" { loadLists() }
         lastViewScreen = cur
     }
 
     var body: some View {
+        Group {
+            if showSplash {
+                SplashView { showSplash = false }
+            } else {
+                mainBody
+            }
+        }
+        .sheet(item: $selectedWell, onDismiss: {
+            peekTarget = nil
+            if lab.view.sheet.name == "well_card" { sendAction("back") }
+        }) { sel in WellSheet(well: sel.id, lab: lab) { say($0) } }
+        .sheet(isPresented: robotSheet) { robotPanel }
+        .sheet(isPresented: draftSheet) { draftPanel }
+        .sheet(isPresented: $showSettings) { VoiceSettingsView() }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .plainText]) { res in
+            importPicked(res)
+        }
+        .onAppear { connect(); refreshRoute(); loadLists(); voice.activate() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { voice.activate() } else { voice.deactivate() }
+        }
+        .onChange(of: showSettings) { _, shown in if !shown { voice.refresh() } }
+        .onChange(of: voice.pendingAudio) { _, url in
+            if let url { Task { await sendVoice(url) } }
+        }
+        .onChange(of: voice.noticeGen) { _, _ in
+            if !voice.notice.isEmpty { say(voice.notice) }
+        }
+        .onChange(of: lab.run?.runId) { _, new in
+            if new != nil {
+                showHome = false
+                selectedProtocol = nil
+            } else {
+                showHome = true
+                selectedWell = nil
+                debug = nil
+            }
+            loadLists()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
+            refreshRoute()
+        }
+        .onOpenURL { url in dat?.handleCallback(url) }
+    }
+
+    private var mainBody: some View {
         VStack(spacing: 0) {
             contractBanners
-            VoiceOrb(voice: voice)
+            VoiceOrb(voice: voice, speakText: lastReply)
             Group {
                 if !setupDone {
-                SetupView(dat: dat, voice: voice) {
+                SetupView(dat: dat, voice: voice, refreshGen: syncRefreshGen) {
                     setupDone = true
                     if lab.view.current.screen == "setup" { sendAction("back") }
                 }
@@ -193,42 +243,6 @@ struct ContentView: View {
                 experimentView
             }
         }
-        .sheet(item: $selectedWell, onDismiss: {
-            peekTarget = nil
-            if lab.view.sheet.name == "well_card" { sendAction("back") }
-        }) { sel in WellSheet(well: sel.id, lab: lab) { say($0) } }
-        .sheet(isPresented: robotSheet) { robotPanel }
-        .sheet(isPresented: draftSheet) { draftPanel }
-        .sheet(isPresented: $showSettings) { VoiceSettingsView() }
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .plainText]) { res in
-            importPicked(res)
-        }
-        .onAppear { connect(); refreshRoute(); loadLists(); voice.activate() }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { voice.activate() } else { voice.deactivate() }
-        }
-        .onChange(of: showSettings) { _, shown in if !shown { voice.refresh() } }
-        .onChange(of: voice.pendingAudio) { _, url in
-            if let url { Task { await sendVoice(url) } }
-        }
-        .onChange(of: voice.noticeGen) { _, _ in
-            if !voice.notice.isEmpty { say(voice.notice) }
-        }
-        .onChange(of: lab.run?.runId) { _, new in
-            if new != nil {
-                showHome = false
-                selectedProtocol = nil
-            } else {
-                showHome = true
-                selectedWell = nil
-                debug = nil
-            }
-            loadLists()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
-            refreshRoute()
-        }
-        .onOpenURL { url in dat?.handleCallback(url) }
         }
     }
 
@@ -1142,6 +1156,8 @@ struct ContentView: View {
             }
             let r = try await PipClient.voice(wav: data)
             guard r.ignored != true else { voice.didFail(); return }
+            if r.setup_done == true { setupDone = true }
+            if r.sync_retry == true { syncRefreshGen += 1 }
             say("🎙 \(r.transcript)")
             voice.didRespond(hasSources: !r.sources.isEmpty)
             handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,

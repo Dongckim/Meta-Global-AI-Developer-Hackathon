@@ -149,7 +149,8 @@ WELLREF = {"type": "string", "description": 'WellRef: "C5" | "C2-C8" | "C2,C5,C7
 PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "edit_note", "save_tip", "set_timer", "cancel_timer",
                    "extend_timer", "next_step", "end_run", "show", "navigate",
-                   "open", "back", "make_robot", "edit_draft"]
+                   "open", "back", "make_robot", "edit_draft", "retry_sync",
+                   "skip_sync"]
 
 TOOLS = [
     _tool(
@@ -164,7 +165,8 @@ TOOLS = [
         "cancel_timer{label?}; extend_timer{label?,minutes?} (+5 default); "
         "next_step; end_run; show{view?,target?}; navigate{screen,target?}; "
         "open{target} (well/screen/run/original/importer); back; make_robot; "
-        "edit_draft{path,value} (draft_open only). Never answer_card. "
+        "edit_draft{path,value} (draft_open only); "
+        "retry_sync; skip_sync (setup screen only). Never answer_card. "
         "Screens: home, setup, protocol_detail, run_view(+target), "
         "protocol_source(+target), protocol_review, main, well_card, robot_preview. "
         "Backup well: read free_wells first, then act on the first candidate at once.",
@@ -695,7 +697,8 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             res["info"]["ui"] = res["ui"]
             res["info"]["dropped"] += res2["info"]["dropped"]
             res["info"]["drop_reasons"] += res2["info"]["drop_reasons"]
-            for k in ("saved_memo", "edited", "robot"):
+            for k in ("saved_memo", "edited", "robot", "setup_done",
+                        "sync_retry"):
                 if res2["info"].get(k):
                     res["info"][k] = res2["info"][k]
             if question2 is not None:
@@ -1026,7 +1029,8 @@ def _utterance_response(calls, messages, reply, ms, route, cards, info, sources,
         "record_version": version,
         "sources": sources,
     }
-    for k in ("saved_memo", "edited", "robot", "ui"):
+    for k in ("saved_memo", "edited", "robot", "ui", "setup_done",
+                "sync_retry"):
         if info.get(k):
             out[k] = info[k]
     if info.get("dropped"):

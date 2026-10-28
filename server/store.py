@@ -1054,6 +1054,15 @@ class RecordStore:
                 res["messages"].append(what_step_reply(st))
             else:
                 res["messages"].append(where_am_i_reply(st))
+        elif name == "retry_sync":
+            # Read-grade: the app re-runs its on-demand device checks.
+            res["messages"].append(say("sync_retry", session))
+            res["info"]["sync_retry"] = True
+        elif name == "skip_sync":
+            # Read-grade: no record write; the app leaves setup.
+            session["setup_done"] = True
+            res["messages"].append(say("sync_skip", session))
+            res["info"]["setup_done"] = True
         elif name == "next_step":
             steps = self.steps()
             if self.r["step_index"] >= len(steps) - 1:

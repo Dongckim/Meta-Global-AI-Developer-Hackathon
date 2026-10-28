@@ -483,6 +483,7 @@ struct LevelBar: View {
 struct SetupView: View {
     var dat: GlassesDAT? = nil
     var voice: VoiceSession? = nil
+    var refreshGen: Int = 0
     var onDone: () -> Void
     @State private var mic = "Not checked"
     @State private var server = "Not checked"
@@ -529,7 +530,7 @@ struct SetupView: View {
                         .padding(6).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
                 }
             }
-            GlassesDATSection(dat: dat)
+            GlassesSyncSection(dat: dat, refreshGen: refreshGen, onSkip: onDone)
             Spacer()
             Button("Done") { onDone() }
                 .buttonStyle(.borderedProminent)

@@ -316,6 +316,10 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
             return [{"name": "extend_timer", "args": args}], f"Extending {who} by {n} minutes."
     if re.fullmatch(r"\s*back[?!]?\s*", low):
         return [{"name": "back", "args": {}}], "Back."
+    if re.fullmatch(r"\s*retry(?:\s+the)?\s+(glasses(?:\s+check|\s+sync)?|sync)[?!]?\s*", low):
+        return [{"name": "retry_sync", "args": {}}], "Re-checking."
+    if re.fullmatch(r"\s*skip(?:\s+the)?\s+(glasses(?:\s+check|\s+sync)?|sync)[?!]?\s*", low):
+        return [{"name": "skip_sync", "args": {}}], "Skipping."
     m = re.fullmatch(r"\s*show\s+([a-h]\d{1,2})[?!]?\s*", low)
     if m:
         wells = expand_range(m.group(1).upper())

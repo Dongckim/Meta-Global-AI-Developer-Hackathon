@@ -433,37 +433,178 @@ struct SilenceGate {
 
 // MARK: - Orb (placeholder styling until Eunbi's design lands)
 
-/// Top status dot + state label. Display only; never blocks the screen.
+/// Top orb + Pip line (design `.orb` + `.pip`, shrunk from the fullscreen
+/// Pip screens to bar size). Reads VoiceSession state only; never blocks
+/// the run screen. `partialText` is nil until slice B streams transcripts.
 struct VoiceOrb: View {
     var voice: VoiceSession
+    var speakText: String = ""
+    var partialText: String? = nil
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(color)
-                .frame(width: 9, height: 9)
-                .opacity(voice.state == .ready ? 0.6 : 1)
-                .animation(pulsing
-                    ? .easeInOut(duration: 0.4).repeatForever(autoreverses: true)
-                    : .default, value: pulsing)
-            Text(voice.stateLabel)
-                .font(.caption2).foregroundStyle(.secondary)
+        let style = Theme.orbStyle(for: voice.state)
+        let line = Theme.pipText(for: voice.state, speakText: speakText,
+                                 partialText: partialText)
+        HStack(spacing: 10) {
+            OrbDisc(style: style)
+            WordReveal(text: line.text, dots: line.dots)
             Spacer()
         }
         .padding(.horizontal)
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
+    }
+}
+
+/// Design orb at top size (40pt): radial gradient core, breathe, expanding
+/// ring, and a small state-palette halo standing in for the fullscreen
+/// aurora.
+struct OrbDisc: View {
+    var style: Theme.OrbStyle
+    @State private var on = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(halo)
+                .frame(width: 56, height: 56)
+                .blur(radius: 14)
+                .opacity(haloOpacity)
+                .scaleEffect(haloScale)
+                .offset(x: haloX)
+                .animation(haloAnim, value: on)
+            Circle()
+                .fill(RadialGradient(
+                    gradient: Gradient(stops: style.hollow
+                        ? Theme.orbSpeakingStops : Theme.orbStops),
+                    center: .init(x: 0.5, y: 0.52),
+                    startRadius: 0, endRadius: 20))
+                .frame(width: 40, height: 40)
+                .blur(radius: 3)
+                .scaleEffect(breathe * style.scale)
+                .opacity(breatheOpacity)
+                .animation(breatheAnim, value: on)
+                .animation(Theme.spring(), value: style.scale)
+            if style.ring != nil {
+                Circle()
+                    .stroke(Theme.orbRing, lineWidth: 2)
+                    .frame(width: 30, height: 30)
+                    .scaleEffect(on ? 1.9 : 0.8)
+                    .opacity(on ? 0 : 0.7)
+                    .animation(
+                        .easeOut(duration: style.ring ?? Theme.orbRingPeriod)
+                            .repeatForever(autoreverses: false),
+                        value: on)
+            }
+        }
+        .frame(width: 56, height: 56)
+        .onAppear { on = true }
     }
 
-    private var pulsing: Bool { voice.state != .ready }
-
-    private var color: Color {
-        switch voice.state {
-        case .ready: .gray
-        case .listening: .red
-        case .transcribing: .orange
-        case .thinking: .blue
-        case .speaking: .green
-        case .searching: .purple
+    private var halo: Color {
+        if case .voice(let _) = style.aurora {
+            Theme.auroraVoice[3]
+        } else {
+            Theme.auroraDefault[3]
         }
+    }
+
+    private var haloOpacity: Double {
+        style.aurora == .think ? 0.7 : 0.85
+    }
+
+    private var haloScale: CGFloat {
+        switch style.aurora {
+        case .breath: on ? 1.05 : 1
+        case .pulse: on ? 1.2 : 1.1
+        case let .still(s): s
+        case .think: on ? 0.82 : 0.75
+        case let .voice(amp): 1.24 + CGFloat(amp) * 0.16
+        case .sweep: on ? 0.95 : 0.9
+        }
+    }
+
+    private var haloX: CGFloat {
+        style.aurora == .sweep ? (on ? 6 : -6) : 0
+    }
+
+    private var haloAnim: Animation? {
+        switch style.aurora {
+        case .breath:
+            .easeInOut(duration: Theme.readyBreath)
+                .repeatForever(autoreverses: true)
+        case .pulse:
+            .easeInOut(duration: Theme.pulse).repeatForever(autoreverses: true)
+        case .still: nil
+        case .think:
+            .easeInOut(duration: Theme.think).repeatForever(autoreverses: true)
+        case .voice: nil
+        case .sweep:
+            .easeInOut(duration: Theme.sweep).repeatForever(autoreverses: true)
+        }
+    }
+
+    private var breathe: CGFloat {
+        guard style.breathe != nil else { return 1 }
+        return on ? 1.08 : 0.92
+    }
+
+    private var breatheOpacity: Double {
+        guard style.breathe != nil else { return 1 }
+        return on ? 1 : 0.9
+    }
+
+    private var breatheAnim: Animation? {
+        guard let period = style.breathe else { return nil }
+        return .easeInOut(duration: period)
+            .repeatForever(autoreverses: true)
+    }
+}
+
+/// Pip line copy with word-by-word reveal (design `data-words`).
+struct WordReveal: View {
+    var text: String
+    var dots: Bool
+    @State private var shown = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            textFlow
+            if dots { ThinkingDots() }
+        }
+        .id(text)
+        .onAppear { shown = true }
+    }
+
+    private var textFlow: some View {
+        // Single Text keeps selection/ VoiceOver simple; per-word reveal
+        // via staggered overlay is overkill at bar size, so the line fades
+        // in as one while the orb carries the motion.
+        Text(text)
+            .font(.system(size: 17, weight: .light))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .opacity(shown ? 1 : 0)
+            .animation(Theme.ease(duration: 0.45), value: shown)
+    }
+}
+
+/// Trailing `.pip .dots`: three 7px dots, sequential blink.
+struct ThinkingDots: View {
+    @State private var on = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(0 ..< 3) { i in
+                Circle()
+                    .fill(Theme.mutT)
+                    .frame(width: 7, height: 7)
+                    .opacity(on ? 1 : 0.25)
+                    .animation(
+                        .easeInOut(duration: 0.5).repeatForever()
+                            .delay(Double(i) * 0.25),
+                        value: on)
+            }
+        }
+        .onAppear { on = true }
     }
 }

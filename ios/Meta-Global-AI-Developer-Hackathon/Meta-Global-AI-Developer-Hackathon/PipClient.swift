@@ -65,6 +65,8 @@ struct VoiceResponse: Decodable {
     let ui: [UIAction]?
     let speak: String?
     let ignored: Bool?
+    let setup_done: Bool?
+    let sync_retry: Bool?
 }
 
 struct ConfirmResponse: Decodable {
