@@ -131,7 +131,7 @@ enum SyncRows {
                        hint: "Register to link the Meta AI app.")
         case .unavailable:
             return Row(state: .failed, value: "Unavailable",
-                       hint: "DAT isn't available on this device.")
+                       hint: "DAT unavailable — install the Meta AI app, then Retry.")
         @unknown default:
             return Row(state: .failed, value: "Unknown", hint: nil)
         }
@@ -183,44 +183,59 @@ enum SyncRows {
     }
 }
 
-/// Setup's "Glasses (DAT)" section, restyled as the design's Glasses sync.
-/// Reads live state only (DAT owner, audio route, DAT camera permission);
-/// Retry re-checks on-demand reads, Skip finishes setup like Done.
-struct GlassesSyncSection: View {
+/// Headless sync evaluation for the launch gate: the same rows the
+/// screen renders. The gate shows unless all rows are ok or skipped.
+enum SyncGate {
+    static func rows(dat: GlassesDAT?, hfpName: String?) -> [SyncRows.Row] {
+        let app: SyncRows.Row
+        let glasses: SyncRows.Row
+        if let dat {
+            app = SyncRows.app(registration: dat.registrationState,
+                               error: dat.lastError)
+            glasses = SyncRows.glasses(
+                status: dat.status, name: dat.deviceName,
+                battery: dat.batteryLevel,
+                error: dat.status == .error ? dat.lastError : nil)
+        } else {
+            app = SyncRows.Row(state: .failed, value: "Unavailable", hint: nil)
+            glasses = SyncRows.Row(state: .failed, value: "Unavailable",
+                                   hint: nil)
+        }
+        return [app, glasses, SyncRows.audio(hfpName: hfpName),
+                SyncRows.camera(dat?.cameraPermission)]
+    }
+
+    static var liveHFPName: String? {
+        AVAudioSession.sharedInstance().currentRoute.inputs.first {
+            $0.portType == .bluetoothHFP
+        }?.portName
+    }
+
+    static func needed(rows: [SyncRows.Row], skipped: Bool) -> Bool {
+        !skipped && !rows.allSatisfy { $0.state == .ok }
+    }
+}
+
+/// Fullscreen Glasses sync step (design `data-id="sync"`): live device
+/// rows on a dark aurora canvas. Auto-advances shortly after all rows
+/// turn ok ("Glasses ready"); Retry re-checks, Skip proceeds without.
+struct GlassesSyncScreen: View {
     var dat: GlassesDAT?
     /// Bumped by voice "retry the glasses check" (server sync_retry).
     var refreshGen: Int = 0
     var onSkip: () -> Void
+    var onComplete: () -> Void
     @State private var hfpName: String?
     @State private var celebrated = false
     @State private var registerNudge = false
+    @State private var spin = false
 
-    private var appRow: SyncRows.Row {
-        guard let dat else {
-            return SyncRows.Row(state: .failed, value: "Unavailable", hint: nil)
-        }
-        return SyncRows.app(registration: dat.registrationState,
-                            error: dat.lastError)
-    }
-
-    private var glassesRow: SyncRows.Row {
-        guard let dat else {
-            return SyncRows.Row(state: .failed, value: "Unavailable", hint: nil)
-        }
-        return SyncRows.glasses(status: dat.status, name: dat.deviceName,
-                                battery: dat.batteryLevel,
-                                error: dat.status == .error ? dat.lastError : nil)
-    }
-
-    private var audioRow: SyncRows.Row { SyncRows.audio(hfpName: hfpName) }
-
-    private var cameraRow: SyncRows.Row {
-        SyncRows.camera(dat?.cameraPermission)
+    private var rows: [SyncRows.Row] {
+        SyncGate.rows(dat: dat, hfpName: hfpName)
     }
 
     private var allOk: Bool {
-        [appRow, glassesRow, audioRow, cameraRow]
-            .allSatisfy { $0.state == .ok }
+        rows.allSatisfy { $0.state == .ok }
     }
 
     private var isRegistering: Bool {
@@ -228,43 +243,65 @@ struct GlassesSyncSection: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                row(title: "Meta AI app", row: appRow) {
-                    if let dat, dat.registrationState != .registered,
-                       !dat.busy, dat.registrationState != .unavailable {
-                        Button("Register") { dat.register() }
-                            .buttonStyle(.borderedProminent).controlSize(.small)
-                    }
-                }
-                row(title: "Ray-Ban Meta", row: glassesRow) {}
-                row(title: "Glasses audio", row: audioRow) {}
-                row(title: "Camera", row: cameraRow) {
-                    if let dat, dat.cameraPermission != .granted {
-                        Button(dat.cameraPermission == nil ? "Check" : "Enable") {
-                            if dat.cameraPermission == nil {
-                                dat.checkCameraPermission()
-                            } else {
-                                dat.askCameraRedirect()
-                            }
+        GeometryReader { g in
+            ZStack {
+                Theme.chromeBg.ignoresSafeArea()
+                AuroraView(palette: Theme.auroraBlue, mode: .flow)
+                    .ignoresSafeArea()
+                    .opacity(0.5)
+                VStack(alignment: .leading, spacing: 0) {
+                    header(width: g.size.width)
+                    row(title: "Meta AI app", row: rows[0], width: g.size.width,
+                        nudge: registerNudge && isRegistering) {
+                        if let dat, dat.registrationState != .registered,
+                           !dat.busy, dat.registrationState != .unavailable {
+                            Button("Register") { dat.register() }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.regular)
                         }
-                        .buttonStyle(.bordered).controlSize(.small)
                     }
+                    row(title: "Ray-Ban Meta", row: rows[1],
+                        width: g.size.width) {}
+                    row(title: "Glasses audio", row: rows[2],
+                        width: g.size.width) {}
+                    row(title: "Camera", row: rows[3], width: g.size.width) {
+                        if let dat, dat.cameraPermission != .granted {
+                            Button(dat.cameraPermission == nil ? "Check" : "Enable") {
+                                if dat.cameraPermission == nil {
+                                    dat.checkCameraPermission()
+                                } else {
+                                    dat.askCameraRedirect()
+                                }
+                            }
+                            .buttonStyle(.bordered).controlSize(.regular)
+                        }
+                    }
+                    Spacer()
+                    footer
                 }
-                footer
+                .padding(.horizontal, Theme.px(64, in: g.size.width))
+                .padding(.vertical, 48)
             }
-            .padding(16)
-            .background(Theme.chromeBg, in: RoundedRectangle(cornerRadius: 18))
-            #if DEBUG
-            mockCorner
-            #endif
+            .overlay(alignment: .topTrailing) {
+                #if DEBUG
+                mockCorner
+                #endif
+            }
         }
-        .onAppear { refreshAudio() }
+        .onAppear { refreshAudio(); dat?.checkCameraPermission() }
         .onChange(of: refreshGen) { _, _ in refreshAll() }
         .onReceive(NotificationCenter.default.publisher(
             for: AVAudioSession.routeChangeNotification)) { _ in refreshAudio() }
         .onChange(of: allOk) { _, ok in celebrated = ok }
+        .task(id: allOk) {
+            guard allOk else { return }
+            do {
+                try await Task.sleep(for: .seconds(1.6))
+            } catch {
+                return
+            }
+            onComplete()
+        }
         .task(id: isRegistering) {
             registerNudge = false
             guard isRegistering else { return }
@@ -280,60 +317,58 @@ struct GlassesSyncSection: View {
         }
     }
 
-    private var header: some View {
-        ZStack(alignment: .leading) {
-            AuroraView(palette: Theme.auroraBlue, mode: .flow)
-                .frame(height: 84)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .opacity(0.55)
-            HStack(spacing: 12) {
-                ZStack {
-                    if celebrated { CelebrationGlow() }
-                    Image(systemName: "eyeglasses")
-                        .font(.title)
-                        .foregroundStyle(.white)
-                        .frame(width: 52, height: 52)
-                        .background(.white.opacity(0.12), in: Circle())
-                }
-                Text(allOk ? "Glasses connected" : "Connecting your glasses")
-                    .font(.system(size: 24, weight: .medium))
+    private func header(width: CGFloat) -> some View {
+        HStack(spacing: 20) {
+            ZStack {
+                if celebrated { CelebrationGlow(size: 76) }
+                Image(systemName: "eyeglasses")
+                    .font(.system(size: 34))
                     .foregroundStyle(.white)
+                    .frame(width: 76, height: 76)
+                    .background(.white.opacity(0.12), in: Circle())
             }
-            .padding(.horizontal, 12)
+            Text(allOk ? "Glasses ready" : "Connecting your glasses")
+                .font(.system(size: Theme.px(60, in: width), weight: .medium))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
         }
-        .padding(.bottom, 8)
+        .padding(.bottom, 24)
     }
 
-    private func row(title: String, row: SyncRows.Row,
+    private func row(title: String, row: SyncRows.Row, width: CGFloat,
+                     nudge: Bool = false,
                      @ViewBuilder action: () -> some View) -> some View {
         let style = Theme.syncStyle(for: row.state)
         return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 12) {
-                syncIcon(style.icon)
+            HStack(spacing: 18) {
+                syncIcon(style.icon, size: Theme.px(26, in: width))
                 Text(title)
-                    .font(.system(size: 17))
+                    .font(.system(size: Theme.px(30, in: width),
+                                  weight: .light))
                     .foregroundStyle(.white)
                 Spacer()
                 Text(row.value)
-                    .font(.system(size: 15))
+                    .font(.system(size: Theme.px(24, in: width),
+                                  weight: .light))
                     .foregroundStyle(.white.opacity(0.62))
                     .lineLimit(1)
                 action()
             }
-            .padding(.vertical, 12)
+            .padding(.vertical, 18)
             if let hint = row.hint, row.state != .ok {
                 Text(hint)
-                    .font(.callout)
+                    .font(.system(size: Theme.px(20, in: width)))
                     .foregroundStyle(Theme.chromeMut)
-                    .padding(.leading, 30)
-                    .padding(.bottom, 6)
+                    .padding(.leading, Theme.px(44, in: width))
+                    .padding(.bottom, 10)
             }
-            if title == "Meta AI app", registerNudge, isRegistering {
+            if nudge {
                 Text("Still waiting — approve in the Meta AI app, or Skip below.")
-                    .font(.callout)
+                    .font(.system(size: Theme.px(20, in: width)))
                     .foregroundStyle(Theme.chromeMut)
-                    .padding(.leading, 30)
-                    .padding(.bottom, 6)
+                    .padding(.leading, Theme.px(44, in: width))
+                    .padding(.bottom, 10)
             }
         }
         .opacity(style.rowOpacity == 1 ? 1 : 0.75)
@@ -342,42 +377,42 @@ struct GlassesSyncSection: View {
         }
     }
 
-    @ViewBuilder
-    private func syncIcon(_ icon: Theme.SyncStyle.SyncIcon) -> some View {
-        switch icon {
-        case .spin:
-            Circle()
-                .trim(from: 0, to: 0.75)
-                .stroke(.white, lineWidth: 2.5)
-                .frame(width: 18, height: 18)
-                .rotationEffect(.degrees(spin ? 360 : 0))
-                .animation(.linear(duration: Theme.spin)
-                    .repeatForever(autoreverses: false), value: spin)
-                .onAppear { spin = true }
-        case .tick:
-            ZStack {
-                Circle().fill(.white).frame(width: 18, height: 18)
-                Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Theme.blue)
+    private func syncIcon(_ icon: Theme.SyncStyle.SyncIcon,
+                          size: CGFloat) -> some View {
+        Group {
+            switch icon {
+            case .spin:
+                Circle()
+                    .trim(from: 0, to: 0.75)
+                    .stroke(.white, lineWidth: 2.5)
+                    .frame(width: size, height: size)
+                    .rotationEffect(.degrees(spin ? 360 : 0))
+                    .animation(.linear(duration: Theme.spin)
+                        .repeatForever(autoreverses: false), value: spin)
+                    .onAppear { spin = true }
+            case .tick:
+                ZStack {
+                    Circle().fill(.white).frame(width: size, height: size)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: size * 0.55, weight: .bold))
+                        .foregroundStyle(Theme.blue)
+                }
+            case .hollow:
+                Circle()
+                    .stroke(.white.opacity(0.35), lineWidth: 2)
+                    .frame(width: size, height: size)
             }
-        case .hollow:
-            Circle()
-                .stroke(.white.opacity(0.35), lineWidth: 2)
-                .frame(width: 18, height: 18)
         }
     }
 
-    @State private var spin = false
-
     private var footer: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 16) {
             if !allOk {
                 Button("Retry") { refreshAll() }
-                .buttonStyle(.bordered).controlSize(.small)
-                .tint(.white)
+                    .buttonStyle(.bordered).controlSize(.large)
+                    .tint(.white)
                 Button("Skip — use iPad mic") { onSkip() }
-                    .font(.callout)
+                    .font(.title3)
                     .foregroundStyle(Theme.chromeMut)
             }
             Spacer()
@@ -387,7 +422,7 @@ struct GlassesSyncSection: View {
                     .foregroundStyle(Theme.chromeMut)
             }
         }
-        .padding(.top, 12)
+        .padding(.top, 24)
     }
 
     #if DEBUG
@@ -419,21 +454,19 @@ struct GlassesSyncSection: View {
     }
 
     private func refreshAudio() {
-        let inputs = AVAudioSession.sharedInstance().currentRoute.inputs
-        hfpName = inputs.first {
-            $0.portType == .bluetoothHFP
-        }?.portName
+        hfpName = SyncGate.liveHFPName
     }
 }
 
 /// One-shot readyGlow (1.2s): ring blooms behind the header icon.
 private struct CelebrationGlow: View {
+    var size: CGFloat = 52
     @State private var t = 0.0
 
     var body: some View {
         Circle()
             .stroke(Theme.blue, lineWidth: 3)
-            .frame(width: 52, height: 52)
+            .frame(width: size, height: size)
             .scaleEffect(0.95 + 0.3 * t)
             .opacity((1 - t) * 0.9)
             .onAppear {

@@ -483,7 +483,7 @@ struct LevelBar: View {
 struct SetupView: View {
     var dat: GlassesDAT? = nil
     var voice: VoiceSession? = nil
-    var refreshGen: Int = 0
+    var onOpenSync: () -> Void = {}
     var onDone: () -> Void
     @State private var mic = "Not checked"
     @State private var server = "Not checked"
@@ -491,35 +491,44 @@ struct SetupView: View {
     @State private var recorder = Recorder()
     @State private var recording = false
     @State private var busy = false
+    @State private var showDiagnostics = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Setup").font(.title.bold())
-            row("Microphone", status: mic) {
-                Button("Check") { checkMic() }.buttonStyle(.bordered).controlSize(.small)
+            row("Glasses sync", status: syncStatus) {
+                Button("Open") { onOpenSync() }.buttonStyle(.bordered).controlSize(.small)
             }
-            row("Server", status: server) {
-                Button("Check") { checkServer() }.buttonStyle(.bordered).controlSize(.small)
-            }
-            row("Hey Pip", status: voice?.wakeStatus ?? "Not checked") {
-                Button("Check") { checkWake() }.buttonStyle(.bordered).controlSize(.small)
-            }
-            GlassesAudioSection()
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Voice check").font(.headline)
-                Text("Hold the mic and say “Hey Pip”.").font(.callout)
-                HStack {
-                    Button(action: {}) {
-                        Image(systemName: recording ? "mic.fill" : "mic")
-                            .font(.title2).foregroundStyle(.white)
-                            .padding(10).background(recording ? .red : .blue, in: Circle())
+            DisclosureGroup("Diagnostics", isExpanded: $showDiagnostics) {
+                VStack(alignment: .leading, spacing: 12) {
+                    row("Microphone", status: mic) {
+                        Button("Check") { checkMic() }.buttonStyle(.bordered).controlSize(.small)
                     }
-                    .buttonStyle(HoldStyle { pressed in pressed ? startHold() : endHold() })
-                    .disabled(busy)
-                    if !heard.isEmpty {
-                        Text("“\(heard)”").font(.callout).foregroundStyle(.secondary)
+                    row("Server", status: server) {
+                        Button("Check") { checkServer() }.buttonStyle(.bordered).controlSize(.small)
+                    }
+                    row("Hey Pip", status: voice?.wakeStatus ?? "Not checked") {
+                        Button("Check") { checkWake() }.buttonStyle(.bordered).controlSize(.small)
+                    }
+                    GlassesAudioSection()
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Voice check").font(.headline)
+                        Text("Hold the mic and say “Hey Pip”.").font(.callout)
+                        HStack {
+                            Button(action: {}) {
+                                Image(systemName: recording ? "mic.fill" : "mic")
+                                    .font(.title2).foregroundStyle(.white)
+                                    .padding(10).background(recording ? .red : .blue, in: Circle())
+                            }
+                            .buttonStyle(HoldStyle { pressed in pressed ? startHold() : endHold() })
+                            .disabled(busy)
+                            if !heard.isEmpty {
+                                Text("“\(heard)”").font(.callout).foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
+                .padding(.top, 8)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Mode").font(.headline)
@@ -530,12 +539,30 @@ struct SetupView: View {
                         .padding(6).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
                 }
             }
-            GlassesSyncSection(dat: dat, refreshGen: refreshGen, onSkip: onDone)
             Spacer()
             Button("Done") { onDone() }
                 .buttonStyle(.borderedProminent)
         }
         .padding()
+    }
+
+    private var syncStatus: String {
+        guard let dat else { return "Unavailable" }
+        switch dat.status {
+        case .connected:
+            if let level = dat.batteryLevel {
+                return "Connected: \(dat.deviceName ?? "glasses") · \(level)%"
+            }
+            return "Connected: \(dat.deviceName ?? "glasses")"
+        case .found:
+            return "Found — not linked"
+        case .registered:
+            return "Registered — no glasses yet"
+        case .unregistered:
+            return dat.busy ? "Registering…" : "Not set up"
+        case .error:
+            return "Error: \(dat.lastError ?? "unknown")"
+        }
     }
 
     private func row(_ title: String, status: String, action: () -> some View) -> some View {

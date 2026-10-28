@@ -90,7 +90,10 @@ struct ContentView: View {
     private let screens = loadScreens()
     var dat: GlassesDAT? = nil
     @State private var showSplash = true
+    @State private var showSync = false
+    @State private var showSyncCover = false
     @State private var syncRefreshGen = 0
+    @AppStorage("pip.syncSkipped") private var syncSkipped = false
 
     /// Screen for hints: the server-owned view (setup boots app-local).
     private var currentScreen: String {
@@ -127,21 +130,69 @@ struct ContentView: View {
             if lab.draft != nil, case .idle = draftState { draftState = .reviewing }
         }
         showHome = cur == "home"
-        if (cur == "setup" || cur == "sync"), setupDone, lastViewScreen != cur {
+        if cur == "setup", setupDone, lastViewScreen != "setup" {
             setupDone = false
+            showSyncCover = false
+        }
+        if cur == "sync", !showSync, lastViewScreen != "sync" {
+            showSyncCover = true
         }
         if let i = ["liquids", "steps", "layout"].firstIndex(of: v.tab) { reviewTab = i }
         if cur != lastViewScreen, cur == "home" || cur == "protocol_detail" { loadLists() }
         lastViewScreen = cur
     }
 
+    /// Launch flow: splash, then the sync gate unless glasses are
+    /// already connected or the user skipped (Setup comes after).
+    private func dismissSplash() {
+        showSplash = false
+        showSync = SyncGate.needed(
+            rows: SyncGate.rows(dat: dat, hfpName: SyncGate.liveHFPName),
+            skipped: syncSkipped)
+    }
+
+    private func skipSyncGate() {
+        syncSkipped = true
+        showSync = false
+    }
+
+    /// Voice "skip the glasses check": leave the sync UI when it is up,
+    /// else finish Setup (tap Skip behaves the same per surface).
+    private func dismissSyncOrSetup() {
+        if showSync {
+            skipSyncGate()
+        } else if showSyncCover {
+            showSyncCover = false
+        } else {
+            setupDone = true
+        }
+    }
+
+    /// Voice "retry the glasses check": re-run the sync re-check, opening
+    /// the screen when in setup-phase without it.
+    private func retrySync() {
+        syncRefreshGen += 1
+        if !showSync, !showSyncCover, !setupDone {
+            showSyncCover = true
+        }
+    }
+
     var body: some View {
         Group {
             if showSplash {
-                SplashView { showSplash = false }
+                SplashView { dismissSplash() }
+            } else if showSync {
+                GlassesSyncScreen(dat: dat, refreshGen: syncRefreshGen,
+                                  onSkip: skipSyncGate,
+                                  onComplete: { showSync = false })
             } else {
                 mainBody
             }
+        }
+        .fullScreenCover(isPresented: $showSyncCover) {
+            GlassesSyncScreen(dat: dat, refreshGen: syncRefreshGen,
+                              onSkip: { showSyncCover = false },
+                              onComplete: { showSyncCover = false })
         }
         .sheet(item: $selectedWell, onDismiss: {
             peekTarget = nil
@@ -153,7 +204,7 @@ struct ContentView: View {
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .plainText]) { res in
             importPicked(res)
         }
-        .onAppear { connect(); refreshRoute(); loadLists(); voice.activate() }
+        .onAppear { connect(); refreshRoute(); loadLists(); voice.activate(); dat?.checkCameraPermission() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { voice.activate() } else { voice.deactivate() }
         }
@@ -187,7 +238,8 @@ struct ContentView: View {
             VoiceOrb(voice: voice, speakText: lastReply)
             Group {
                 if !setupDone {
-                SetupView(dat: dat, voice: voice, refreshGen: syncRefreshGen) {
+                SetupView(dat: dat, voice: voice,
+                          onOpenSync: { showSyncCover = true }) {
                     setupDone = true
                     if lab.view.current.screen == "setup" { sendAction("back") }
                 }
@@ -1156,8 +1208,8 @@ struct ContentView: View {
             }
             let r = try await PipClient.voice(wav: data)
             guard r.ignored != true else { voice.didFail(); return }
-            if r.setup_done == true { setupDone = true }
-            if r.sync_retry == true { syncRefreshGen += 1 }
+            if r.setup_done == true { dismissSyncOrSetup() }
+            if r.sync_retry == true { retrySync() }
             say("🎙 \(r.transcript)")
             voice.didRespond(hasSources: !r.sources.isEmpty)
             handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,

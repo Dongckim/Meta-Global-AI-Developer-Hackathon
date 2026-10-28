@@ -137,3 +137,22 @@ struct SyncRowTests {
         #expect(SyncRows.camera(nil).state == .failed)
     }
 }
+
+struct SyncGateTests {
+    private func rows(allOk: Bool) -> [SyncRows.Row] {
+        let bad = SyncRows.Row(state: .failed, value: "x", hint: nil)
+        let good = SyncRows.Row(state: .ok, value: "x", hint: nil)
+        return allOk ? [good, good, good, good] : [good, bad, good, good]
+    }
+
+    @Test func gateShowsUntilConnectedOrSkipped() {
+        #expect(SyncGate.needed(rows: rows(allOk: false), skipped: false)
+            == true)
+        #expect(SyncGate.needed(rows: rows(allOk: true), skipped: false)
+            == false)
+        #expect(SyncGate.needed(rows: rows(allOk: false), skipped: true)
+            == false)
+        #expect(SyncGate.needed(rows: rows(allOk: true), skipped: true)
+            == false)
+    }
+}
