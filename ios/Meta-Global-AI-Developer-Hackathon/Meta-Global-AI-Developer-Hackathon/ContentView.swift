@@ -8,6 +8,7 @@ struct DebugRun {
     var ms: [String: Int]
     var route: String?
     var sources: [String]
+    var recordVersion: Int
 }
 
 /// Reliable press-and-hold: tracks the button's own pressed state, no gesture fights.
@@ -45,6 +46,12 @@ private struct DraftField: View {
     }
 }
 
+struct ViewingSource: Equatable {
+    var target: String
+    var page: Int?
+    var phrase: String?
+}
+
 /// Right column, top to bottom: step → Pip response (fixed slot) → timers →
 /// memos → log (fills rest) → input. Nothing overlays anything.
 struct ContentView: View {
@@ -68,16 +75,115 @@ struct ContentView: View {
     @State private var showImporter = false
     @State private var ttsOn = SpeechBus.shared.enabled
     @State private var routeLine = ""
+    @AppStorage("pip.setupDone") private var setupDone = false
+    @State private var showHome = false
+    @State private var selectedProtocol: String?
+    @State private var viewingRun: String?
+    @State private var viewingSource: ViewingSource?
+    @State private var protocols: [ProtocolSummary] = []
+    @State private var runs: [RunSummary] = []
+    @State private var reviewError = ""
+    @State private var reviewBusy = false
+    @State private var detailNotice = ""
     private let screens = loadScreens()
 
-    /// Screen the server reasons about. One sheet at a time; robot wins.
+    /// Screen the server reasons about. Drills overlay the run/no-run root.
     private var currentScreen: String {
+        if !setupDone { return "setup" }
+        if viewingSource != nil { return "protocol_source" }
+        if viewingRun != nil { return "run_view" }
+        if selectedProtocol != nil { return "protocol_detail" }
         if case .idle = robotState {} else { return "robot_preview" }
         if case .idle = draftState {} else { return "protocol_review" }
-        return selectedWell == nil ? "main" : "well_card"
+        if selectedWell != nil { return "well_card" }
+        return (showHome || lab.run == nil) ? "home" : "main"
+    }
+
+    private func clearDrills() {
+        selectedWell = nil
+        robotState = .idle
+        selectedProtocol = nil
+        viewingRun = nil
+        viewingSource = nil
     }
 
     var body: some View {
+        Group {
+            if !setupDone {
+                SetupView(routeLine: routeLine) { setupDone = true }
+            } else if let src = viewingSource {
+                VStack(spacing: 8) {
+                    HStack {
+                        Button { viewingSource = nil } label: {
+                            Image(systemName: "chevron.left").font(.headline)
+                        }
+                        .buttonStyle(.borderless)
+                        Spacer()
+                    }
+                    .padding(.horizontal)
+                    SourceView(target: src.target, page: src.page, phrase: src.phrase,
+                               title: "Original")
+                    hintsBar.padding(.horizontal)
+                    inputBar.padding(.horizontal).padding(.bottom)
+                }
+            } else if let rid = viewingRun {
+                VStack(spacing: 0) {
+                    PastRunView(runId: rid, onBack: { viewingRun = nil },
+                                onSource: openSource)
+                    hintsBar.padding(.horizontal)
+                    inputBar.padding(.horizontal).padding(.bottom)
+                }
+            } else if let pid = selectedProtocol {
+                VStack(spacing: 0) {
+                    ProtocolDetailView(
+                        protocolId: pid, cards: lab.cards, notice: detailNotice,
+                        onBack: { selectedProtocol = nil },
+                        onStart: startProtocolRun,
+                        onRun: { viewingRun = $0 },
+                        onAnswer: answer(id:ok:), onAnswerAll: answerAll)
+                    hintsBar.padding(.horizontal)
+                    inputBar.padding(.horizontal).padding(.bottom)
+                }
+            } else if showHome || lab.run == nil {
+                VStack(spacing: 0) {
+                    HomeView(
+                        protocols: protocols, runs: runs, cards: lab.cards,
+                        onImport: { showImporter = true },
+                        onReview: { draftState = .reviewing },
+                        hasDraft: lab.draft != nil,
+                        onProtocol: { selectedProtocol = $0 },
+                        onRun: { viewingRun = $0 },
+                        onAnswer: answer(id:ok:), onAnswerAll: answerAll,
+                        onSetup: { setupDone = false },
+                        onRefresh: loadLists)
+                    hintsBar.padding(.horizontal)
+                    inputBar.padding(.horizontal).padding(.bottom)
+                }
+            } else {
+                experimentView
+            }
+        }
+        .sheet(item: $selectedWell) { sel in WellSheet(well: sel.id, lab: lab) { say($0) } }
+        .sheet(isPresented: robotSheet) { robotPanel }
+        .sheet(isPresented: draftSheet) { draftPanel }
+        .sheet(isPresented: $showSettings) { VoiceSettingsView() }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .plainText]) { res in
+            importPicked(res)
+        }
+        .onAppear { connect(); refreshRoute(); loadLists() }
+        .onChange(of: lab.run?.runId) { _, new in
+            if new != nil {
+                showHome = false
+                selectedProtocol = nil
+            }
+            loadLists()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
+            refreshRoute()
+        }
+    }
+
+    private var experimentView: some View {
         GeometryReader { g in
             let inner = g.size.width - 32
             let left = inner * 0.58
@@ -88,7 +194,7 @@ struct ContentView: View {
                 }
                 .frame(width: left)
                 VStack(spacing: 8) {
-                    StepCard(lab: lab)
+                    StepCard(lab: lab, onEndRun: endRun, onSource: openCurrentSource)
                     responseCard
                     TimerList(lab: lab)
                     MemoList(lab: lab) { selectedWell = WellSelect(id: $0) }
@@ -99,17 +205,6 @@ struct ContentView: View {
                 .frame(width: inner - left - 12)
             }
             .padding()
-        }
-        .sheet(item: $selectedWell) { sel in WellSheet(well: sel.id, lab: lab) { say($0) } }
-        .sheet(isPresented: robotSheet) { robotPanel }
-        .sheet(isPresented: draftSheet) { draftPanel }
-        .sheet(isPresented: $showSettings) { VoiceSettingsView() }
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .plainText]) { res in
-            importPicked(res)
-        }
-        .onAppear { connect(); refreshRoute() }
-        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
-            refreshRoute()
         }
     }
 
@@ -131,64 +226,20 @@ struct ContentView: View {
 
     /// The current Pip response, or the card(s) awaiting an answer. Fixed slot.
     private var responseCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Pip").font(.caption.bold()).foregroundStyle(.secondary)
-            if lab.cards.count >= 2 {
-                cardChecklist
-            } else if let first = lab.cards.first {
-                Text(first.question).font(.headline)
-                if let detail = first.detail, !detail.isEmpty {
-                    Text(detail).font(.callout).foregroundStyle(.secondary)
-                }
-                HStack(spacing: 16) {
-                    Button("Yes") { answer(true) }
-                        .buttonStyle(.borderedProminent)
-                    Button("No") { answer(false) }
-                        .buttonStyle(.bordered)
-                }
+        Group {
+            if !lab.cards.isEmpty {
+                CardPanel(cards: lab.cards, onAnswer: answer(id:ok:), onAnswerAll: answerAll)
             } else {
-                Text(lastReply.isEmpty ? "Speak or type a command" : lastReply)
-                    .font(.body)
-                    .foregroundStyle(lastReply.isEmpty ? .secondary : .primary)
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
-        .padding(10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    /// One row per pending card, each with its own Yes/No, plus Yes to all.
-    private var cardChecklist: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Checklist (\(lab.cards.count))").font(.headline)
-                Spacer()
-                Button("Yes to all") { answerAll() }
-                    .buttonStyle(.borderedProminent).controlSize(.small)
-            }
-            ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(lab.cards.enumerated()), id: \.element.id) { idx, card in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(card.question).font(.callout).bold(idx == 0)
-                                if let detail = card.detail, !detail.isEmpty {
-                                    Text(detail).font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                            Button("Yes") { answer(id: card.id, ok: true) }
-                                .buttonStyle(.borderedProminent).controlSize(.small)
-                            Button("No") { answer(id: card.id, ok: false) }
-                                .buttonStyle(.bordered).controlSize(.small)
-                        }
-                        .padding(4)
-                        .background(idx == 0 ? Color.accentColor.opacity(0.12) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 6))
-                    }
+                    Text("Pip").font(.caption.bold()).foregroundStyle(.secondary)
+                    Text(lastReply.isEmpty ? "Speak or type a command" : lastReply)
+                        .font(.body)
+                        .foregroundStyle(lastReply.isEmpty ? .secondary : .primary)
                 }
+                .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
+                .padding(10)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
             }
-            .frame(maxHeight: 180)
         }
     }
 
@@ -272,6 +323,7 @@ struct ContentView: View {
                 Spacer()
                 Button("Discard") { discard() }
                     .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(reviewBusy)
                 Button("Close") { draftState = .idle }
                     .buttonStyle(.bordered).controlSize(.small)
             }
@@ -283,30 +335,34 @@ struct ContentView: View {
                     Text("Reading protocol…").foregroundStyle(.secondary)
                 }
             case .reviewing:
+                if !lab.cards.isEmpty {
+                    CardPanel(cards: lab.cards, onAnswer: answer(id:ok:), onAnswerAll: answerAll)
+                }
+                if !reviewError.isEmpty {
+                    Text(reviewError).font(.callout).foregroundStyle(.red)
+                }
                 if let d = lab.draft {
-                    if !d.errors.isEmpty {
-                        ForEach(d.errors) { e in
-                            Text(e.reason).foregroundStyle(.red).font(.callout)
-                        }
+                    if let title = d.plan.title, !title.isEmpty {
+                        Text(title).font(.headline)
                     }
-                    if !d.review.isEmpty {
-                        ForEach(d.review) { r in
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(r.reason).foregroundStyle(.yellow).font(.callout)
-                                if let q = r.quote, !q.isEmpty {
-                                    Text("“\(q)”").font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
+                    Text(reviewSummary(d)).font(.callout).foregroundStyle(.secondary)
                     TabView(selection: $reviewTab) {
                         reviewLiquids(d).tabItem { Text("Liquids") }.tag(0)
                         reviewSteps(d).tabItem { Text("Steps") }.tag(1)
                         reviewLayout(d).tabItem { Text("Layout") }.tag(2)
                     }
-                    Button("Start run") { start() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!d.errors.isEmpty)
+                    let rest = unmatchedIssues(d)
+                    if !rest.isEmpty {
+                        ForEach(rest) { r in issueRow(r, .yellow) }
+                    }
+                    HStack {
+                        Button("Save to library") { save() }
+                            .buttonStyle(.bordered)
+                            .disabled(!d.errors.isEmpty || reviewBusy)
+                        Button("Start run") { start() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!d.errors.isEmpty || reviewBusy)
+                    }
                 } else {
                     Text("No draft.").foregroundStyle(.secondary)
                 }
@@ -333,7 +389,10 @@ struct ContentView: View {
                         if let prep = l.prep, !prep.isEmpty {
                             Text(prep).font(.caption).foregroundStyle(.secondary)
                         }
-                        Text("“\(l.quote)”").font(.caption).foregroundStyle(.secondary)
+                        quoteLine(l.quote, source: l.quoteSource) {
+                            openDraftQuote(page: l.quotePage, phrase: l.quote)
+                        }
+                        itemIssues(d, prefix: "liquids.\(k)")
                     }
                 }
             }
@@ -378,7 +437,10 @@ struct ContentView: View {
                                 patch(path: "steps.\(i).caution", text: $0)
                             }
                         }
-                        Text("“\(s.quote)”").font(.caption).foregroundStyle(.secondary)
+                        quoteLine(s.quote, source: s.quoteSource) {
+                            openDraftQuote(page: s.quotePage, phrase: s.quote)
+                        }
+                        itemIssues(d, prefix: "steps.\(i)")
                     }
                 }
             }
@@ -392,6 +454,69 @@ struct ContentView: View {
         case "all_used": "all"
         default: "other"
         }
+    }
+
+    private func reviewSummary(_ d: ProtocolDraft) -> String {
+        var parts: [String] = []
+        if !d.errors.isEmpty { parts.append("\(d.errors.count) to fix") }
+        if !d.review.isEmpty { parts.append("\(d.review.count) to review") }
+        return parts.isEmpty ? "Ready to start." : parts.joined(separator: " · ")
+    }
+
+    private func issueRow(_ issue: DraftIssue, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(issue.reason).font(.callout).foregroundStyle(color)
+            if let q = issue.quote, !q.isEmpty {
+                Text("“\(q)”").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func itemIssues(_ d: ProtocolDraft, prefix: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(d.errors.filter { $0.path == prefix || $0.path.hasPrefix(prefix + ".") }) {
+                issueRow($0, .red)
+            }
+            ForEach(d.review.filter { $0.path == prefix || $0.path.hasPrefix(prefix + ".") }) {
+                issueRow($0, .yellow)
+            }
+        }
+    }
+
+    private func unmatchedIssues(_ d: ProtocolDraft) -> [DraftIssue] {
+        (d.errors + d.review).filter { i in
+            !(i.path.hasPrefix("liquids.") || i.path.hasPrefix("conditions.")
+                || i.path.hasPrefix("steps."))
+        }
+    }
+
+    private func quoteLine(_ quote: String, source: String?, open: (() -> Void)? = nil) -> some View {
+        Group {
+            if let open {
+                Button(action: open) {
+                    HStack(spacing: 4) {
+                        Text("“\(quote)”").font(.caption).foregroundStyle(.secondary)
+                        if source == "code" {
+                            Text("found by code").font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            } else {
+                HStack(spacing: 4) {
+                    Text("“\(quote)”").font(.caption).foregroundStyle(.secondary)
+                    if source == "code" {
+                        Text("found by code").font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Draft quotes open the picked PDF, kept as _draft until Save/Start names it.
+    private func openDraftQuote(page: Int?, phrase: String) {
+        draftState = .idle
+        openSource("protocol:_draft", page, phrase)
     }
 
     private func reviewLayout(_ d: ProtocolDraft) -> some View {
@@ -418,6 +543,10 @@ struct ContentView: View {
                         DraftField(initial: c.wells.joined(separator: ",")) {
                             patch(path: "conditions.\(k).wells", text: $0)
                         }
+                        quoteLine(c.quote, source: c.quoteSource) {
+                            openDraftQuote(page: c.quotePage, phrase: c.quote)
+                        }
+                        itemIssues(d, prefix: "conditions.\(k)")
                     }
                 }
             }
@@ -452,10 +581,6 @@ struct ContentView: View {
 
     private var inputBar: some View {
         HStack(spacing: 8) {
-            Button(lab.draft == nil ? "Import" : "Review") {
-                if lab.draft == nil { showImporter = true } else { draftState = .reviewing }
-            }
-            .buttonStyle(.bordered).controlSize(.small)
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape")
             }
@@ -502,6 +627,9 @@ struct ContentView: View {
             ForEach(d.sources, id: \.self) { s in
                 Text("src: \(s)").font(.caption2).foregroundStyle(.secondary)
             }
+            Text("reply v\(d.recordVersion) · sync v\(lab.version)")
+                .font(.caption2)
+                .foregroundStyle(d.recordVersion == lab.version ? Color.secondary : Color.red)
             Text(msLine(d.ms))
                 .font(.caption2).foregroundStyle(.secondary)
             Divider()
@@ -568,12 +696,46 @@ struct ContentView: View {
         case "navigate":
             switch a.screen {
             case "robot_preview":
-                selectedWell = nil
+                clearDrills()
                 if case .idle = robotState { runRobot() }
                 return true
             case "main":
-                selectedWell = nil
-                robotState = .idle
+                clearDrills()
+                showHome = false
+                return true
+            case "home":
+                clearDrills()
+                showHome = true
+                loadLists()
+                return true
+            case "setup":
+                setupDone = false
+                return true
+            case "protocol_detail":
+                guard let t = a.target, !t.isEmpty else {
+                    return uiFail("I couldn't open that protocol: which one?")
+                }
+                clearDrills()
+                selectedProtocol = t
+                return true
+            case "run_view":
+                guard let t = a.target, !t.isEmpty else {
+                    return uiFail("I couldn't open that run: which one?")
+                }
+                clearDrills()
+                viewingRun = t
+                return true
+            case "protocol_source":
+                guard let t = a.target, !t.isEmpty, parseSourceTarget(t) != nil else {
+                    return uiFail("I couldn't open that original.")
+                }
+                openSourceTarget(t)
+                return true
+            case "protocol_review":
+                guard lab.draft != nil else {
+                    return uiFail("No draft open — import a protocol from Home.")
+                }
+                draftState = .reviewing
                 return true
             case "well_card":
                 return true // nothing to move without a target; open carries one
@@ -584,6 +746,9 @@ struct ContentView: View {
             guard let t = a.target, !t.isEmpty else { return uiFail("I couldn't open that.") }
             robotState = .idle
             selectedWell = WellSelect(id: t)
+            return true
+        case "import":
+            showImporter = true
             return true
         case "flash":
             lab.flash(Set(a.wells ?? []))
@@ -600,6 +765,11 @@ struct ContentView: View {
             }
             return true
         case "back":
+            if viewingSource != nil { viewingSource = nil }
+            else if viewingRun != nil { viewingRun = nil }
+            else if selectedProtocol != nil { selectedProtocol = nil }
+            else if showHome, lab.run != nil { showHome = false }
+            else if case .idle = draftState {} else { draftState = .idle }
             selectedWell = nil
             robotState = .idle
             return true
@@ -629,12 +799,16 @@ struct ContentView: View {
                 say("Can't read that file")
                 return
             }
+            if url.pathExtension.lowercased() == "pdf" {
+                OriginalStore.save(data, protocolId: "_draft")
+            }
             draftState = .importing
             Task {
                 do {
                     let r = try await PipClient.importProtocol(data: data,
                                                                filename: url.lastPathComponent)
                     lab.draft = r.draft
+                    reviewError = ""
                     say(r.reply)
                     sayAloud(r.speak)
                     draftState = .reviewing
@@ -678,37 +852,162 @@ struct ContentView: View {
     }
 
     private func start() {
+        guard !reviewBusy else { return }
+        reviewBusy = true
+        reviewError = ""
         Task {
+            defer { reviewBusy = false }
             do {
                 let r = try await PipClient.startRun()
                 say(r.reply)
                 sayAloud(r.speak)
-                if r.started { draftState = .idle }
+                if r.started {
+                    if let id = r.protocolId { keepOriginal(protocolId: id) }
+                    lab.draft = nil
+                    draftState = .idle
+                    loadLists()
+                } else if r.card != nil {
+                    // The draft is saved and popped; the card lives on.
+                    lab.draft = nil
+                    draftState = .idle
+                    loadLists()
+                } else {
+                    reviewError = r.reply
+                }
+            } catch {
+                reviewError = error.localizedDescription
+                say("Error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func save() {
+        guard !reviewBusy else { return }
+        reviewBusy = true
+        reviewError = ""
+        Task {
+            defer { reviewBusy = false }
+            do {
+                let r = try await PipClient.saveDraft()
+                say(r.reply)
+                sayAloud(r.speak)
+                if r.saved {
+                    if let id = r.proto?.id {
+                        keepOriginal(protocolId: id)
+                        selectedProtocol = id
+                    }
+                    lab.draft = nil
+                    draftState = .idle
+                    loadLists()
+                } else {
+                    reviewError = r.reply
+                }
+            } catch {
+                reviewError = error.localizedDescription
+                say("Error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// The picked PDF becomes this protocol's on-iPad original.
+    private func keepOriginal(protocolId: String) {
+        let fm = FileManager.default
+        let draft = OriginalStore.url(protocolId: "_draft")
+        guard fm.fileExists(atPath: draft.path) else { return }
+        try? fm.removeItem(at: OriginalStore.url(protocolId: protocolId))
+        try? fm.moveItem(at: draft, to: OriginalStore.url(protocolId: protocolId))
+    }
+
+    private func discard() {
+        guard !reviewBusy else { return }
+        reviewBusy = true
+        reviewError = ""
+        Task {
+            defer { reviewBusy = false }
+            do {
+                try await PipClient.discardDraft()
+                try? FileManager.default.removeItem(at: OriginalStore.url(protocolId: "_draft"))
+                lab.draft = nil
+                draftState = .idle
+            } catch {
+                reviewError = error.localizedDescription
+                say("Error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func startProtocolRun(_ id: String) {
+        detailNotice = ""
+        Task {
+            do {
+                let r = try await PipClient.runsStart(protocolId: id)
+                say(r.reply)
+                sayAloud(r.speak)
+                if r.started {
+                    detailNotice = ""
+                    selectedProtocol = nil
+                    loadLists()
+                }
+            } catch {
+                detailNotice = error.localizedDescription
+                say("Error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func endRun() {
+        Task {
+            do {
+                let r = try await PipClient.runsEnd()
+                say(r.reply)
+                sayAloud(r.speak)
             } catch {
                 say("Error: \(error.localizedDescription)")
             }
         }
     }
 
-    private func discard() {
+    private func loadLists() {
         Task {
             do {
-                try await PipClient.discardDraft()
-                draftState = .idle
+                async let p = PipClient.protocols()
+                async let r = PipClient.runs()
+                protocols = try await p
+                runs = try await r
             } catch {
-                say("Error: \(error.localizedDescription)")
+                // Home shows empty; the refresh button retries.
             }
         }
+    }
+
+    private func openSource(_ target: String, _ page: Int?, _ phrase: String?) {
+        viewingSource = ViewingSource(target: target, page: page, phrase: phrase)
+    }
+
+    private func openSourceTarget(_ t: String) {
+        guard let parsed = parseSourceTarget(t) else { return }
+        var page: Int?
+        var phrase: String?
+        if let n = stepNumber(fragment: parsed.fragment),
+           n >= 1, n <= lab.planSteps.count {
+            page = lab.planSteps[n - 1].quotePage
+            phrase = lab.planSteps[n - 1].quote
+        } else {
+            phrase = textPhrase(fragment: parsed.fragment)
+        }
+        viewingSource = ViewingSource(target: t, page: page, phrase: phrase)
+    }
+
+    private func openCurrentSource() {
+        guard let pid = lab.run?.protocolId, !pid.isEmpty,
+              lab.stepIndex < lab.planSteps.count else { return }
+        let s = lab.planSteps[lab.stepIndex]
+        openSource("protocol:\(pid)#step:\(lab.stepIndex + 1)", s.quotePage, s.quote)
     }
 
     private func say(_ s: String) {
         log.append(s)
         if log.count > 100 { log.removeFirst(log.count - 100) }
-    }
-
-    private func answer(_ ok: Bool) {
-        guard let first = lab.cards.first else { return }
-        answer(id: first.id, ok: ok)
     }
 
     private func answer(id: String, ok: Bool) {
@@ -749,11 +1048,12 @@ struct ContentView: View {
         do {
             let r = try await PipClient.orchestrate(text: text, screen: currentScreen,
                                                     selectedWell: selectedWell?.id ?? "",
-                                                    openSheet: selectedWell == nil ? "" : "well_card")
+                                                    openSheet: selectedWell == nil ? "" : "well_card",
+                                                    runId: viewingRun ?? "")
             handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
                    route: r.route, input: text, sources: r.sources,
                    robot: r.robot == true, dropped: r.dropped ?? 0,
-                   ui: r.ui, speak: r.speak)
+                   ui: r.ui, speak: r.speak, recordVersion: r.record_version)
         } catch {
             say("Error: \(error.localizedDescription)")
         }
@@ -806,12 +1106,13 @@ struct ContentView: View {
             guard loud >= 0.001 else { say("No sound reached the mic — on the simulator, check the Mac mic permission and input"); return }
             let r = try await PipClient.voice(wav: data, screen: currentScreen,
                                               selectedWell: selectedWell?.id ?? "",
-                                              openSheet: selectedWell == nil ? "" : "well_card")
+                                              openSheet: selectedWell == nil ? "" : "well_card",
+                                              runId: viewingRun ?? "")
             say("🎙 \(r.transcript)")
             handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
                    route: r.route, input: r.transcript, sources: r.sources,
                    robot: r.robot == true, dropped: r.dropped ?? 0,
-                   ui: r.ui, speak: r.speak)
+                   ui: r.ui, speak: r.speak, recordVersion: r.record_version)
         } catch {
             say("Error: \(error.localizedDescription)")
         }
@@ -820,7 +1121,7 @@ struct ContentView: View {
     private func handle(calls: [ToolCall], messages: [String], reply: String, ms: [String: Int],
                         route: String?, input: String, sources: [Source],
                         robot: Bool, dropped: Int,
-                        ui: [UIAction]?, speak: String?) {
+                        ui: [UIAction]?, speak: String?, recordVersion: Int) {
         for msg in messages { say(msg) }
         if !reply.isEmpty {
             lastReply = reply
@@ -839,7 +1140,8 @@ struct ContentView: View {
             calls: calls.map { ($0.name, "{" + $0.args.map { "\"\($0.key)\": \($0.value.compact)" }.sorted().joined(separator: ", ") + "}") },
             ms: ms,
             route: route,
-            sources: sources.map(\.title)
+            sources: sources.map(\.title),
+            recordVersion: recordVersion
         )
         say("⏱ " + msLine(ms))
     }

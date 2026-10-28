@@ -50,6 +50,8 @@ def main():
     rows = []
     for text, kind in TURNS:
         api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+        api.store.start_demo_run()
+        api.store.r["step_index"] = 2  # mid-run bench, as before
         api._SESSIONS.clear()
         c = TestClient(api.app)
         buf = io.StringIO()
@@ -69,6 +71,8 @@ def main():
     talk = []
     for text in SMALLTALK:
         api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+        api.store.start_demo_run()
+        api.store.r["step_index"] = 2  # mid-run bench, as before
         api._SESSIONS.clear()
         c = TestClient(api.app)
         before = (list(api.store.r["done"]), list(api.store.r["excluded"]),

@@ -130,6 +130,17 @@ class GrammarTests(unittest.TestCase):
         self.assertEqual(calls[0]["name"], "where_am_i")
         self.assertEqual(reply, "Step 3 of 5, drug A. 0 wells done.")
 
+    def test_import_opens_picker(self):
+        calls, reply = match_grammar("import a protocol", ST)
+        self.assertEqual(calls, [{"name": "open", "args": {"target": "importer"}}])
+        self.assertEqual(reply, "Opening the importer.")
+
+    def test_import_blocked_by_open_draft(self):
+        st = dict(ST, draft_open=True)
+        calls, reply = match_grammar("import a protocol", st)
+        self.assertEqual(calls, [])
+        self.assertIn("already open", reply)
+
     def test_exclude(self):
         calls, reply = match_grammar("exclude C3", ST)
         self.assertEqual(calls, [{"name": "exclude_well", "args": {"well": "C3"}}])
@@ -704,6 +715,9 @@ class HonestReplyTests(unittest.TestCase):
     def test_claim_without_tools(self):
         self.assertEqual(honest_reply([], "B2 done."), "I didn't record anything.")
         self.assertEqual(honest_reply([], "C3 excluded, noted."), "I didn't record anything.")
+        self.assertEqual(honest_reply([], "Got it, C7 and D7 are dropped."),
+                         "I didn't record anything.")
+        self.assertEqual(honest_reply([], "Which one — drop C7?"), "Which one — drop C7?")
         self.assertEqual(honest_reply(None, "Timer started."), "I didn't record anything.")
 
     def test_logged_moved_claim(self):

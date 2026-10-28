@@ -16,6 +16,8 @@ class StoreTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.s = RecordStore(path=Path(self.tmp.name) / "r.json")
+        self.s.start_demo_run()
+        self.s.r["step_index"] = 2  # mid-run fixture, as before
         self.sess = {}
 
     def tearDown(self):
@@ -214,6 +216,9 @@ class StoreTest(unittest.TestCase):
         self.assertTrue(r["messages"][0].startswith("Step 3 of 5"))
         r = self.apply([T("show", view="plate", target="C")])
         self.assertEqual(r["messages"], ["Viewing: plate C"])
+        r = self.apply([T("open", target="importer")])
+        self.assertEqual(r["ui"], [{"action": "import"}])
+        self.assertEqual(r["messages"], ["Opening the importer."])
 
     def test_redo_needs_empty_well(self):
         self.s.r["done"] = ["C9"]
@@ -323,13 +328,14 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(d["steps"]), 1)
         self.assertTrue(d["steps"][0]["current"])
         d = self.s.read_record("timers", "")
-        self.assertEqual(d, {"timers": []})
+        self.assertEqual(d["timers"], [])
+        self.assertEqual(d["run"], (self.s.r.get("run") or {}).get("run_id"))
         d = self.s.read_record("history", "", 2)
         self.assertTrue(len(d["history"]) <= 2)
         d = self.s.read_record("wells", "C2-C8", 2)
         self.assertEqual(len(d["wells"]), 2)
         d = self.s.read_record("wells", "bogus")
-        self.assertEqual(d, {"wells": []})
+        self.assertEqual(d["wells"], [])
         self.assertIn("error", self.s.read_record("bogus", ""))
         r = self.apply([T("read_record", kind="wells", filter="C6")])
         self.assertEqual(r["messages"], [])

@@ -24,6 +24,8 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 PDF = (ROOT / "samples" / "protocol_demo.pdf").read_bytes()
 
 api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+api.store.start_demo_run()
+api.store.r["step_index"] = 2  # mid-run fixture, as before
 api._SESSIONS.clear()
 api.CHAIN_ENABLED = False
 
@@ -140,7 +142,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert proto.strict_subset_ok(proto.PROTOCOL_SCHEMA)
     assert not proto.strict_subset_ok({"type": "object", "properties": {"a": {"type": "string"}},
                                              "required": ["a"]}), "additionalProperties missing"
-    good = {"liquids": LIQUIDS, "conditions": CONDITIONS, "steps": STEPS}
+    good = {"title": "Methods", "liquids": LIQUIDS, "conditions": CONDITIONS, "steps": STEPS}
     assert proto.validate_against_schema(good, proto.PROTOCOL_SCHEMA) == []
     bad = {"liquids": [], "conditions": [{"id": "x"}], "steps": []}
     assert proto.validate_against_schema(bad, proto.PROTOCOL_SCHEMA), "label required"
@@ -222,8 +224,8 @@ with patch("httpx.AsyncClient", FakeClient):
 
     # P11. quote edges: quoteless node, stray caution, repeat words, endpoints.
     ev = proto.evidence_from_text(
-        "Wash twice with buffer. Seed control wells, 5 replicates each. "
-        "Plate: control wells are B2, B3, B4, B5, B6.")
+        "Wash twice with buffer.\nSeed control wells, 5 replicates each.\n"
+        "Plate: control wells are B2, B3, B4, B5, B6.\n")
     raw = {"liquids": [{"id": "x", "name": "x", "concentration": None,
                         "prep": None, "quote": "Seed cells nowhere."}],
            "conditions": [{"id": "control", "label": "control", "treatments": [],
@@ -308,6 +310,11 @@ with patch("httpx.AsyncClient", FakeClient):
     assert api.store.r["draft"]["plan"]["liquids"]["drug_a"]["name"] == "Drug A+"
     assert proto.parse_draft_path("steps.[0].pipette.volume") == ("step", 0, "pipette.volume")
     assert proto.parse_draft_path("steps[2].minutes") == ("step", 2, "minutes")
+    d0 = api.store.r["draft"]
+    assert proto.parse_draft_value(d0, ("step", 0, "pipette.volume"), "50 uL") == (True, 50.0)
+    assert proto.parse_draft_value(d0, ("step", 4, "minutes"), "30 min") == (True, 30.0)
+    assert proto.parse_draft_value(d0, ("step", 4, "minutes"), "C2")[0] is False
+    assert proto.parse_draft_value(d0, ("condition", "control", "replicates"), "6")[0] is True
     print("P5 ok: PATCH edits + revalidation")
 
     # P6b. voice edit via the tool: row move applies, bad path is couldn't.
@@ -332,12 +339,15 @@ with patch("httpx.AsyncClient", FakeClient):
     c.patch("/protocols/draft", json={"path": "conditions.control.replicates", "value": 5})
     r = c.post("/protocols/start", json={"session": "p4"})
     j = r.json()
-    assert j["started"] is True, j
-    assert j["reply"] == "Run started: 3 conditions, 5 steps. 3 unreviewed.", j
+    assert j["started"] is False and j["card"], j
+    assert j["card"]["kind"] == "finish_first", j["card"]
+    assert j["protocol_name"] == "Methods", j
+    r = c.post("/confirm", json={"card_id": j["card"]["id"], "ok": True, "session": "p4"})
+    assert "Run started" in r.json()["message"], r.json()
     runs = list((Path(api.store.path).parent / "runs").glob("run-*.json"))
     assert len(runs) == 1, runs
     archived = json.loads(runs[0].read_text())
-    assert "ctrl" in archived["plan"]["conditions"], "archive keeps the old run"
+    assert "ctrl" in archived["record"]["plan"]["conditions"], "archive keeps the old run"
     assert "draft" not in api.store.r and api.store.r["step_index"] == 0
     assert sorted(api.store.r["plan"]["conditions"]) == ["control", "drug_a", "drug_b"]
     live = api.store.r["plan"]["steps"]
@@ -407,6 +417,8 @@ with patch("httpx.AsyncClient", FakeClient):
     # P13. expiry suggestion merges into the same-key step card; entry proposes timers.
     import time as _t
     s13 = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+    s13.start_demo_run()
+    s13.r["step_index"] = 2
     sess13: dict = {}
     r = s13.apply_calls([{"name": "next_step", "args": {}}], "t", "move on", "spark", sess13)
     assert len(r["cards"]) == 1 and r["cards"][0]["payload"]["target"] == 4, r["cards"]
@@ -418,6 +430,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert len(cards) == 1, cards
     assert cards[0]["payload"]["target"] == 4 and cards[0]["payload"]["count"] == 2, cards
     s13b = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+    s13b.start_demo_run()
     s13b.r["step_index"] = 3
     r = s13b.apply_calls([{"name": "next_step", "args": {}}], "t", "move on", "spark", {})
     _, newcards, _ = s13b.confirm(r["cards"][0]["id"], True, "card", {})
@@ -434,5 +447,59 @@ with patch("httpx.AsyncClient", FakeClient):
         "⚠️ Protocol: go slow")
     assert "⚠️" not in whats_next_reply({"next_step": "", "next_caution": ""})
     print("P14 ok: caution in guidance replies")
+
+    # P15a. wrong model quote: code re-grounds the condition row by itself.
+    ev = proto.evidence_from_text(
+        "Experimental design\nGroup\nTreatment\nReplicates\nControl\n"
+        "Vehicle (PBS)\n5\nDrug A\nDrug A, 10 uM working solution\n5\n")
+    raw = {"title": "Experimental design", "liquids": [], "conditions": [
+        {"id": "control", "label": "Control", "treatments": [], "replicates": 5,
+         "wells": None, "quote": "Use one row of the plate per group."}], "steps": []}
+    d = proto.build_draft(raw, ev, "x.pdf")
+    c = d["plan"]["conditions"]["control"]
+    assert c["quote"] == "Control Vehicle (PBS) 5", c["quote"]
+    assert c["quote_source"] == "code", c
+    assert d["review"] == [] and d["errors"] == [], (d["review"], d["errors"])
+    print("P15a ok: row repair from a wrong quote")
+
+    # P15b. adjacent-sentence caution: verbatim across a line break grounds.
+    l1 = ("1. Add medium. Add 100 uL of fresh medium to every well that will "
+          "be used. Tip: dispense")
+    l2 = "slowly against the well wall so the cell layer is not disturbed."
+    ev = proto.evidence_from_text(l1 + "\n" + l2 + "\n")
+    raw = {"liquids": [{"id": "medium", "name": "medium", "concentration": None,
+                        "prep": None, "quote": l1}],
+           "conditions": [], "steps": [
+        {"kind": "pipette", "text": "Add medium",
+         "quote": "Add 100 uL of fresh medium to every well that will be used.",
+         "minutes": None, "temp_c": None,
+         "caution": "Tip: dispense slowly against the well wall so the cell "
+                    "layer is not disturbed.",
+         "pipette": {"liquid": "medium", "volume": 100, "unit": "uL",
+                     "target": {"type": "all_used", "value": None},
+                     "mix": None, "repeat": None}}]}
+    d = proto.build_draft(raw, ev, "x.pdf")
+    s = d["plan"]["steps"][0]
+    assert "tip: dispense" in proto.norm_quote(s["quote"]), s["quote"]
+    assert s["quote_source"] == "code", s
+    assert not [i for i in d["review"] if i["path"].startswith("steps.0")], d["review"]
+    assert d["errors"] == [], d["errors"]
+    print("P15b ok: adjacent caution repair")
+
+    # P15c. numbers absent from the doc still flag; source stays model.
+    raw = {"liquids": [], "conditions": [], "steps": [
+        {"kind": "incubate", "text": "incubate", "quote": S5, "minutes": 99,
+         "temp_c": None, "caution": None, "pipette": None}]}
+    d = proto.build_draft(raw, demo_evidence(), "x.pdf")
+    assert ("steps.0.minutes", "ungrounded_value") in {
+        (i["path"], i["code"]) for i in d["review"]}, d["review"]
+    assert d["plan"]["steps"][0]["quote_source"] == "model", d["plan"]["steps"][0]
+    raw = {"liquids": [], "conditions": [
+        {"id": "control", "label": "control", "treatments": [], "replicates": 10,
+         "wells": None, "quote": SEED_Q}], "steps": []}
+    d = proto.build_draft(raw, demo_evidence(), "x.pdf")
+    assert ("conditions.control.replicates", "ungrounded_value") in {
+        (i["path"], i["code"]) for i in d["review"]}, d["review"]
+    print("P15c ok: absent numbers still flag")
 
 print("ALL PASS")

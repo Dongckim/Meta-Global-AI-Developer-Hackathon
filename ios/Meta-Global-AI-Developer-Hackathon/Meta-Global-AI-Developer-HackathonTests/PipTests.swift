@@ -90,4 +90,56 @@ struct PipTests {
         #expect(fmtClock(90) == "1:30")
         #expect(msLine(["spark": 5]) == "spark 5 ms")
     }
+
+    @Test @MainActor func runBlockRoutesHome() {
+        let json = """
+        {"version": 5, "plan": {"conditions": {}, "steps": []},
+         "step_index": 0, "done": [], "excluded": {}, "redo": {},
+         "notes": [], "tips": [], "timers": [], "stamps": {}, "cards": {},
+         "run": {"run_id": "run-1", "protocol_id": "abc",
+                 "protocol_name": "Demo protocol", "started_at": 1.0}}
+        """
+        let lab = LabState()
+        lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(json.utf8)))
+        #expect(lab.run?.runId == "run-1")
+        #expect(lab.run?.protocolId == "abc")
+        // Missing run decodes too: the old fixture has none.
+        let bare = LabState()
+        bare.sync(Self.snapshot())
+        #expect(bare.run == nil)
+    }
+
+    @Test @MainActor func stepQuoteFieldsDecode() {
+        let json = """
+        {"kind": "pipette", "text": "add drug", "quote": "Add 10 uL drug.",
+         "quote_page": 2, "wells": ["C2"]}
+        """
+        let s = try! JSONDecoder().decode(PlanStep.self, from: Data(json.utf8))
+        #expect(s.quote == "Add 10 uL drug.")
+        #expect(s.quotePage == 2)
+    }
+
+    @Test func sourceTargetsParse() {
+        let a = parseSourceTarget("protocol:abc#step:3")!
+        #expect(a.protocolId == "abc" && a.fragment == "step:3")
+        #expect(stepNumber(fragment: a.fragment) == 3)
+        let b = parseSourceTarget("protocol:abc#text:30 minutes")!
+        #expect(textPhrase(fragment: b.fragment) == "30 minutes")
+        #expect(parseSourceTarget("  ") == nil)
+        #expect(loosePhrase("10 µL  at  37 °C") == "10 ul at 37 c")
+    }
+
+    @Test func libraryShapesDecode() {
+        let p = """
+        {"id": "abc", "name": "Demo protocol", "conditions": 3, "steps": 5}
+        """
+        let ps = try! JSONDecoder().decode(ProtocolSummary.self, from: Data(p.utf8))
+        #expect(ps.id == "abc" && ps.steps == 5)
+        let r = """
+        {"run_id": "run-1", "status": "finished",
+         "summary": {"conditions": [], "excluded": 1, "notes": 2, "timers": 0}}
+        """
+        let rs = try! JSONDecoder().decode(RunSummary.self, from: Data(r.utf8))
+        #expect(rs.runId == "run-1" && rs.summary?.notes == 2)
+    }
 }

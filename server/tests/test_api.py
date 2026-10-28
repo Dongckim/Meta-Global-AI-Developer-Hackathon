@@ -21,6 +21,8 @@ import server.api as api  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
 api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+api.store.start_demo_run()
+api.store.r["step_index"] = 2  # mid-run fixture, as before
 api._SESSIONS.clear()
 api.CHAIN_ENABLED = True  # chain-mode assertions below; #33 covers summary mode
 
@@ -99,7 +101,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert body["model"] == "muse-spark-1.3", body
     assert body["reasoning"] == {"effort": "minimal"}, body
     assert body["max_output_tokens"] == 1024, body
-    assert len(body["tools"]) == 19, len(body["tools"])
+    assert len(body["tools"]) == 20, len(body["tools"])
     assert not [t for t in body["tools"] if t.get("type") == "web_search"], "flag off by default"
     names = [t.get("name") for t in body["tools"] if t.get("type") == "function"]
     assert "read_record" in names and "find_free_wells" in names, names
@@ -108,8 +110,10 @@ with patch("httpx.AsyncClient", FakeClient):
     assert {"navigate", "open", "back"} <= set(names), names
     assert "answer_card" not in names and "confirm" not in names, names
     nav = next(t for t in body["tools"] if t.get("name") == "navigate")
-    assert nav["parameters"]["properties"]["screen"]["enum"] == [
-        "main", "protocol_review", "robot_preview", "well_card"], nav
+    from server.screens import IDS as SCREEN_IDS  # noqa: E402
+    assert nav["parameters"]["properties"]["screen"]["enum"] == SCREEN_IDS, nav
+    assert "home (protocol library, Import, past runs)" in nav["description"], nav
+    assert "protocol_review (the open draft)" in nav["description"], nav
     for t in body["tools"]:
         if t.get("type") != "function":
             continue

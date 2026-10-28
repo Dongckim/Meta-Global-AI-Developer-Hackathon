@@ -22,6 +22,8 @@ from server.store import RecordStore  # noqa: E402
 from server.tone import variants  # noqa: E402
 
 api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+api.store.start_demo_run()
+api.store.r["step_index"] = 2  # mid-run fixture, as before
 api._SESSIONS.clear()
 api.CHAIN_ENABLED = False
 

@@ -558,6 +558,34 @@ steps only; timed kinds propose timer cards on step entry.
 - Auto layout vs the v2 file's guidance (one row per group, outer wells
   empty, two spares): matches for this file (B/C/D rows, cols 2-8).
   Edge deviations kept: row H and col 12 are usable at 6+ groups / n>=10.
+- Quote repair (2026-10-28): model quotes are hints. repair_quotes runs at
+  build + recompute: values missing from the quote are re-searched with
+  their anchor (condition label-first row window ±2 lines; step
+  liquid/kind anchors in same/adjacent sentences; caution verbatim).
+  Found spans replace the quote (quote_source "code", idempotent);
+  replicates reject unit-suffixed numbers (10 uL is not n=10). Standalone
+  numbers never match inside well IDs (B5). Review shows issues per item
+  with an "N to review" summary on top.
+- Tool numbers accept one alpha suffix (50 uL); identifiers (C2) rejected.
+
+## Home, library, runs (2026-10-28, implemented)
+
+- server/data/protocols/<hash16>.json (title, plan, hash dedup) and
+  runs/run-<stamp>.json (protocol ref, status, summary, record). Record
+  holds the active run only; Demo protocol seeded in the library.
+- Screens home/setup/protocol_detail/run_view/protocol_source in the
+  registry; app boots to setup once, then home or the run. Session
+  run_id scopes reads; past-run writes are refused read-only.
+- Import is home-only. Discard drops the draft; Save adds to the
+  library; both leave the run. Start new run / End run are the only
+  run changers, both carded (Start cards only when a run is active).
+- Extraction schema carries title (grounded or filename stem). Each
+  quote gets a quote_page; PDF bytes live on the iPad only
+  (Documents/protocols/<id>.pdf, _draft until Save/Start).
+- Voice reuses open/navigate + read_record (kind source, run
+  selectors); open routes "yesterday's run" and "the original".
+- Future: versions of the same source document grouped as one
+  protocol (review edits currently save as a separate protocol).
 
 ## Open Questions
 

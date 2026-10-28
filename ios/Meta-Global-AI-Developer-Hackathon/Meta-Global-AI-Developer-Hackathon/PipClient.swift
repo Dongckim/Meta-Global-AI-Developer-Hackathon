@@ -96,8 +96,69 @@ struct PatchResponse: Decodable {
 struct StartResponse: Decodable {
     let started: Bool
     let errors: [DraftIssue]?
+    let card: ServerCard?
+    let runId: String?
+    let protocolId: String?
+    let protocolName: String?
     let reply: String
     let speak: String?
+
+    enum CodingKeys: String, CodingKey {
+        case started, errors, card, runId = "run_id", protocolId = "protocol_id",
+             protocolName = "protocol_name", reply, speak
+    }
+}
+
+struct SaveResponse: Decodable {
+    let saved: Bool
+    let proto: ProtocolSummary?
+    let errors: [DraftIssue]?
+    let reply: String
+    let speak: String?
+
+    enum CodingKeys: String, CodingKey {
+        case saved, proto = "protocol", errors, reply, speak
+    }
+}
+
+struct RunStartResponse: Decodable {
+    let started: Bool
+    let card: ServerCard?
+    let runId: String?
+    let protocolId: String?
+    let reply: String
+    let speak: String?
+
+    enum CodingKeys: String, CodingKey {
+        case started, card, runId = "run_id", protocolId = "protocol_id", reply, speak
+    }
+}
+
+struct RunEndResponse: Decodable {
+    let ended: Bool
+    let card: ServerCard?
+    let reply: String
+    let speak: String?
+}
+
+struct ProtocolListResponse: Decodable {
+    let protocols: [ProtocolSummary]
+}
+
+struct ProtocolDetailResponse: Decodable {
+    let proto: ProtocolDoc
+
+    enum CodingKeys: String, CodingKey {
+        case proto = "protocol"
+    }
+}
+
+struct RunListResponse: Decodable {
+    let runs: [RunSummary]
+}
+
+struct RunDetailResponse: Decodable {
+    let run: RunDoc
 }
 
 struct RobotCheck: Decodable {
@@ -145,13 +206,15 @@ enum PipError: Error, LocalizedError {
 
 enum PipClient {
     static func orchestrate(text: String, screen: String = "main",
-                            selectedWell: String = "", openSheet: String = "") async throws -> OrchestrateResponse {
+                            selectedWell: String = "", openSheet: String = "",
+                            runId: String = "") async throws -> OrchestrateResponse {
         var req = URLRequest(url: Config.baseURL.appending(path: "orchestrate"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: [
             "text": text, "screen": screen,
             "selected_well": selectedWell, "open_sheet": openSheet,
+            "run_id": runId,
         ])
         let (data, resp) = try await URLSession.shared.data(for: req)
         try check(resp, data)
@@ -159,7 +222,8 @@ enum PipClient {
     }
 
     static func voice(wav: Data, screen: String = "main",
-                      selectedWell: String = "", openSheet: String = "") async throws -> VoiceResponse {
+                      selectedWell: String = "", openSheet: String = "",
+                      runId: String = "") async throws -> VoiceResponse {
         let boundary = "----pip\(UUID().uuidString)"
         var body = Data()
         func append(_ s: String) { body.append(Data(s.utf8)) }
@@ -176,6 +240,7 @@ enum PipClient {
         field("screen", screen)
         field("selected_well", selectedWell)
         field("open_sheet", openSheet)
+        field("run_id", runId)
         append("--\(boundary)--\r\n")
 
         var req = URLRequest(url: Config.baseURL.appending(path: "voice"))
@@ -224,6 +289,43 @@ enum PipClient {
 
     static func startRun() async throws -> StartResponse {
         try await post("protocols/start", [:])
+    }
+
+    static func saveDraft() async throws -> SaveResponse {
+        try await post("protocols/save", [:])
+    }
+
+    static func protocols() async throws -> [ProtocolSummary] {
+        let r: ProtocolListResponse = try await get("protocols")
+        return r.protocols
+    }
+
+    static func protocolDetail(id: String) async throws -> ProtocolDoc {
+        let r: ProtocolDetailResponse = try await get("protocols/\(id)")
+        return r.proto
+    }
+
+    static func runsStart(protocolId: String) async throws -> RunStartResponse {
+        try await post("runs/start", ["protocol_id": protocolId])
+    }
+
+    static func runsEnd() async throws -> RunEndResponse {
+        try await post("runs/end", [:])
+    }
+
+    static func runs(protocolId: String? = nil) async throws -> [RunSummary] {
+        let path = protocolId.map { "runs?protocol_id=\($0)" } ?? "runs"
+        let r: RunListResponse = try await get(path)
+        return r.runs
+    }
+
+    static func runDetail(id: String) async throws -> RunDoc {
+        let r: RunDetailResponse = try await get("runs/\(id)")
+        return r.run
+    }
+
+    static func health() async throws -> HealthInfo {
+        try await get("health")
     }
 
     static func discardDraft() async throws {
@@ -289,6 +391,12 @@ enum PipClient {
             }
             cont.onTermination = { _ in task.cancel() }
         }
+    }
+
+    private static func get<T: Decodable>(_ path: String) async throws -> T {
+        let (data, resp) = try await URLSession.shared.data(from: Config.baseURL.appending(path: path))
+        try check(resp, data)
+        return try JSONDecoder().decode(T.self, from: data)
     }
 
     private static func post<T: Decodable>(_ path: String, _ json: [String: Any]) async throws -> T {

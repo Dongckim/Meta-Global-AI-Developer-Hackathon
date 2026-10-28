@@ -137,6 +137,7 @@ struct WellSheet: View {
     @Environment(\.dismiss) private var dismiss
     let well: String
     let lab: LabState
+    var readOnly = false
     let onLog: (String) -> Void
     @State private var editText = ""
     @State private var saving = false
@@ -176,7 +177,7 @@ struct WellSheet: View {
                     }
                 }
             }
-            if let last = memos.last {
+            if !readOnly, let last = memos.last {
                 HStack {
                     TextField("Edit last note", text: $editText)
                         .textFieldStyle(.roundedBorder)
@@ -222,10 +223,19 @@ struct WellSheet: View {
 
 struct StepCard: View {
     let lab: LabState
+    var onEndRun: (() -> Void)?
+    var onSource: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.headline)
+            HStack {
+                Text(title).font(.headline)
+                Spacer()
+                if onEndRun != nil {
+                    Button("End run") { onEndRun?() }
+                        .buttonStyle(.bordered).controlSize(.small)
+                }
+            }
             if let line = lab.currentKindLine {
                 Text(line).font(.caption).foregroundStyle(.secondary)
             }
@@ -233,7 +243,14 @@ struct StepCard: View {
                 Text("💡 \(tip)").font(.callout)
             }
             if let caution = lab.currentCaution {
-                Text("⚠️ Protocol: \(caution)").font(.callout)
+                if onSource != nil {
+                    Button { onSource?() } label: {
+                        Text("⚠️ Protocol: \(caution)").font(.callout)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text("⚠️ Protocol: \(caution)").font(.callout)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

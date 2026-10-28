@@ -65,9 +65,12 @@ struct PlanStep: Decodable {
     var caution: String?
     var pipette: PlanPipette?
     var wells: [String]
+    var quote: String?
+    var quotePage: Int?
 
     enum CodingKeys: String, CodingKey {
-        case kind, text, minutes, tempC = "temp_c", tip, caution, pipette, wells
+        case kind, text, minutes, tempC = "temp_c", tip, caution, pipette, wells,
+             quote, quotePage = "quote_page"
     }
 }
 
@@ -150,6 +153,14 @@ struct Stamp: Decodable {
     var ts: Double
 }
 
+struct HistoryEntry: Decodable, Identifiable {
+    var id: Double { ts }
+    var route: String?
+    var action: String
+    var wells: [String]
+    var ts: Double
+}
+
 struct ServerCard: Decodable, Equatable, Identifiable {
     var id: String
     var kind: String
@@ -158,11 +169,110 @@ struct ServerCard: Decodable, Equatable, Identifiable {
     var ts: Double
 }
 
+// MARK: - Library + runs
+
+struct RunBlock: Decodable, Equatable {
+    var runId: String
+    var protocolId: String?
+    var protocolName: String?
+    var startedAt: Double
+
+    enum CodingKeys: String, CodingKey {
+        case runId = "run_id", protocolId = "protocol_id",
+             protocolName = "protocol_name", startedAt = "started_at"
+    }
+}
+
+struct ProtocolSummary: Decodable, Identifiable {
+    var id: String
+    var name: String
+    var sourceFilename: String?
+    var importedAt: Double?
+    var conditions: Int
+    var steps: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, sourceFilename = "source_filename", importedAt = "imported_at",
+             conditions, steps
+    }
+}
+
+struct ProtocolDoc: Decodable {
+    var id: String
+    var name: String
+    var sourceFilename: String?
+    var importedAt: Double?
+    var plan: Plan
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, sourceFilename = "source_filename", importedAt = "imported_at", plan
+    }
+}
+
+struct RunCondCount: Decodable {
+    var key: String
+    var label: String
+    var have: Int
+    var need: Int?
+}
+
+struct RunCounts: Decodable {
+    var conditions: [RunCondCount]
+    var excluded: Int
+    var notes: Int
+    var timers: Int
+}
+
+struct RunSummary: Decodable, Identifiable {
+    var runId: String
+    var protocolId: String?
+    var protocolName: String?
+    var startedAt: Double?
+    var endedAt: Double?
+    var status: String
+    var summary: RunCounts?
+
+    var id: String { runId }
+
+    enum CodingKeys: String, CodingKey {
+        case runId = "run_id", protocolId = "protocol_id", protocolName = "protocol_name",
+             startedAt = "started_at", endedAt = "ended_at", status, summary
+    }
+}
+
+struct RunDoc: Decodable {
+    var runId: String
+    var protocolId: String?
+    var protocolName: String?
+    var startedAt: Double?
+    var endedAt: Double?
+    var status: String
+    var record: RecordSnapshot
+
+    enum CodingKeys: String, CodingKey {
+        case runId = "run_id", protocolId = "protocol_id", protocolName = "protocol_name",
+             startedAt = "started_at", endedAt = "ended_at", status, record
+    }
+}
+
+struct HealthInfo: Decodable {
+    var ok: Bool
+    var commit: String?
+    var tools: Int?
+}
+
 struct DraftLiquid: Decodable {
     var name: String
     var concentration: String?
     var prep: String?
     var quote: String
+    var quoteSource: String?
+    var quotePage: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case name, concentration, prep, quote, quoteSource = "quote_source",
+             quotePage = "quote_page"
+    }
 }
 
 struct DraftCondition: Decodable {
@@ -171,6 +281,13 @@ struct DraftCondition: Decodable {
     var replicates: Int
     var wells: [String]
     var quote: String
+    var quoteSource: String?
+    var quotePage: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case label, treatments, replicates, wells, quote, quoteSource = "quote_source",
+             quotePage = "quote_page"
+    }
 }
 
 struct DraftTarget: Decodable {
@@ -195,6 +312,8 @@ struct DraftStep: Decodable {
     var kind: String
     var text: String
     var quote: String
+    var quoteSource: String?
+    var quotePage: Int?
     var minutes: Double?
     var tempC: Double?
     var caution: String?
@@ -202,11 +321,13 @@ struct DraftStep: Decodable {
     var wells: [String]
 
     enum CodingKeys: String, CodingKey {
-        case kind, text, quote, minutes, tempC = "temp_c", caution, pipette, wells
+        case kind, text, quote, quoteSource = "quote_source", quotePage = "quote_page",
+             minutes, tempC = "temp_c", caution, pipette, wells
     }
 }
 
 struct DraftPlan: Decodable {
+    var title: String?
     var liquids: [String: DraftLiquid]
     var conditions: [String: DraftCondition]
     var steps: [DraftStep]
@@ -246,10 +367,12 @@ struct RecordSnapshot: Decodable {
     var stamps: [String: Stamp]
     var cards: [ServerCard]
     var draft: ProtocolDraft?
+    var run: RunBlock?
+    var recent: [HistoryEntry]
 
     enum CodingKeys: String, CodingKey {
         case version, plan, stepIndex = "step_index", done, excluded, redo,
-             notes, tips, timers, stamps, cards, draft
+             notes, tips, timers, stamps, cards, draft, run, recent
     }
 
     init(from decoder: Decoder) throws {
@@ -266,6 +389,8 @@ struct RecordSnapshot: Decodable {
         stamps = try c.decode([String: Stamp].self, forKey: .stamps)
         cards = try c.decode([String: ServerCard].self, forKey: .cards).values.sorted { $0.ts > $1.ts }
         draft = try c.decodeIfPresent(ProtocolDraft.self, forKey: .draft)
+        run = try c.decodeIfPresent(RunBlock.self, forKey: .run)
+        recent = (try? c.decode([HistoryEntry].self, forKey: .recent)) ?? []
     }
 }
 
@@ -321,6 +446,8 @@ final class LabState {
     var timers: [TimerEntry] = []
     var cards: [ServerCard] = []
     var draft: ProtocolDraft?
+    var run: RunBlock?
+    var history: [HistoryEntry] = []
     var lastShown = ""
     /// Per-well provenance for the well card: source and last record time.
     var wellSource: [String: String] = [:]
@@ -344,6 +471,8 @@ final class LabState {
         timers = snap.timers
         cards = snap.cards
         draft = snap.draft
+        run = snap.run
+        history = snap.recent
         wellSource = snap.stamps.mapValues(\.source)
         wellTime = snap.stamps.mapValues { Date(timeIntervalSince1970: $0.ts) }
     }
@@ -441,5 +570,10 @@ func loadScreens() -> [ScreenDef] {
         ScreenDef(id: "well_card", commands: ["note bubbles", "exclude this well", "back"]),
         ScreenDef(id: "robot_preview", commands: ["make the robot protocol", "back"]),
         ScreenDef(id: "protocol_review", commands: ["import a protocol", "start the run", "back"]),
+        ScreenDef(id: "home", commands: ["import a protocol", "open the demo protocol", "show yesterday's run"]),
+        ScreenDef(id: "setup", commands: ["check the microphone", "back"]),
+        ScreenDef(id: "protocol_detail", commands: ["start a new run", "show the runs", "back"]),
+        ScreenDef(id: "run_view", commands: ["show yesterday's run", "read the notes", "back to the run"]),
+        ScreenDef(id: "protocol_source", commands: ["show me the original for this step", "back"]),
     ]
 }

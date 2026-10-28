@@ -52,6 +52,8 @@ def verdict(j, exp) -> bool:
 def main():
     api.CHAIN_ENABLED = False
     api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+    api.store.start_demo_run()
+    api.store.r["step_index"] = 2  # mid-run bench, as before
     api._SESSIONS.clear()
     c = TestClient(api.app)
     rows = []

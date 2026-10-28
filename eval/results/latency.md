@@ -380,3 +380,37 @@ One session, live muse-spark-1.3 minimal. rounds = spark calls this turn.
 | question | how many wells have I finished | 2584 | 2536 | 2 | spark | read_record,answer | Got it — 2 done, C2–C3. |
 
 questions_under_4s: True, commands_under_3s: True
+
+## 10-turn conversation (summary mode, goal: every turn <= 3000ms)
+
+One session, live muse-spark-1.3 minimal. total = HTTP round trip, spark = model time inside it.
+
+| turn | total_ms | spark_ms | route | calls | reply |
+|---|---|---|---|---|---|
+| mark C2 and C3 done please | 638 | 551 | spark | mark_done | Nice, C2–C3 are in. |
+| note C3, big bubbles near the edge | 76 | 0 | grammar | add_note | Noted on C3. |
+| start a 25 minute timer for C4 | 636 | 584 | spark | set_timer | 25 minutes on C4. I'll ping you. |
+| how many wells have I finished | 1087 | 1000 | spark | read_record,answer | Got it — 2 done, C2–C3. |
+| D5 looks cloudy, drop it from the run | 906 | 821 | spark | exclude_well | Drop D5? |
+| yes(confirm) | 4 | 0 | confirm | - | D5 excluded (cloudy) |
+| C6 has a bubble, redo it in a backup well | 2755 | 2674 | spark | find_free_wells,exclude_well,record_redo | Exclude C6? Redo C9? |
+| what is on C6 | 1387 | 1327 | spark | read_record,answer | Got it — C6 is planned Drug A. |
+| cancel the C4 timer | 71 | 0 | grammar | manage_timers | Okay, C4 timer's off. |
+| mark C4 through C8 done | 672 | 620 | spark | mark_done | Got it — C4–C8 done. |
+
+all_under_3s: True
+
+## Read vs command latency (goals: questions <= 4000ms, commands <= 3000ms)
+
+One session, live muse-spark-1.3 minimal. rounds = spark calls this turn.
+
+| kind | turn | total_ms | spark_ms | rounds | route | calls | reply |
+|---|---|---|---|---|---|---|---|
+| command | mark C2 and C3 done please | 650 | 551 | 1 | spark | mark_done | Nice, C2–C3 are in. |
+| command | note C4, slight edge effect | 74 | 0 | 0 | grammar | add_note | Noted on C4. |
+| command | start the timer for C5, five minutes | 822 | 770 | 1 | spark | set_timer | 5 minutes on C5. I'll ping you. |
+| question | what is on C6 | 2560 | 2467 | 2 | spark | read_record,answer | Nice — C6 has Drug A, still to do. |
+| question | read all my notes | 1720 | 1641 | 2 | spark | read_record,answer | Nice — 1 note: C4, slight edge effect. |
+| question | how many wells have I finished | 1423 | 1332 | 2 | spark | read_record,answer | Nice — 2 finished: C2–C3. |
+
+questions_under_4s: True, commands_under_3s: True

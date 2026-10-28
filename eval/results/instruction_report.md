@@ -73,3 +73,28 @@ Accuracy: 10/10. Fresh record per turn.
 | got it, thanks | 430 | y | Got it! |
 | cool | 590 | y | Cool, let's keep it rolling. |
 | okay perfect | 911 | y | Got it! |
+
+## Instruction vs report (live muse-spark-1.3 minimal)
+
+Accuracy: 10/10. Fresh record per turn.
+
+| turn | kind | total_ms | calls | pass | reply |
+|---|---|---|---|---|---|
+| wash the remaining wells right now | instruction | 2026 | - | y | Got it — how many minutes for this wash so I can time C2–C8? |
+| add drug A to C2 through C8 | instruction | 3356 | - | y | Add Drug A to C2-C8 now, then say done? |
+| go do the next wash step | instruction | 2607 | read_record,answer | y | Hmm, no wash step in this run — just media, vehicle, drug A, drug B, t |
+| start the next incubation | instruction | 3422 | read_record,set_timer | y | 30 minutes on C2. I'll ping you. Timer's on: 30 minutes for C3. Got it |
+| pipette the samples now | instruction | 1562 | - | y | Got it — go ahead with C2–C8 for step 3. |
+| C2 to C8 done | report | 72 | mark_done | y | Nice, C2–C8 are in. |
+| finished adding drug A to C2 through C5 | report | 841 | mark_done | y | Nice, C2–C5 are in. |
+| I put the samples in D2 to D8 | report | 1057 | mark_done | y | Wait — D2–D8 isn't in this step. Still log it? |
+| washed C6 to C8 | report | 723 | mark_done | y | Nice, C6–C8 are in. |
+| C6, C7 and C8 are finished | report | 828 | mark_done | y | Nice, C6–C8 are in. |
+
+## Conversational timing (<=2000ms, zero writes)
+
+| turn | total_ms | pass | reply |
+|---|---|---|---|
+| got it, thanks | 729 | y | Got it — happy to help! |
+| cool | 576 | y | Nice, we're set on C2–C8. |
+| okay perfect | 659 | y | Got it! |

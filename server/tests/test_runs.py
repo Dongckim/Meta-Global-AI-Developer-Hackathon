@@ -1,0 +1,267 @@
+"""Library + runs: save/dedup, start/end cards, past-run scope, source reads.
+
+Run: python -m unittest server.tests.test_runs (runs on import).
+"""
+
+import json
+import os
+import sys
+import tempfile
+import time
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+os.environ["MODEL_API_KEY"] = "dummy"
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+import server.api as api  # noqa: E402
+from server.store import RecordStore  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+PDF = (ROOT / "samples" / "protocol_demo.pdf").read_bytes()
+
+api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+api._SESSIONS.clear()
+api.CHAIN_ENABLED = False
+
+
+class FakeResp:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status_code = status
+        self.text = json.dumps(payload)
+
+    def json(self):
+        return self._payload
+
+
+class FakeClient:
+    spark_payload = {}
+
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, **kw):
+        if url.endswith("/responses"):
+            return FakeResp(FakeClient.spark_payload)
+        raise AssertionError(url)
+
+
+def fc(name, args, cid):
+    return {"type": "function_call", "name": name, "arguments": args,
+            "call_id": cid, "status": "completed"}
+
+
+def extraction(raw):
+    return {"id": "ext", "output": [{"type": "message", "content": [
+        {"type": "output_text", "text": json.dumps(raw)}]}]}
+
+
+def spark(*calls):
+    return {"id": "r", "output": list(calls)}
+
+
+S1 = "Step 1: add 100 uL media to all wells; pipette slowly down the wall."
+RAW = {
+    "title": "Methods",
+    "liquids": [{"id": "media", "name": "media", "concentration": None,
+                 "prep": None, "quote": S1}],
+    "conditions": [{"id": "control", "label": "control", "treatments": ["media"],
+                    "replicates": 5, "wells": None,
+                    "quote": "Seed cells in control, drug A, and drug B wells, 5 replicates each."}],
+    "steps": [{"kind": "pipette", "text": "add media", "quote": S1,
+               "minutes": None, "temp_c": None, "caution": None,
+               "pipette": {"liquid": "media", "volume": 100, "unit": "uL",
+                           "target": {"type": "condition", "value": "control"},
+                           "mix": None, "repeat": None}}],
+}
+
+
+def backdate(run_id, days):
+    from server import runs as runlog
+    p = Path(api.store.path).parent / "runs" / f"{run_id}.json"
+    doc = json.loads(p.read_text())
+    doc["started_at"] -= days * 86400
+    p.write_text(json.dumps(doc))
+    return runlog
+
+
+with patch("httpx.AsyncClient", FakeClient):
+    c = TestClient(api.app)
+
+    # LIB1. library seeds the Demo protocol; get + 404.
+    j = c.get("/protocols").json()
+    assert [p["name"] for p in j["protocols"]] == ["Demo protocol"], j
+    demo_id = j["protocols"][0]["id"]
+    assert j["protocols"][0]["steps"] == 5, j
+    j = c.get(f"/protocols/{demo_id}").json()
+    assert j["protocol"]["id"] == demo_id and "plan" in j["protocol"], j
+    assert c.get("/protocols/nope").status_code == 404
+    print("LIB1 ok: seeded library list/get")
+
+    # LIB2. import -> save; quote_page 1; same PDF twice -> same id.
+    FakeClient.spark_payload = extraction(RAW)
+    j = c.post("/protocols/import",
+               files={"file": ("protocol_demo.pdf", PDF, "application/pdf")}).json()
+    assert j["errors"] == [], j
+    assert api.store.r["draft"]["plan"]["steps"][0]["quote_page"] == 1, j
+    j = c.post("/protocols/save", json={"session": "lib2"}).json()
+    assert j["saved"] is True and j["protocol"]["name"] == "Methods", j
+    pid1 = j["protocol"]["id"]
+    assert "draft" not in api.store.r
+    FakeClient.spark_payload = extraction(RAW)
+    c.post("/protocols/import",
+           files={"file": ("protocol_demo.pdf", PDF, "application/pdf")})
+    j = c.post("/protocols/save", json={"session": "lib2"}).json()
+    assert j["saved"] is True and j["protocol"]["id"] == pid1, j
+    print("LIB2 ok: save + dedup + quote_page")
+
+    # LIB3. missing title falls back to the filename stem.
+    raw = {"title": "", "liquids": [], "conditions": [], "steps": []}
+    FakeClient.spark_payload = extraction(raw)
+    c.post("/protocols/import",
+           files={"file": ("mylib.txt", b"Seed control wells.", "text/plain")})
+    j = c.post("/protocols/save", json={"session": "lib3"}).json()
+    assert j["saved"] is True and j["protocol"]["name"] == "mylib", j
+    print("LIB3 ok: title stem fallback")
+
+    # RUN1. no active run: end 400s, end_run can't, guidance says so.
+    assert api.store.r.get("run") is None
+    r = c.post("/runs/end", json={"session": "run1"})
+    assert r.status_code == 400, r.text
+    FakeClient.spark_payload = spark(fc("end_run", "{}", "c1"))
+    j = c.post("/orchestrate", json={"text": "end the run", "session": "run1"}).json()
+    assert j["reply"] == "No active run — open a protocol from Home to start.", j
+    j = c.post("/orchestrate", json={"text": "where am I", "session": "run1"}).json()
+    assert j["reply"] == "No active run — open a protocol from Home to start.", j
+    print("RUN1 ok: honest empty state")
+
+    # RUN2. start with no active run starts at once.
+    j = c.post("/runs/start", json={"protocol_id": demo_id, "session": "run2"}).json()
+    assert j["started"] is True, j
+    assert j["reply"] == "Run started: 3 conditions, 5 steps.", j
+    run1 = j["run_id"]
+    assert api.store.r["run"]["run_id"] == run1
+    r = c.post("/runs/start", json={"protocol_id": "nope", "session": "run2"})
+    assert r.status_code == 404, r.text
+    print("RUN2 ok: direct start + unknown 404")
+
+    # RUN3. active start cards; confirm finishes the old run, starts new.
+    j = c.post("/orchestrate", json={"text": "B2 done", "session": "run3"}).json()
+    assert j["route"] == "grammar" and api.store.r["done"] == ["B2"], j
+    j = c.post("/runs/start", json={"protocol_id": demo_id, "session": "run3"}).json()
+    assert j["started"] is False and j["card"]["kind"] == "finish_first", j
+    j = c.post("/confirm", json={"card_id": j["card"]["id"], "ok": True,
+                                 "session": "run3"}).json()
+    assert "Run started" in j["message"], j
+    run2 = api.store.r["run"]["run_id"]
+    assert run2 != run1 and api.store.r["done"] == [], api.store.r["run"]
+    runs = list((Path(api.store.path).parent / "runs").glob("run-*.json"))
+    assert len(runs) == 1, runs
+    old = json.loads(runs[0].read_text())
+    assert old["run_id"] == run1 and old["status"] == "finished", old
+    assert old["record"]["done"] == ["B2"], old["record"]["done"]
+    j = c.get("/runs").json()
+    assert [r["status"] for r in j["runs"]] == ["active", "finished"], j
+    assert j["runs"][1]["summary"]["notes"] == 0, j
+    j = c.get("/runs", params={"protocol_id": demo_id}).json()
+    assert len(j["runs"]) == 2, j
+    assert c.get("/runs/nope").status_code == 404
+    print("RUN3 ok: finish-first card + archive + list")
+
+    # RUN4. yesterday's run opens; writes refused, reads scoped + echoed.
+    backdate(run1, 1)
+    FakeClient.spark_payload = spark(fc("open", '{"target": "yesterday\'s run"}', "c1"))
+    j = c.post("/orchestrate", json={"text": "show yesterday's run",
+                                     "session": "run4"}).json()
+    assert j["ui"] == [{"action": "navigate", "screen": "run_view",
+                        "target": run1}], j
+    assert api._SESSIONS["run4"]["run_id"] == run1, api._SESSIONS["run4"]
+    j = c.post("/orchestrate", json={"text": "C3 done", "session": "run4"}).json()
+    assert j["reply"] == "That run is finished — read only.", j
+    assert api.store.r["done"] == [] and run1 not in [
+        d.get("run_id") for d in [api.store.active_run_doc()]], "active untouched"
+    d = api.store.read_record("wells", "B2", 10, run="yesterday", session={})
+    assert d["run"] == run1 and d["wells"][0]["status"] == "done", d
+    d = api.store.read_record("wells", "B2", 10, session={"run_id": run1})
+    assert d["run"] == run1 and d["wells"][0]["status"] == "done", d
+    d = api.store.read_record("wells", "", 10, run="nope", session={})
+    assert d == {"error": "I couldn't find that run."}, d
+    print("RUN4 ok: past-run scope gate + scoped reads")
+
+    # RUN5. Import/Discard and Import/Save leave the active run alone.
+    FakeClient.spark_payload = extraction(RAW)
+    c.post("/protocols/import",
+           files={"file": ("protocol_demo.pdf", PDF, "application/pdf")})
+    assert "draft" in api.store.r
+    j = c.request("DELETE", "/protocols/draft", json={"session": "run5"}).json()
+    assert j["ok"] is True and "draft" not in api.store.r, j
+    assert api.store.r["run"]["run_id"] == run2
+    FakeClient.spark_payload = extraction(RAW)
+    c.post("/protocols/import",
+           files={"file": ("protocol_demo.pdf", PDF, "application/pdf")})
+    j = c.post("/protocols/save", json={"session": "run5"}).json()
+    assert j["saved"] is True and api.store.r["run"]["run_id"] == run2, j
+    print("RUN5 ok: discard/save don't touch the run")
+
+    # RUN7. source reads quote+page; 'the original' opens protocol_source.
+    api.store.r["step_index"] = 2
+    st = api.store.r["plan"]["steps"][2]
+    st["quote"], st["quote_page"] = "add drug A now", 2
+    d = api.store.read_record("source", "", 10, session={})
+    assert (d["step"], d["quote"], d["quote_page"]) == (3, "add drug A now", 2), d
+    d = api.store.read_record("source", "1", 10, session={})
+    assert d["step"] == 1, d
+    FakeClient.spark_payload = spark(fc("open", '{"target": "the original"}', "c1"))
+    j = c.post("/orchestrate", json={"text": "show me the original",
+                                     "session": "run7"}).json()
+    assert j["ui"] == [{"action": "navigate", "screen": "protocol_source",
+                        "target": f"protocol:{demo_id}#step:3"}], j
+    print("RUN7 ok: source kind + original navigation")
+
+    # RUN6. end_run cards; confirm finishes; empty again after.
+    FakeClient.spark_payload = spark(fc("end_run", "{}", "c1"))
+    j = c.post("/orchestrate", json={"text": "end the run", "session": "run6"}).json()
+    assert [x["kind"] for x in j["cards"]] == ["end_run"], j
+    j = c.post("/confirm", json={"card_id": j["cards"][0]["id"], "ok": True,
+                                 "session": "run6"}).json()
+    assert j["message"] == "Run finished: Demo protocol.", j
+    assert api.store.r.get("run") is None
+    j = c.get(f"/runs/{run2}").json()
+    assert j["run"]["status"] == "finished", j
+    assert time.time() - 120 < j["run"]["ended_at"] <= time.time() + 1, j["run"]
+    r = c.post("/runs/end", json={"session": "run6"})
+    assert r.status_code == 400, r.text
+    print("RUN6 ok: end card finishes the run")
+
+    # RUN8. legacy run (no protocol) names the gap honestly.
+    api.store.r["run"] = {"run_id": "legacy", "protocol_id": None,
+                          "protocol_name": None, "started_at": time.time()}
+    FakeClient.spark_payload = spark(fc("open", '{"target": "the original"}', "c1"))
+    j = c.post("/orchestrate", json={"text": "show me the original",
+                                     "session": "run8"}).json()
+    assert j["reply"] == "This run has no saved protocol.", j
+    assert j.get("ui") in (None, []), j
+    print("RUN8 ok: legacy original is honest")
+
+    # RUN9. request run_id echoes the viewing run: past refuses, "" applies.
+    api.store.start_demo_run()
+    j = c.post("/orchestrate", json={"text": "C3 done", "session": "run9",
+                                     "run_id": "legacy"}).json()
+    assert j["reply"] == "That run is finished — read only.", j
+    assert api._SESSIONS["run9"]["run_id"] == "legacy"
+    assert api.store.r["done"] == [], api.store.r["done"]
+    j = c.post("/orchestrate", json={"text": "C3 done", "session": "run9",
+                                     "run_id": ""}).json()
+    assert api.store.r["done"] == ["C3"], j
+    print("RUN9 ok: run_id echo scopes taps")
+
+print("ALL PASS")

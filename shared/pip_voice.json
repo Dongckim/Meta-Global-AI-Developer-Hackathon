@@ -98,5 +98,17 @@
     "Start the {minutes}-minute timer?",
     "Kick off {minutes} minutes?",
     "Want me to start {minutes} minutes?"
+  ],
+  "finish_first": [
+    "Finish the current run first?",
+    "Wrap up this run before starting {name}?"
+  ],
+  "end_run": [
+    "End this run?",
+    "Finish up and close this run?"
+  ],
+  "protocol_saved": [
+    "Saved {name} to the library.",
+    "{name} is in the library now."
   ]
 }

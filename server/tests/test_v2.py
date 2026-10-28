@@ -20,6 +20,8 @@ from server.store import RecordStore  # noqa: E402
 from server.tone import say, variants  # noqa: E402
 
 api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+api.store.start_demo_run()
+api.store.r["step_index"] = 2  # mid-run fixture, as before
 api._SESSIONS.clear()
 api.CHAIN_ENABLED = False
 
@@ -140,6 +142,7 @@ with patch("httpx.AsyncClient", FakeClient):
     # V6. redo via backup candidates, five fresh runs.
     for i in range(5):
         api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+        api.store.start_demo_run()
         ScriptClient.queue = [
             {"id": f"v6a{i}", "output": [
                 fc("find_free_wells", '{"near": "C3", "count": 3}', "c1")]},
@@ -217,7 +220,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert r.json()["route"] == "grammar", r.json()
     assert c.post("/input", json={"text": " ", "session": "v9"}).status_code == 400
     h = c.get("/health").json()
-    assert h["ok"] and h["commit"] and h["tools"] == 19 and h["prompt_hash"], h
+    assert h["ok"] and h["commit"] and h["tools"] == 20 and h["prompt_hash"], h
     assert h["memory"] == "summary", h
     FakeClient.spark_payload = {"id": "v9a", "output": [
         fc("exclude_well", '{"well": "C4"}', "c1")]}

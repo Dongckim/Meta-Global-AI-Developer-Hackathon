@@ -175,6 +175,8 @@ def call_wells(call) -> list[str]:
 
 
 def where_am_i_reply(state: dict) -> str:
+    if not state.get("has_run", True):
+        return "No active run — open a protocol from Home to start."
     step = state.get("step", 0)
     if not isinstance(step, int):
         step = 0
@@ -197,6 +199,8 @@ def where_am_i_reply(state: dict) -> str:
 
 
 def what_step_reply(state: dict) -> str:
+    if not state.get("has_run", True):
+        return "No active run — open a protocol from Home to start."
     step = state.get("step", 0)
     if not isinstance(step, int):
         step = 0
@@ -209,6 +213,8 @@ def what_step_reply(state: dict) -> str:
 
 
 def whats_next_reply(state: dict) -> str:
+    if not state.get("has_run", True):
+        return "No active run — open a protocol from Home to start."
     nxt = state.get("next_step", "")
     out = f"Next: {nxt}." if nxt else "Already at the last step."
     if nxt and state.get("next_caution"):
@@ -316,6 +322,11 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
         if wells is None:
             return None
         return [{"name": "show", "args": {"view": "plate", "target": wells[0]}}], f"Showing {wells[0]}."
+    m = re.fullmatch(r"\s*import(?:\s+an?)?\s+protocols?[?!]?\s*", low)
+    if m:
+        if state.get("draft_open"):
+            return [], "A draft is already open — review or discard it first."
+        return [{"name": "open", "args": {"target": "importer"}}], "Opening the importer."
     m = re.fullmatch(r"\s*open\s+(?:the\s+)?(.+?)[?!]?\s*", low)
     if m:
         wm = re.fullmatch(r"([a-h]\d{1,2})", m.group(1).strip())
@@ -824,7 +835,7 @@ def join_wells_ranges(wells) -> str:
 
 _STATE_CLAIM = re.compile(
     r"\b(noted|done|excluded|started|recorded|saved|finished|completed|canceled|cancelled"
-    r"|logged|moved)\b",
+    r"|logged|moved|dropped|drop)\b",
     re.IGNORECASE,
 )
 

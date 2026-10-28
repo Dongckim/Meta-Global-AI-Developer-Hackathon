@@ -8,6 +8,7 @@ Apply rules mirror the app's old LabState behavior message-for-message.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import uuid
@@ -29,7 +30,9 @@ from server.grammar import (
 )
 from server.screens import SCREENS, canonical, parent_of, title_of
 from server.tone import say
+from server import library as lib
 from server import protocol as proto
+from server import runs as runlog
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 RECORD_PATH = DATA_DIR / "record.json"
@@ -142,6 +145,18 @@ def timer_done_message(t: dict) -> str:
     return head
 
 
+def describe_well_row(d: dict) -> str:
+    """One factual sentence from a get_well_data row (scope-safe)."""
+    status = {"redo": "marked for redo"}.get(d["status"], d["status"])
+    s = f"{d['well']} is {status}"
+    extra = d["reason"] or d["redo_note"]
+    if extra:
+        s += f" ({extra})"
+    if d["memos"]:
+        s += ". Memos: " + "; ".join(d["memos"])
+    return s + "."
+
+
 def is_over(t: dict, now: float) -> bool:
     return now - t["started_at"] >= t["minutes"] * 60
 
@@ -166,6 +181,7 @@ def resolve_timers(timers, query) -> list[int]:
 class RecordStore:
     def __init__(self, path: Path = RECORD_PATH):
         self.path = Path(path)
+        self.root = self.path.parent
         self._listeners: list = []
         self._lock = threading.Lock()
         self._load_or_seed()
@@ -179,22 +195,23 @@ class RecordStore:
             for m in self.r.get("notes", []):
                 m.setdefault("raw", m.pop("transcript", None) or m.get("text", ""))
             self.r["plan"] = migrate_plan(self.r.get("plan") or {})
+            if "run" not in self.r:
+                if (self.r["plan"] or {}).get("steps"):
+                    self.r["run"] = {"run_id": "legacy", "protocol_id": None,
+                                     "protocol_name": None,
+                                     "started_at": self.path.stat().st_mtime}
+                else:
+                    self.r["run"] = None
             return
-        plan = {"conditions": {}, "steps": []}
-        current = 1
-        if SEED_PATH.exists():
-            seed = json.loads(SEED_PATH.read_text())
-            plan = {"conditions": seed.get("conditions", {}), "steps": seed.get("steps", []),
-                    "backups": seed.get("backups", [])}
-            current = seed.get("current_step", 1)
-        self.r = self._fresh_record(migrate_plan(plan), current)
+        self.r = self._fresh_record({"conditions": {}, "steps": [], "backups": []})
         self._save()
 
     @staticmethod
-    def _fresh_record(plan: dict, current: int = 1) -> dict:
-        steps = plan.get("steps", [])
+    def _fresh_record(plan: dict, current: int = 1, run: dict | None = None) -> dict:
+        steps = plan.get("steps", []) if isinstance(plan, dict) else []
         return {
             "version": 0,
+            "run": run,
             "plan": plan,
             "step_index": max(min(current - 1, len(steps) - 1), 0) if steps else 0,
             "done": [],
@@ -208,6 +225,201 @@ class RecordStore:
             "cards": {},
         }
 
+    def active_run_doc(self) -> dict | None:
+        """Active run as a run doc (for selectors), else None."""
+        run = self.r.get("run")
+        if not run:
+            return None
+        return {"run_id": run.get("run_id"), "protocol_id": run.get("protocol_id"),
+                "protocol_name": run.get("protocol_name"),
+                "started_at": run.get("started_at"), "status": "active",
+                "summary": runlog.summarize_record(self.r), "record": self.r}
+
+    def all_run_docs(self) -> list[dict]:
+        docs = runlog.list_all(root=self.root)
+        active = self.active_run_doc()
+        if active:
+            docs = [active] + [d for d in docs if d.get("run_id") != active["run_id"]]
+        return docs
+
+    def _viewing_run(self, session: dict) -> dict | None:
+        """Session-selected run doc; stale ids heal to None (active)."""
+        rid = (session or {}).get("run_id")
+        if not rid:
+            return None
+        doc = runlog.resolve(rid, self.all_run_docs())
+        if doc is None:
+            session["run_id"] = None
+        return doc
+
+    def _navigate_locked(self, res: dict, session: dict, screen: str, target) -> None:
+        """Navigate with target validation. run_id lives only on run_view."""
+        t = target.strip() if isinstance(target, str) else ""
+        if screen == "run_view":
+            self._open_run(res, session, t or "latest")
+            return
+        session["run_id"] = None
+        if screen == "protocol_detail":
+            doc = lib.get(t, self.root) if t else None
+            if doc is None and t:
+                doc = lib.find_by_name(t, self.root)
+            if doc is None:
+                res["messages"].append(
+                    "I couldn't open that protocol: which one?" if not t
+                    else f"I couldn't find the {t} protocol.")
+                return
+            res["ui"].append({"action": "navigate", "screen": screen, "target": doc["id"]})
+            res["messages"].append(f"Showing {doc.get('name')}.")
+            return
+        if screen == "protocol_source":
+            base = t.split("#", 1)[0]
+            pid = (base[len("protocol:"):] if base.startswith("protocol:") else base).strip()
+            if not pid or lib.get(pid, self.root) is None:
+                res["messages"].append("I couldn't open that original: which protocol?")
+                return
+            res["ui"].append({"action": "navigate", "screen": screen, "target": t})
+            res["messages"].append("Showing the original.")
+            return
+        res["ui"].append({"action": "navigate", "screen": screen})
+        res["messages"].append(f"Showing {title_of(screen)}.")
+
+    def _open_protocol(self, res: dict, session: dict, selector: str) -> None:
+        doc = lib.get(selector.strip(), self.root) or lib.find_by_name(selector, self.root)
+        if doc is None:
+            res["messages"].append(f"I couldn't find the {selector.strip()} protocol.")
+            return
+        self._navigate_locked(res, session, "protocol_detail", doc["id"])
+
+    def _open_run(self, res: dict, session: dict, selector: str) -> None:
+        docs = self.all_run_docs()
+        doc = runlog.resolve(selector.strip() or "latest", docs)
+        if doc is None:
+            res["messages"].append(
+                "No runs yet — start one from Home." if not docs
+                else "I couldn't find that run.")
+            return
+        session["run_id"] = doc["run_id"]
+        res["ui"].append({"action": "navigate", "screen": "run_view",
+                          "target": doc["run_id"]})
+        res["messages"].append(f"Showing run {doc['run_id']}.")
+
+    def _open_source(self, res: dict, session: dict, t: str) -> None:
+        """'The original' for the current (or named) step of the viewing run."""
+        doc = self._viewing_run(session or {})
+        if doc is not None:
+            rec, pid = doc.get("record") or {}, doc.get("protocol_id")
+        else:
+            rec = self.r
+            pid = (self.r.get("run") or {}).get("protocol_id")
+        if not pid or lib.get(pid, self.root) is None:
+            if doc is not None:
+                msg = "That run has no saved protocol."
+            elif (self.r.get("run") or {}).get("run_id"):
+                msg = "This run has no saved protocol."
+            else:
+                msg = "No active run — open a protocol from Home to start."
+            res["messages"].append(msg)
+            return
+        steps = (rec.get("plan") or {}).get("steps", [])
+        m = re.search(r"step\s*(\d+)", (t or "").lower())
+        n = int(m.group(1)) if m else (rec.get("step_index", 0) + 1)
+        if not steps or not 1 <= n <= len(steps):
+            res["messages"].append("I couldn't find that step in the original.")
+            return
+        self._navigate_locked(res, session, "protocol_source", f"protocol:{pid}#step:{n}")
+
+    def start_demo_run(self) -> dict:
+        """Fresh-store helper (tests, evals, dev): run the Demo protocol."""
+        with self._lock:
+            lib.ensure_demo_seed(self.root)
+            demo = lib.find_by_name("Demo protocol", self.root)
+            if self.r.get("run"):
+                self._finish_locked("finished")
+            return self._begin_locked(demo["plan"], demo["id"], demo["name"])
+
+    def _begin_locked(self, plan: dict, protocol_id: str | None,
+                      protocol_name: str | None) -> dict:
+        draft = self.r.get("draft")
+        run = {"run_id": runlog.new_run_id(), "protocol_id": protocol_id,
+               "protocol_name": protocol_name, "started_at": time.time()}
+        self.r = self._fresh_record(plan, 1, run)
+        if draft is not None:
+            self.r["draft"] = draft
+        self._save()
+        self._commit()
+        return run
+
+    def _finish_locked(self, status: str) -> dict | None:
+        """Archive the active run (draft excluded); the record goes empty."""
+        run = self.r.get("run")
+        if not run:
+            return None
+        doc = {"run_id": run.get("run_id"), "protocol_id": run.get("protocol_id"),
+               "protocol_name": run.get("protocol_name"),
+               "started_at": run.get("started_at"), "ended_at": time.time(),
+               "status": status, "summary": runlog.summarize_record(self.r),
+               "record": {k: v for k, v in self.r.items() if k != "draft"}}
+        runlog.write_run(doc, self.root)
+        draft = self.r.get("draft")
+        self.r = self._fresh_record({"conditions": {}, "steps": [], "backups": []})
+        if draft is not None:
+            self.r["draft"] = draft
+        self._save()
+        self._commit()
+        return doc
+
+    def save_draft_to_library(self):
+        """Draft -> resolved plan -> library. (ok, doc|reason). Run untouched."""
+        with self._lock:
+            draft = self.r.get("draft")
+            if not draft:
+                return False, "no draft open"
+            proto.recompute_draft(draft)
+            if draft["errors"]:
+                self._commit()
+                return False, {"errors": draft["errors"]}
+            plan = proto.build_start_plan(draft["plan"])
+            doc = lib.save(plan, proto.resolve_name(draft),
+                           (draft.get("meta") or {}).get("source") or "", self.root)
+            self.r.pop("draft", None)
+            self._commit()
+            return True, doc
+
+    def request_start_run(self, protocol_id: str, session: dict):
+        """Start now, or card when an active run must finish first."""
+        with self._lock:
+            return self._request_start_locked(protocol_id, session)
+
+    def _request_start_locked(self, protocol_id: str, session: dict):
+        doc = lib.get(protocol_id, self.root)
+        if doc is None:
+            return False, {"reason": f"unknown protocol: {protocol_id}"}
+        if not self.r.get("run"):
+            run = self._begin_locked(doc["plan"], doc["id"], doc.get("name"))
+            return True, {"run": run, "protocol_id": doc["id"],
+                          "conditions": len((doc["plan"] or {}).get("conditions") or {}),
+                          "steps": len((doc["plan"] or {}).get("steps") or [])}
+        res = {"messages": [], "cards": [], "ui": [],
+               "info": {"dropped": 0, "drop_reasons": []}}
+        card = self._card(res, "finish_first",
+                          say("finish_first", session, name=doc.get("name") or "it"),
+                          None, {"op": "start_run", "protocol_id": doc["id"]})
+        self._commit()
+        return False, {"card": card}
+
+    def request_end_run(self, session: dict):
+        """End run always asks first. (ok, card|reason)."""
+        with self._lock:
+            if not self.r.get("run"):
+                return False, {"reason": "no active run"}
+            res = {"messages": [], "cards": [], "ui": [],
+                   "info": {"dropped": 0, "drop_reasons": []}}
+            card = self._card(res, "end_run", say("end_run", session), None,
+                              {"op": "end_run",
+                               "run_id": (self.r.get("run") or {}).get("run_id")})
+            self._commit()
+            return False, {"card": card}
+
     def save_draft(self, draft: dict) -> None:
         with self._lock:
             self.r["draft"] = draft
@@ -218,8 +430,8 @@ class RecordStore:
             self.r.pop("draft", None)
             self._commit()
 
-    def start_run(self):
-        """Archive the current record, reset on the draft plan. (ok, info)."""
+    def start_run(self, session: dict):
+        """Draft -> library, then start (cards when a run is active)."""
         with self._lock:
             draft = self.r.get("draft")
             if not draft:
@@ -228,16 +440,19 @@ class RecordStore:
             if draft["errors"]:
                 self._commit()
                 return False, {"errors": draft["errors"]}
-            runs = self.path.parent / "runs"
-            runs.mkdir(exist_ok=True)
-            stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-            (runs / f"run-{stamp}.json").write_text(json.dumps(self.r, ensure_ascii=False))
             plan = proto.build_start_plan(draft["plan"])
-            self.r = self._fresh_record(plan)
-            self._save()
-            self._commit()
-            return True, {"conditions": len(plan["conditions"]), "steps": len(plan["steps"]),
-                          "review": len(draft["review"])}
+            doc = lib.save(plan, proto.resolve_name(draft),
+                           (draft.get("meta") or {}).get("source") or "", self.root)
+            review_n = len(draft["review"])
+            self.r.pop("draft", None)
+            ok, info = self._request_start_locked(doc["id"], session)
+            if ok:
+                info["review"] = review_n
+                info["protocol_name"] = doc.get("name")
+            else:
+                info["protocol_id"] = doc["id"]
+                info["protocol_name"] = doc.get("name")
+            return ok, info
 
     def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -275,10 +490,12 @@ class RecordStore:
             return wells_label(steps[self.r["step_index"]].get("wells", []))
         return None
 
-    def current_planned(self) -> set[str]:
-        steps = self.r["plan"]["steps"]
-        if steps and self.r["step_index"] < len(steps):
-            return set(steps[self.r["step_index"]].get("wells", []))
+    def current_planned(self, rec: dict | None = None) -> set[str]:
+        rec = self.r if rec is None else rec
+        steps = (rec.get("plan") or {}).get("steps", [])
+        idx = rec.get("step_index", 0)
+        if steps and idx < len(steps):
+            return set((steps[idx] or {}).get("wells", []))
         return set()
 
     def unplanned(self, wells) -> list[str]:
@@ -287,8 +504,8 @@ class RecordStore:
         planned = self.current_planned()
         return [w for w in wells if w not in planned]
 
-    def step_wells(self) -> list[str]:
-        return sort_wells(self.current_planned())
+    def step_wells(self, rec: dict | None = None) -> list[str]:
+        return sort_wells(self.current_planned(rec))
 
     def planned_wells(self) -> set[str]:
         """Every well named anywhere in the plan (all steps + all conditions)."""
@@ -383,6 +600,7 @@ class RecordStore:
         idx = self.r["step_index"]
         raw = self.r["plan"]["steps"]
         st = {
+            "has_run": bool(self.r.get("run")),
             "step": idx,
             "total": len(steps),
             "step_name": steps[idx] if idx < len(steps) else "",
@@ -396,6 +614,7 @@ class RecordStore:
             "remaining": self.remaining_wells(),
             "timers": [{"label": t["label"], "minutes": t["minutes"]} for t in self.r["timers"]],
             "recent": self.r["recent"][-5:],
+            "draft_open": bool(self.r.get("draft")),
         }
         last_asked = (session.get("turns") or [{}])[-1].get("asked") or {}
         if last_asked.get("question"):
@@ -433,6 +652,7 @@ class RecordStore:
             left = int((t["started_at"] + t["minutes"] * 60 - now) // 60)
             timers.append(f"{t['label']} ({left}m left)" if left > 0 else f"{t['label']} (done)")
         st = {
+            "run": (self.r.get("run") or {}).get("protocol_name") or "none",
             "step": f"{idx + 1}/{len(steps)} {name}",
             "plan_times": pt,
             "conditions": "; ".join(conds),
@@ -510,6 +730,10 @@ class RecordStore:
             subject = p.get("label")
         elif op == "next_step":
             subject = p.get("target")
+        elif op == "start_run":
+            subject = p.get("protocol_id")
+        elif op == "end_run":
+            subject = p.get("run_id")
         else:
             subject = None
         return (op, subject if subject != [] else None)
@@ -557,6 +781,10 @@ class RecordStore:
             self._broadcast({"kind": "ui", **a})
         return res
 
+    RUN_WRITES = frozenset({"mark_done", "exclude_well", "record_redo", "add_note",
+                                "edit_note", "save_tip", "set_timer", "manage_timers",
+                                "next_step", "make_robot", "end_run"})
+
     def _apply_call(self, call, source, origin, route, session, res, force: bool,
                     evidence=None):
         name = call.get("name")
@@ -564,6 +792,14 @@ class RecordStore:
         now = time.time()
         if evidence is None:
             evidence = build_evidence(origin, "", frozenset(), "")
+        if not force and name in self.RUN_WRITES:
+            viewing = self._viewing_run(session)
+            if viewing is not None and (viewing.get("run_id") != (self.r.get("run") or {}).get("run_id")):
+                res["messages"].append("That run is finished — read only.")
+                return
+            if not self.r.get("run"):
+                res["messages"].append("No active run — open a protocol from Home to start.")
+                return
         if name == "mark_done":
             wells = [w for w in (args.get("wells") or []) if isinstance(w, str)]
             bad = [w for w in wells if not is_well(w)]
@@ -785,6 +1021,13 @@ class RecordStore:
                 self._drop_step_cards_locked()
                 res["messages"].append(f"Next: {steps[self.r['step_index']]}")
                 self._suggest_entry_timer(res, session)
+        elif name == "end_run":
+            if not self.r.get("run"):
+                res["messages"].append("No active run.")
+            else:
+                self._card(res, "end_run", say("end_run", session), None,
+                           {"op": "end_run",
+                            "run_id": (self.r.get("run") or {}).get("run_id")})
         elif name == "show":
             view = args.get("view", "?")
             res["messages"].append(f"Viewing: {view} {args.get('target')}" if args.get("target") else f"Viewing: {view}")
@@ -797,23 +1040,46 @@ class RecordStore:
                     if not isinstance(raw, str) or not raw.strip()
                     else f"I couldn't open the {raw.strip()} screen: no such screen.")
                 return
-            res["ui"].append({"action": "navigate", "screen": screen})
-            res["messages"].append(f"Showing {title_of(screen)}.")
+            self._navigate_locked(res, session, screen, args.get("target"))
         elif name == "open":
             raw = args.get("target")
             t = raw.strip() if isinstance(raw, str) else ""
-            if t and is_well(t):
+            if not t:
+                res["messages"].append("I couldn't open that: no target given.")
+                return
+            low = t.lower()
+            if low.startswith("protocol:"):
+                self._open_protocol(res, session, t[9:])
+                return
+            if low.startswith("run:"):
+                self._open_run(res, session, t[4:])
+                return
+            if low.startswith("run ") or low in ("run", "runs"):
+                self._open_run(res, session, t[3:].strip() if low.startswith("run ") else "latest")
+                return
+            if runlog.resolve(t, self.all_run_docs()) is not None:
+                self._open_run(res, session, t)
+                return
+            if "original" in low or low.startswith("source"):
+                self._open_source(res, session, t)
+                return
+            if low == "importer":
+                res["ui"].append({"action": "import"})
+                res["messages"].append("Opening the importer.")
+                return
+            if is_well(t):
                 res["ui"].append({"action": "open", "target": t.upper(), "sheet": "well_card"})
                 res["messages"].append(f"Opened {t.upper()}.")
                 return
             screen = canonical(t)
             if screen is not None:
-                res["ui"].append({"action": "navigate", "screen": screen})
-                res["messages"].append(f"Showing {title_of(screen)}.")
+                self._navigate_locked(res, session, screen, None)
                 return
-            res["messages"].append(
-                "I couldn't open that: no target given." if not t
-                else f"I couldn't open {t}: not a plate well or screen.")
+            proto_doc = lib.find_by_name(t, self.root)
+            if proto_doc is not None:
+                self._navigate_locked(res, session, "protocol_detail", proto_doc["id"])
+                return
+            res["messages"].append(f"I couldn't open {t}: not a plate well or screen.")
         elif name == "back":
             here = session.get("screen", "main")
             if here not in SCREENS:
@@ -822,8 +1088,14 @@ class RecordStore:
             if parent == here:
                 res["messages"].append("Already on the main screen.")
                 return
+            if parent != "run_view":
+                session["run_id"] = None
             res["ui"].append({"action": "back", "screen": parent})
             res["messages"].append(f"Back to {title_of(parent)}.")
+        elif name == "end_run":
+            self._card(res, "end_run", say("end_run", session), None,
+                       {"op": "end_run",
+                        "run_id": (self.r.get("run") or {}).get("run_id")})
         elif name == "make_robot":
             res["messages"].append("Building robot protocol…")
             res["info"]["robot"] = True
@@ -1005,6 +1277,22 @@ class RecordStore:
             self._extend(res, p.get("label"), p.get("minutes"), source, time.time())
         elif op == "next_step":
             self._apply_call({"name": "next_step", "args": {}}, source, origin, "card", session, res, force=True)
+        elif op == "start_run":
+            doc = lib.get(p.get("protocol_id"), self.root)
+            if doc is None:
+                res["messages"].append("That protocol is gone.")
+            else:
+                if self.r.get("run"):
+                    self._finish_locked("finished")
+                self._begin_locked(doc["plan"], doc["id"], doc.get("name"))
+                res["messages"].append(f"Run started: {doc.get('name')}.")
+        elif op == "end_run":
+            if not self.r.get("run"):
+                res["messages"].append("No active run.")
+            else:
+                name = (self.r.get("run") or {}).get("protocol_name") or "run"
+                self._finish_locked("finished")
+                res["messages"].append(f"Run finished: {name}.")
         else:
             res["messages"].append("That card is gone.")
         self._commit()
@@ -1012,95 +1300,127 @@ class RecordStore:
 
     # --- memos / recent / timers ---
 
-    READ_KINDS = ("wells", "notes", "timers", "steps", "history")
+    READ_KINDS = ("wells", "notes", "timers", "steps", "history", "source")
 
-    def filter_wells(self, filt: str) -> list[str]:
+    def filter_wells(self, filt: str, rec: dict | None = None) -> list[str]:
         """Well range, condition key/label, 'all', or blank (= current step)."""
+        rec = self.r if rec is None else rec
         f = (filt or "").strip()
         if not f:
-            return self.step_wells()
+            return self.step_wells(rec)
         if f.lower() == "all":
             return ALL_WELLS
-        for gname, g in self.r["plan"]["conditions"].items():
-            if f.lower() in (gname.lower(), (g.get("label") or "").lower()):
-                return sort_wells(g.get("wells", []))
+        for gname, g in (rec.get("plan") or {}).get("conditions", {}).items():
+            if f.lower() in (gname.lower(), ((g or {}).get("label") or "").lower()):
+                return sort_wells((g or {}).get("wells", []))
         return parse_wellref(f)
 
-    def read_record(self, kind: str, filt="", limit=10) -> dict:
-        """One free read over the record. Lenient: bad filters yield []."""
+    def _read_scope(self, run, session: dict | None):
+        """(record, run_id|None, error|None) for run selectors + session."""
+        sel = run if isinstance(run, str) and run.strip() else (session or {}).get("run_id")
+        if not sel:
+            return self.r, (self.r.get("run") or {}).get("run_id"), None
+        doc = runlog.resolve(sel.strip(), self.all_run_docs())
+        if doc is None:
+            return None, None, "I couldn't find that run."
+        rec = doc.get("record") or {}
+        return rec, doc.get("run_id"), None
+
+    def read_record(self, kind: str, filt="", limit=10, run=None, session=None) -> dict:
+        """One free read over the active or a selected run's record."""
         n = _num(limit)
         n = 10 if n is None else max(1, min(50, int(n)))
         f = filt.strip() if isinstance(filt, str) else ""
+        if kind not in self.READ_KINDS:
+            return {"error": f"unknown kind: {kind}. Use {', '.join(self.READ_KINDS)}."}
+        rec, rid, err = self._read_scope(run, session)
+        if err:
+            return {"error": err}
+        rec = rec or {}
         if kind == "wells":
-            return {"wells": [self.get_well_data(w) for w in self.filter_wells(f)][:n]}
+            return {"run": rid,
+                    "wells": [self.get_well_data(w, rec) for w in self.filter_wells(f, rec)][:n]}
         if kind == "notes":
-            ws = None if not f or f.lower() == "all" else set(self.filter_wells(f))
+            ws = None if not f or f.lower() == "all" else set(self.filter_wells(f, rec))
             out = [{"target": m["target"], "text": m["text"]}
-                   for m in self.r["notes"] if ws is None or m["target"] in ws]
-            return {"notes": out[-n:]}
+                   for m in rec.get("notes", []) if ws is None or m["target"] in ws]
+            return {"run": rid, "notes": out[-n:]}
         if kind == "timers":
             now = time.time()
             out = []
-            for t in self.r["timers"]:
+            for t in rec.get("timers", []):
                 if f and f.lower() not in t["label"].lower():
                     continue
                 left = round(t["minutes"] * 60 - (now - t["started_at"]), 1)
                 out.append({"label": t["label"], "wells": t["wells"],
                             "minutes_left": max(0.0, left),
                             "status": "done" if is_over(t, now) else "active"})
-            return {"timers": out[:n]}
+            return {"run": rid, "timers": out[:n]}
         if kind == "steps":
-            raw = self.r["plan"]["steps"]
-            idx = self.r["step_index"]
+            raw = (rec.get("plan") or {}).get("steps", [])
+            idx = rec.get("step_index", 0)
             out = [{"i": i + 1, "name": s.get("text") or s.get("name", ""),
                     "kind": s.get("kind", ""), "current": i == idx}
                    for i, s in enumerate(raw)]
             if not f or f.lower() == "all":
-                return {"steps": out[:n]}
+                return {"run": rid, "steps": out[:n]}
             if f.lower() == "current":
-                return {"steps": [o for o in out if o["current"]]}
+                return {"run": rid, "steps": [o for o in out if o["current"]]}
             if f.isdigit() and 1 <= int(f) <= len(out):
-                return {"steps": [out[int(f) - 1]]}
-            return {"steps": [o for o in out if f.lower() in o["name"].lower()][:n]}
+                return {"run": rid, "steps": [out[int(f) - 1]]}
+            return {"run": rid,
+                    "steps": [o for o in out if f.lower() in o["name"].lower()][:n]}
         if kind == "history":
             now = time.time()
             out = [{"route": e["route"], "action": e["action"], "wells": e["wells"],
-                    "ago": f"{int((now - e['ts']) // 60)}m"} for e in self.r["recent"]]
-            return {"history": out[-n:]}
+                    "ago": f"{int((now - e['ts']) // 60)}m"} for e in rec.get("recent", [])]
+            return {"run": rid, "history": out[-n:]}
+        if kind == "source":
+            raw = (rec.get("plan") or {}).get("steps", [])
+            idx = rec.get("step_index", 0)
+            pick = None
+            if not f or f.lower() == "current":
+                pick = idx if 0 <= idx < len(raw) else None
+            elif f.isdigit() and 1 <= int(f) <= len(raw):
+                pick = int(f) - 1
+            else:
+                pick = next((i for i, s in enumerate(raw)
+                             if f.lower() in (s.get("text") or "").lower()), None)
+            if pick is None:
+                return {"error": "I couldn't find that step."}
+            s = raw[pick] or {}
+            return {"run": rid, "step": pick + 1, "text": s.get("text") or "",
+                    "quote": s.get("quote") or "", "quote_page": s.get("quote_page"),
+                    "caution": s.get("caution")}
         return {"error": f"unknown kind: {kind}. Use {', '.join(self.READ_KINDS)}."}
 
     def describe_well(self, well: str) -> str:
         """One factual sentence from the record: status plus memos."""
-        d = self.get_well_data(well)
-        status = {"redo": "marked for redo"}.get(d["status"], d["status"])
-        s = f"{d['well']} is {status}"
-        extra = d["reason"] or d["redo_note"]
-        if extra:
-            s += f" ({extra})"
-        if d["memos"]:
-            s += ". Memos: " + "; ".join(d["memos"])
-        return s + "."
+        return describe_well_row(self.get_well_data(well))
 
-    def get_well_data(self, well: str) -> dict:
+    def get_well_data(self, well: str, rec: dict | None = None) -> dict:
+        rec = self.r if rec is None else rec
         up = well.upper() if isinstance(well, str) else ""
-        if up in self.r["excluded"]:
+        if up in (rec.get("excluded") or {}):
             status = "excluded"
-        elif up in self.r["redo"]:
+        elif up in (rec.get("redo") or {}):
             status = "redo"
-        elif up in self.r["done"]:
+        elif up in (rec.get("done") or []):
             status = "done"
-        elif any(up in g.get("wells", []) for g in self.r["plan"]["conditions"].values()):
+        elif any(up in (g or {}).get("wells", [])
+                 for g in (rec.get("plan") or {}).get("conditions", {}).values()):
             status = "planned"
         else:
             status = "empty"
-        group = next((n for n, g in self.r["plan"]["conditions"].items() if up in g.get("wells", [])), "")
+        group = next((n for n, g in (rec.get("plan") or {}).get("conditions", {}).items()
+                      if up in (g or {}).get("wells", [])), "")
         return {
             "well": up,
             "status": status,
             "group": group,
-            "memos": [m["text"] for m in self.r["notes"] if m["target"] == up],
-            "reason": self.r["excluded"].get(up, ""),
-            "redo_note": self.r["redo"].get(up, ""),
+            "memos": [m["text"] for m in rec.get("notes", []) if m["target"] == up],
+            "reason": (rec.get("excluded") or {}).get(up, ""),
+            "redo_note": (rec.get("redo") or {}).get(up, ""),
         }
 
     def edit_note_manual(self, note_id: str, text: str):

@@ -51,8 +51,10 @@ from server.grammar import (
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
 from server.screens import canonical as canonical_screen
+from server import library as lib
 from server import protocol as proto
-from server.store import RecordStore
+from server import runs as runlog
+from server.store import RecordStore, describe_well_row
 from server.tone import keys as tone_keys
 from server.tone import say
 
@@ -245,13 +247,17 @@ TOOLS = [
     _tool(
         "read_record",
         "Use when you need record facts to answer or decide. "
+        "kind source reads a step's original quote and page (filter blank "
+        "for the current step, or a step number). "
         "Don't use when the state you have already answers it. "
         "Example: 'what is on C6'.",
         {
-            "kind": {"type": "string", "enum": ["wells", "notes", "timers", "steps", "history"]},
+            "kind": {"type": "string", "enum": ["wells", "notes", "timers", "steps", "history", "source"]},
             "filter": _opt({"type": "string",
                             "description": "WellRef, condition, step, or label; blank for natural scope"}),
             "limit": _opt({"type": "integer", "description": "Max entries (default 10)"}),
+            "run": _opt({"type": "string",
+                         "description": "Run id, latest, today, yesterday, or date; blank for current scope"}),
         },
     ),
     _tool(
@@ -277,22 +283,38 @@ TOOLS = [
     _tool(
         "navigate",
         "Use when the user asks to go somewhere (go to). "
+        "Screens: home (protocol library, Import, past runs), "
+        "setup (first-run checklist), "
+        "protocol_detail (one protocol, Start new run), "
+        "run_view (a past run; needs target), "
+        "protocol_source (the original PDF; needs target), "
+        "protocol_review (the open draft), main (the bench), "
+        "well_card, robot_preview. "
         "Don't use to confirm a write — the screen updates itself. "
         "Example: 'go to the robot preview'.",
         {"screen": {"type": "string", "enum": SCREEN_IDS,
-                    "description": "Screen id from the registry"}},
+                    "description": "Screen id from the registry"},
+         "target": _opt({"type": "string",
+                         "description": "run_id, protocol id, or #fragment for the screen"})},
     ),
     _tool(
         "open",
         "Use when the user asks to view something (open, show, let me see). "
+        "Targets: WellRef, a screen name, 'the original' (protocol source "
+        "for the current step), yesterday's / latest run, "
+        "the importer (file picker). "
         "Don't use after a write — the screen shows it. "
         "Example: 'open C8'.",
-        {"target": {"type": "string", "description": "WellRef or screen name"}},
+        {"target": {"type": "string", "description": "WellRef, screen name, source fragment, or run selector"}},
     ),
     _tool("back",
           "Use when the user says back. "
           "Don't use after other actions in the same turn. "
           "Example: 'back'.", {}),
+    _tool("end_run",
+          "Use when the user says the run is over (end the run, finish). "
+          "Don't use to pause mid-run. "
+          "Example: 'end the run'.", {}),
     _tool(
         "edit_draft",
         "Use to change the open run-plan draft, only when draft_open is true. "
@@ -396,6 +418,7 @@ class OrchestrateIn(BaseModel):
     screen: str = "main"
     selected_well: str = ""
     open_sheet: str = ""
+    run_id: str | None = None
 
 
 class ConfirmIn(BaseModel):
@@ -412,6 +435,7 @@ class InputIn(BaseModel):
     screen: str = "main"
     selected_well: str = ""
     open_sheet: str = ""
+    run_id: str | None = None
 
 
 class EditNoteIn(BaseModel):
@@ -426,6 +450,11 @@ class DraftPatchIn(BaseModel):
 
 
 class DraftStartIn(BaseModel):
+    session: str = "bench"
+
+
+class RunStartIn(BaseModel):
+    protocol_id: str = Field(min_length=1)
     session: str = "bench"
 
 
@@ -712,7 +741,7 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         print(f"spark empty: no calls, no text for {text[:60]!r}", flush=True)
         return _didnt_act(text, ms, session, sources)
     res = store.apply_calls(calls, source, text, "spark", session)
-    _apply_outcomes(calls, res, outcomes)
+    _apply_outcomes(calls, res, outcomes, session)
     read_lines = _render_r1_reads(calls, outcomes)
     _store_outputs(session, ordered_ids, outcomes)
     fire_lookup = (
@@ -753,10 +782,14 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
                     res["messages"].append(_short_text(t2))
                 else:
                     for c in calls:
-                        if c.get("name") == "read_record" and (c.get("args") or {}).get("kind") == "wells":
-                            filt = (c.get("args") or {}).get("filter") or ""
-                            for w in store.filter_wells(filt if isinstance(filt, str) else "")[:4]:
-                                res["messages"].append(store.describe_well(w))
+                        a = c.get("args") or {}
+                        if c.get("name") != "read_record" or a.get("kind") != "wells":
+                            continue
+                        if (a.get("run") or "") or (session.get("run_id") or ""):
+                            continue  # scoped reads answer from their own data, never the live record
+                        filt = a.get("filter") or ""
+                        for w in store.filter_wells(filt if isinstance(filt, str) else "")[:4]:
+                            res["messages"].append(store.describe_well(w))
     calls = _strip_ids(calls)
     asked: dict = {}
     if question is not None:
@@ -804,7 +837,7 @@ async def _lookup_round(client, key, text, session, source, plan_numbers, reads_
                   "info": {"dropped": 0, "drop_reasons": []}}
     if rc:
         res2 = store.apply_calls(rc, source, text, "spark", session, reads_text)
-        _apply_outcomes(rc, res2, outcomes2)
+        _apply_outcomes(rc, res2, outcomes2, session)
     return ms, (rc, res2, question2, ordered2, outcomes2, gdrop2, t2)
 
 
@@ -900,7 +933,7 @@ def _partition_answer(calls, has_question, blind=False):
     return calls, []
 
 
-def _apply_outcomes(calls, res, outcomes):
+def _apply_outcomes(calls, res, outcomes, session=None):
     for i, c in enumerate(calls):
         cid = c.get("call_id")
         if not cid or cid in outcomes:
@@ -909,7 +942,8 @@ def _apply_outcomes(calls, res, outcomes):
             a = c.get("args") or {}
             if a.get("kind") in store.READ_KINDS:
                 outcomes[cid] = json.dumps(
-                    store.read_record(a["kind"], a.get("filter", ""), a.get("limit", 10)),
+                    store.read_record(a["kind"], a.get("filter", ""), a.get("limit", 10),
+                                      run=a.get("run", ""), session=session),
                     ensure_ascii=False)
                 continue
         if c.get("name") == "find_free_wells":
@@ -996,7 +1030,7 @@ def _render_record(kind: str, data: dict) -> list[str]:
     if not isinstance(data, dict):
         return []
     if kind == "wells":
-        return [store.describe_well(w.get("well", "")).rstrip(".")
+        return [describe_well_row(w).rstrip(".")
                 for w in (data.get("wells") or [])[:3] if w.get("well")]
     if kind == "notes":
         return [f"{m.get('target', '?')}: {(m.get('text') or '')[:120]}"
@@ -1011,6 +1045,11 @@ def _render_record(kind: str, data: dict) -> list[str]:
     if kind == "history":
         return [f"{e.get('action')} {','.join(e.get('wells') or [])} {e.get('ago')} ago"
                 for e in (data.get("history") or [])[:3]]
+    if kind == "source":
+        q = (data.get("quote") or "")[:140]
+        if not q:
+            return []
+        return [f"Step {data.get('step')}: {q} (page {data.get('quote_page')})"]
     return []
 
 
@@ -1114,11 +1153,19 @@ def _utterance_response(calls, messages, reply, ms, route, cards, info, sources,
     return out
 
 
-def set_screen(session: dict, screen: str, selected_well: str = "", open_sheet: str = ""):
-    """App-reported screen, validated against the registry. Unknown -> main."""
+def set_screen(session: dict, screen: str, selected_well: str = "", open_sheet: str = "",
+               run_id: str | None = None):
+    """App-reported screen, validated against the registry. Unknown -> main.
+
+    run_id echoes the run in view: None leaves the session scope alone
+    (voice navigation stays sticky), "" returns to the live record.
+    Stale ids heal to None on use.
+    """
     session["screen"] = canonical_screen(screen) or "main"
     session["selected_well"] = selected_well or ""
     session["open_sheet"] = open_sheet or ""
+    if run_id is not None:
+        session["run_id"] = run_id or None
 
 
 async def _handle_text(text: str, session: dict, source: str):
@@ -1148,7 +1195,7 @@ def _resolve_card(card_id: str, answer: str, session: dict):
 @app.post("/input")
 async def input_entry(body: InputIn):
     session = get_session(body.session)
-    set_screen(session, body.screen, body.selected_well, body.open_sheet)
+    set_screen(session, body.screen, body.selected_well, body.open_sheet, body.run_id)
     if body.card_id:
         message, new_cards = _resolve_card(body.card_id, body.answer or "yes", session)
         log_turn(session, f"card:{body.card_id} {body.answer or 'yes'}", [], [message])
@@ -1163,14 +1210,14 @@ async def input_entry(body: InputIn):
 async def orchestrate(body: OrchestrateIn):
     """Alias: forwards into /input's text path (same shapes)."""
     session = get_session(body.session)
-    set_screen(session, body.screen, body.selected_well, body.open_sheet)
+    set_screen(session, body.screen, body.selected_well, body.open_sheet, body.run_id)
     return await _handle_text(body.text, session, "spark")
 
 
 @app.post("/voice")
 async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session: str = Form("bench"),
                 screen: str = Form("main"), selected_well: str = Form(""),
-                open_sheet: str = Form("")):
+                open_sheet: str = Form(""), run_id: str | None = Form(None)):
     try:
         state_obj = json.loads(state)
     except json.JSONDecodeError:
@@ -1197,7 +1244,7 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session:
     }
     total0 = time.perf_counter()
     sess = get_session(session)
-    set_screen(sess, screen, selected_well, open_sheet)
+    set_screen(sess, screen, selected_well, open_sheet, run_id)
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         t0 = time.perf_counter()
         resp = await _post(
@@ -1310,11 +1357,12 @@ async def protocol_import(file: UploadFile = File(...), session: str = Form("ben
     kind = "pdf" if name.endswith(".pdf") else "txt" if name.endswith(".txt") else None
     if kind is None:
         raise HTTPException(400, "need a .pdf or .txt file")
+    pages = None
     if kind == "pdf":
         try:
             from pypdf import PdfReader
-            text = "\n".join((pg.extract_text() or "")
-                             for pg in PdfReader(BytesIO(raw)).pages)
+            pages = [(pg.extract_text() or "") for pg in PdfReader(BytesIO(raw)).pages]
+            text = "\n".join(pages)
         except Exception:
             text = ""
         payload = "data:application/pdf;base64," + base64.b64encode(raw).decode("ascii")
@@ -1340,7 +1388,8 @@ async def protocol_import(file: UploadFile = File(...), session: str = Form("ben
     ok, data = proto.parse_extract_payload(resp.json())
     if not ok:
         raise HTTPException(502, f"protocol extraction failed: {data}")
-    draft = proto.build_draft(data, proto.evidence_from_text(text), file.filename or "protocol")
+    draft = proto.build_draft(data, proto.evidence_from_text(text, pages),
+                               file.filename or "protocol")
     store.save_draft(draft)
     conds = len(draft["plan"]["conditions"])
     steps = len(draft["plan"]["steps"])
@@ -1379,9 +1428,9 @@ async def draft_patch(body: DraftPatchIn):
 
 @app.post("/protocols/start")
 async def protocol_start(body: DraftStartIn):
-    """Archive the current run, reset on the draft plan. Errors block."""
+    """Draft -> library, then start. Cards when a run is active. Errors block."""
     session = get_session(body.session)
-    ok, info = store.start_run()
+    ok, info = store.start_run(session)
     if not ok:
         if "errors" in info:
             n = len(info["errors"])
@@ -1389,13 +1438,106 @@ async def protocol_start(body: DraftStartIn):
             log_turn(session, "start run", [], [reply])
             return {"started": False, "errors": info["errors"], "reply": reply,
                     "record_version": store.r["version"]}
-        raise HTTPException(400, info["reason"])
-    reply = f"Run started: {info['conditions']} conditions, {info['steps']} steps."
+        if "reason" in info:
+            raise HTTPException(400, info["reason"])
+        card = info["card"]
+        log_turn(session, "start run", [], [card["question"]])
+        return {"started": False, "card": card, "reply": card["question"],
+                "protocol_id": info.get("protocol_id"),
+                "protocol_name": info.get("protocol_name"),
+                "speak": speak_text(card["question"]),
+                "record_version": store.r["version"]}
+    reply = (f"Run started: {info['protocol_name']} — {info['conditions']} conditions, "
+             f"{info['steps']} steps.")
     if info["review"]:
         reply += f" {info['review']} unreviewed."
     log_turn(session, "start run", [], [reply])
-    return {"started": True, "reply": reply, "speak": speak_text(reply),
+    return {"started": True, "run_id": (info["run"] or {}).get("run_id"),
+            "protocol_id": info.get("protocol_id"),
+            "protocol_name": info.get("protocol_name"), "reply": reply,
+            "speak": speak_text(reply), "record_version": store.r["version"]}
+
+
+@app.post("/protocols/save")
+async def protocol_save(body: DraftStartIn):
+    """Draft -> library only. The active run is untouched."""
+    session = get_session(body.session)
+    ok, info = store.save_draft_to_library()
+    if not ok:
+        if isinstance(info, dict) and "errors" in info:
+            n = len(info["errors"])
+            reply = f"Fix {n} red item{'s' if n != 1 else ''} first."
+            log_turn(session, "save protocol", [], [reply])
+            return {"saved": False, "errors": info["errors"], "reply": reply,
+                    "record_version": store.r["version"]}
+        raise HTTPException(400, info if isinstance(info, str) else "cannot save")
+    reply = f"Saved {info.get('name')} to the library."
+    log_turn(session, "save protocol", [], [reply])
+    return {"saved": True, "protocol": lib.summarize(info), "reply": reply,
+            "speak": speak_text(reply), "record_version": store.r["version"]}
+
+
+@app.get("/protocols")
+async def protocols_list():
+    return {"protocols": lib.list_all(store.root)}
+
+
+@app.get("/protocols/{protocol_id}")
+async def protocol_get(protocol_id: str):
+    doc = lib.get(protocol_id, store.root)
+    if doc is None:
+        raise HTTPException(404, "unknown protocol")
+    return {"protocol": doc}
+
+
+@app.post("/runs/start")
+async def runs_start(body: RunStartIn):
+    """Start now, or card when an active run must finish first."""
+    session = get_session(body.session)
+    ok, info = store.request_start_run(body.protocol_id, session)
+    if not ok and "reason" in info:
+        raise HTTPException(404, info["reason"])
+    if not ok:
+        card = info["card"]
+        log_turn(session, f"start {body.protocol_id}", [], [card["question"]])
+        return {"started": False, "card": card, "reply": card["question"],
+                "speak": speak_text(card["question"]),
+                "record_version": store.r["version"]}
+    reply = f"Run started: {info['conditions']} conditions, {info['steps']} steps."
+    log_turn(session, f"start {body.protocol_id}", [], [reply])
+    return {"started": True, "run_id": (info["run"] or {}).get("run_id"),
+            "protocol_id": info["protocol_id"], "reply": reply,
+            "speak": speak_text(reply), "record_version": store.r["version"]}
+
+
+@app.post("/runs/end")
+async def runs_end(body: DraftStartIn):
+    """End run always asks first; the card does the finishing."""
+    session = get_session(body.session)
+    ok, info = store.request_end_run(session)
+    if not ok and "reason" in info:
+        raise HTTPException(400, info["reason"])
+    card = info["card"]
+    log_turn(session, "end run", [], [card["question"]])
+    return {"ended": False, "card": card, "reply": card["question"],
+            "speak": speak_text(card["question"]),
             "record_version": store.r["version"]}
+
+
+@app.get("/runs")
+async def runs_list(protocol_id: str = ""):
+    docs = store.all_run_docs()
+    if protocol_id:
+        docs = [d for d in docs if d.get("protocol_id") == protocol_id]
+    return {"runs": [runlog.summarize(d) for d in docs]}
+
+
+@app.get("/runs/{run_id}")
+async def run_get(run_id: str):
+    doc = runlog.resolve(run_id, store.all_run_docs())
+    if doc is None:
+        raise HTTPException(404, "unknown run")
+    return {"run": doc}
 
 
 @app.delete("/protocols/draft")

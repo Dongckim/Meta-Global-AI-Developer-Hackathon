@@ -41,6 +41,7 @@ VOLUME_UNITS = {"ul", "ml"}
 EXTRACT_PROMPT = (
     "Extract the bench run plan from this protocol document. "
     "Output ONLY what the document states. "
+    "title: the document title (first heading), verbatim, or empty. "
     "liquids: reagents as {id, name, concentration, prep, quote} with short "
     "lowercase ids; quote is the verbatim sentence each liquid comes from. "
     "conditions: experimental conditions as {id, label, treatments, "
@@ -154,9 +155,23 @@ def normalize_group(name) -> str:
     return re.sub(r"[^a-z0-9]+", "_", (name or "").strip().lower()).strip("_")
 
 
-def evidence_from_text(full: str) -> dict:
-    """Capped text for the record plus complete amounts for grounding."""
-    return {"text": (full or "")[:EVIDENCE_CHARS], "amounts": sorted(find_amounts(full or ""))}
+def evidence_from_text(full: str, pages: list | None = None) -> dict:
+    """Capped text for the record plus complete amounts for grounding.
+
+    pages (per-page texts, PDF order) ride along capped to the same budget
+    so quote_page assignment never stores bytes the record doesn't hold.
+    """
+    ev = {"text": (full or "")[:EVIDENCE_CHARS], "amounts": sorted(find_amounts(full or ""))}
+    if pages:
+        kept, budget = [], EVIDENCE_CHARS
+        for pg in pages:
+            if budget <= 0:
+                break
+            chunk = (pg or "")[:budget]
+            kept.append(chunk)
+            budget -= len(chunk)
+        ev["pages"] = kept
+    return ev
 
 
 _QUOTE_DASHES = "‐‑‒–—―−"
@@ -198,8 +213,8 @@ def _quote_in_doc(quote: str, doc: str) -> bool:
 
 
 def _num_found(tok: str, nq: str):
-    """The token as a standalone number (5 never matches 15 or 30.5)."""
-    return re.search(rf"(?<!\d){re.escape(tok)}(?![\d.])", nq)
+    """The token as a standalone number (5 never matches 15, 30.5, or B5)."""
+    return re.search(rf"(?<![a-z0-9]){re.escape(tok)}(?![\d.])", nq)
 
 
 def _number_in_quote(value, nq: str, unit: str | None = None) -> bool:
@@ -209,7 +224,7 @@ def _number_in_quote(value, nq: str, unit: str | None = None) -> bool:
     if unit == "min":
         return _MIN_WORD.search(nq) is not None
     if unit == "temp":
-        m = re.search(rf"(?<!\d){re.escape(_num_token(value))}\s*([a-z]*)", nq)
+        m = re.search(rf"(?<![a-z0-9]){re.escape(_num_token(value))}\s*([a-z]*)", nq)
         return bool(m) and (not m.group(1) or _TEMP_WORD.search(m.group(1)) is not None)
     return True
 
@@ -244,6 +259,322 @@ def _wells_in_quote(entry: str, nq: str) -> bool:
         return True
     wells = parse_wellref(entry)
     return bool(wells) and wells[0].lower() in nq and wells[-1].lower() in nq
+
+
+# --- Quote repair: model quotes are hints, code re-grounds in the doc ---
+
+_MAX_ROW_GAP = 2  # table row block: label line plus following cells
+_MAX_SENT_GAP = 1  # same or adjacent line (covers mid-sentence breaks)
+_MAX_SPAN_CHARS = 400  # degenerate giant lines never ground by proximity
+_LONG_LINE = 400
+
+_ANCHOR_DROP = {"an", "the", "ul", "ml", "l", "um", "mm", "nm", "min", "mins", "c"}
+
+_KIND_WORDS = {
+    "pipette": ("pipette", "pipet", "add", "dispense", "transfer"),
+    "incubate": ("incubate", "incubation", "incubated"),
+    "wait": ("wait",),
+    "wash": ("wash", "washed", "rinse"),
+    "aspirate": ("aspirate", "remove"),
+    "mix": ("mix", "mixed"),
+    "centrifuge": ("centrifuge", "spin"),
+    "read": ("read", "measure"),
+    "prep": ("prep", "prepare"),
+    "other": (),
+}
+
+_COUNT_UNIT_AFTER = re.compile(r"\s*(ul|ml|microliter|millilitre|min|ute|um\b|g\b|mg|c\b)")
+
+
+def _anchor_words(name: str) -> list[str]:
+    """Anchor tokens: keep single letters (Drug A vs B), drop units/numbers."""
+    return [w for w in re.findall(r"[a-z0-9]+", norm_quote(name))
+            if w not in _ANCHOR_DROP and not w.isdigit()]
+
+
+def _word_in(word: str, span: str) -> bool:
+    return re.search(rf"\b{re.escape(word)}\b", span) is not None
+
+
+def _phrase_in(phrase: str, span: str) -> bool:
+    p = norm_quote(phrase)
+    return bool(p) and re.search(rf"\b{re.escape(p)}\b", span) is not None
+
+
+def _well_in_span(well: str, span: str) -> bool:
+    return re.search(rf"(?<![a-z0-9]){re.escape(well.lower())}(?![0-9])", span) is not None
+
+
+def _count_in_span(n: int, span: str) -> bool:
+    """Standalone count not followed by a unit (10 uL is a volume, not n)."""
+    m = _num_found(str(n), span)
+    if not m:
+        return False
+    return _COUNT_UNIT_AFTER.match(span[m.end():m.end() + 8]) is None
+
+
+def _doc_lines(text: str) -> list[tuple[str, str]]:
+    """(raw, normalized) non-blank lines; giant lines split into sentences."""
+    out = []
+    for raw in (text or "").split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        if len(line) > _LONG_LINE:
+            parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", line) if p.strip()]
+            out += [(p, norm_quote(p)) for p in parts] or [(line, norm_quote(line))]
+        else:
+            out.append((line, norm_quote(line)))
+    return out
+
+
+def _doc_sentences(text: str) -> list[tuple[str, str]]:
+    """(raw, normalized) sentences; a newline before lowercase rejoins wraps."""
+    out = []
+    for chunk in re.split(r"(?<=[.!?])\s+", text or ""):
+        buf = ""
+        for raw in chunk.split("\n"):
+            line = raw.strip()
+            if not line:
+                continue
+            if buf and line[:1].islower():
+                buf += " " + line
+            else:
+                if buf:
+                    out.append(buf)
+                buf = line
+        if buf:
+            out.append(buf)
+    return [(s, norm_quote(s)) for s in out if s.strip()]
+
+
+def _find_span(nlines: list[str], anchor_words, value_match, max_gap, start_match=None):
+    """Best span where anchor + value co-occur: coverage, shortest, earliest.
+
+    start_match constrains the span start (table rows run label-first, so a
+    previous row's count plus the next row's label never forms a span).
+    """
+    best = None
+    n = len(nlines)
+    for i in range(n):
+        if start_match is not None and not start_match(nlines[i]):
+            continue
+        for j in range(i, min(n, i + max_gap + 1)):
+            span = " ".join(nlines[i:j + 1])
+            if len(span) > _MAX_SPAN_CHARS or not value_match(span):
+                continue
+            cov = sum(1 for w in anchor_words if _word_in(w, span))
+            if anchor_words and cov == 0:
+                continue
+            key = (cov, -(j - i), -i)
+            if best is None or key > best[0]:
+                best = (key, i, j)
+    return best[1:] if best else None
+
+
+def _span_offset(ndoc: str, nlines: list[str], i: int, j: int) -> int:
+    return ndoc.find(" ".join(nlines[i:j + 1]))
+
+
+def _repair_collect(model_quote: str, ndoc: str, found: list[tuple[int, str]],
+                  current: str = "model"):
+    """Model piece (when doc-verbatim) + code-found spans -> quote + source.
+
+    No new evidence means no mutation at all: quote text and source stay
+    untouched, which keeps recomputes idempotent.
+    """
+    if not found:
+        return model_quote or "", current or "model"
+    pieces = []  # (offset, raw text, is_model)
+    nq = norm_quote(model_quote)
+    if nq and nq in ndoc:
+        pieces.append((ndoc.find(nq), (model_quote or "").strip(), True))
+    seen = {p[1] for p in pieces}
+    for off, txt in found:
+        if txt and txt not in seen:
+            seen.add(txt)
+            pieces.append((off, txt, False))
+    norms = {id(p): norm_quote(p[1]) for p in pieces}
+    keep = [p for p in pieces
+            if not any(p is not o and norms[id(p)] != norms[id(o)]
+                       and norms[id(p)] in norms[id(o)] for o in pieces)]
+    if not keep:
+        return model_quote or "", current or "model"
+    keep.sort(key=lambda p: p[0])
+    src = "model" if all(p[2] for p in keep) else "code"
+    return " ".join(t for _, t, _ in keep), src
+
+
+def _repair_liquid(liq: dict, lines, ndoc: str) -> None:
+    nlines = [n for _, n in lines]
+    found = []
+    nq = norm_quote(liq.get("quote") or "")
+    name = liq.get("name") or ""
+    if not _phrase_in(name, nq):
+        hit = _find_span(nlines, [], lambda sp: _phrase_in(name, sp), _MAX_SENT_GAP)
+        if hit:
+            i, j = hit
+            found.append((_span_offset(ndoc, nlines, i, j),
+                          " ".join(raw for raw, _ in lines[i:j + 1])))
+    conc = liq.get("concentration")
+    if isinstance(conc, str) and conc.strip() and norm_quote(conc) not in nq:
+        nc = norm_quote(conc)
+        hit = _find_span(nlines, _anchor_words(name), lambda sp: nc in sp, _MAX_SENT_GAP)
+        if hit:
+            i, j = hit
+            found.append((_span_offset(ndoc, nlines, i, j),
+                          " ".join(raw for raw, _ in lines[i:j + 1])))
+    liq["quote"], liq["quote_source"] = _repair_collect(liq.get("quote") or "", ndoc, found, liq.get("quote_source") or "model")
+
+
+def _repair_condition(key: str, c: dict, lines, ndoc: str) -> None:
+    # No standalone label search: a bare label mention (title, purpose) is
+    # not the row. The label verifies through row spans, which start at a
+    # label line by construction.
+    nlines = [n for _, n in lines]
+    label = c.get("label") or key
+    anchors = _anchor_words(label)
+    found = []
+    nq = norm_quote(c.get("quote") or "")
+    start = lambda ln: _phrase_in(label, ln)  # noqa: E731
+
+    def seek(value_match, gap=_MAX_ROW_GAP):
+        hit = _find_span(nlines, anchors, value_match, gap, start_match=start)
+        if hit:
+            i, j = hit
+            found.append((_span_offset(ndoc, nlines, i, j),
+                          " ".join(raw for raw, _ in lines[i:j + 1])))
+
+    n = c.get("replicates")
+    need_row = not _phrase_in(label, nq)
+    if isinstance(n, int) and not isinstance(n, bool) and (need_row or not _number_in_quote(n, nq)):
+        seek(lambda sp: _count_in_span(n, sp))
+    for e in [w for w in (c.get("wells") or []) if isinstance(w, str)]:
+        if _wells_in_quote(e, nq):
+            continue
+        wells = parse_wellref(e)
+        if not wells:
+            continue
+        lo, hi = wells[0].lower(), wells[-1].lower()
+        seek(lambda sp, lo=lo, hi=hi: _well_in_span(lo, sp) and _well_in_span(hi, sp))
+    c["quote"], c["quote_source"] = _repair_collect(c.get("quote") or "", ndoc, found, c.get("quote_source") or "model")
+
+
+def _step_anchors(s: dict, liquids: dict) -> list[str]:
+    words: list[str] = []
+    p = s.get("pipette") if isinstance(s.get("pipette"), dict) else None
+    if p and p.get("liquid") in (liquids or {}):
+        words += _anchor_words((liquids[p["liquid"]] or {}).get("name") or "")
+    words += list(_KIND_WORDS.get(s.get("kind") or "", ()))
+    words += _anchor_words(s.get("text") or "")
+    return list(dict.fromkeys(words))
+
+
+def _repair_step(s: dict, liquids: dict, lines, ndoc: str) -> None:
+    nlines = [n for _, n in lines]
+    anchors = _step_anchors(s, liquids)
+    found = []
+    nq = norm_quote(s.get("quote") or "")
+
+    def seek(value_match):
+        hit = _find_span(nlines, anchors, value_match, _MAX_SENT_GAP)
+        if hit:
+            i, j = hit
+            found.append((_span_offset(ndoc, nlines, i, j),
+                          " ".join(raw for raw, _ in lines[i:j + 1])))
+
+    m = s.get("minutes")
+    if _is_num(m) and not _number_in_quote(m, nq, "min"):
+        seek(lambda sp: _number_in_quote(m, sp, "min"))
+    t = s.get("temp_c")
+    if _is_num(t) and not _number_in_quote(t, nq, "temp"):
+        seek(lambda sp: _number_in_quote(t, sp, "temp"))
+    caut = s.get("caution")
+    if isinstance(caut, str) and caut.strip() and norm_quote(caut) not in nq:
+        nc = norm_quote(caut)
+        hit = _find_span(nlines, [], lambda sp: nc in sp, _MAX_SENT_GAP)
+        if hit:
+            i, j = hit
+            found.append((_span_offset(ndoc, nlines, i, j),
+                          " ".join(raw for raw, _ in lines[i:j + 1])))
+    p = s.get("pipette") if isinstance(s.get("pipette"), dict) else None
+    if p is not None:
+        v = p.get("volume")
+        if _is_num(v) and not _number_in_quote(v, nq):
+            seek(lambda sp: _number_in_quote(v, sp))
+        u = p.get("unit")
+        if isinstance(u, str) and u.strip() and not _unit_in_quote(u, nq):
+            seek(lambda sp: _unit_in_quote(u, sp))
+        tgt = p.get("target") if isinstance(p.get("target"), dict) else {}
+        if tgt.get("type") == "wells" and isinstance(tgt.get("value"), str):
+            tval = tgt["value"]
+            if not _wells_in_quote(tval, nq):
+                wells = parse_wellref(tval)
+                if wells:
+                    lo, hi = wells[0].lower(), wells[-1].lower()
+                    seek(lambda sp, lo=lo, hi=hi: _well_in_span(lo, sp) and _well_in_span(hi, sp))
+        r = p.get("repeat")
+        if isinstance(r, int) and not isinstance(r, bool) and not _repeat_in_quote(r, nq):
+            seek(lambda sp: _repeat_in_quote(r, sp))
+    s["quote"], s["quote_source"] = _repair_collect(s.get("quote") or "", ndoc, found, s.get("quote_source") or "model")
+
+
+def repair_quotes(plan: dict, evidence: dict) -> None:
+    """Model quotes are hints; code re-grounds shaky values in the document.
+
+    Runs at build and on every recompute. Idempotent: values already in the
+    quote are never re-searched. Repaired nodes carry quote_source "code".
+    Conditions search line windows (table rows); liquids and steps search
+    sentence windows.
+    """
+    text = (evidence or {}).get("text", "")
+    ndoc = norm_quote(text)
+    lines = _doc_lines(text)
+    sents = _doc_sentences(text)
+    for liq in (plan.get("liquids") or {}).values():
+        _repair_liquid(liq or {}, sents, ndoc)
+    for key, c in (plan.get("conditions") or {}).items():
+        _repair_condition(key, c or {}, lines, ndoc)
+    for s in plan.get("steps") or []:
+        _repair_step(s or {}, plan.get("liquids") or {}, sents, ndoc)
+
+
+def assign_quote_pages(plan: dict, evidence: dict) -> None:
+    """First page holding each quote (1-based, else null). Runs post-repair."""
+    pages = [norm_quote(pg) for pg in (evidence or {}).get("pages") or []]
+    if not pages:
+        pages = [norm_quote((evidence or {}).get("text", ""))]
+
+    def page_of(quote: str):
+        nq = norm_quote(quote)
+        if not nq:
+            return None
+        for cand in (nq, nq[:120], nq[:60]):
+            if not cand:
+                continue
+            for i, pg in enumerate(pages):
+                if cand in pg:
+                    return i + 1
+        return None
+
+    for node in list((plan.get("liquids") or {}).values()):
+        (node or {})["quote_page"] = page_of((node or {}).get("quote") or "")
+    for node in list((plan.get("conditions") or {}).values()):
+        (node or {})["quote_page"] = page_of((node or {}).get("quote") or "")
+    for node in plan.get("steps") or []:
+        (node or {})["quote_page"] = page_of((node or {}).get("quote") or "")
+
+
+def resolve_name(draft: dict) -> str:
+    """Library name: grounded title, else the source filename stem."""
+    plan = (draft or {}).get("plan") or {}
+    title = (plan.get("title") or "").strip()
+    flagged = any(i.get("path") == "title" for i in (draft or {}).get("review", []))
+    if title and not flagged:
+        return title
+    stem = ((draft or {}).get("meta") or {}).get("source") or "protocol"
+    stem = stem.rsplit("/", 1)[-1]
+    return stem.rsplit(".", 1)[0] if "." in stem else stem
 
 
 def _norm_id(raw) -> str:
@@ -289,11 +620,12 @@ def build_draft(raw: dict, evidence: dict, source: str) -> dict:
                          "mix": p.get("mix"), "repeat": p.get("repeat")} if p else None),
             "wells": [],
         })
-    draft = {"plan": {"liquids": liquids, "conditions": conditions, "steps": steps,
-                      "backups": []},
+    draft = {"plan": {"title": (raw.get("title") or "").strip(), "liquids": liquids,
+                      "conditions": conditions, "steps": steps, "backups": []},
              "review": [], "errors": [],
              "meta": {"source": source, "evidence_chars": len(evidence.get("text", "")),
                       "evidence": evidence, "layout": {}}}
+    repair_quotes(draft["plan"], draft["meta"]["evidence"])
     dropped = _settle_stated_wells(draft)
     _auto_layout(draft)
     recompute_draft(draft)
@@ -356,8 +688,10 @@ def _auto_layout(draft: dict) -> None:
 
 
 def recompute_draft(draft: dict) -> None:
-    """Derive step wells + revalidate. Stateless; run after every edit."""
+    """Repair quotes, page them, derive step wells + revalidate. Every edit."""
     plan, evidence = draft["plan"], draft["meta"]["evidence"]
+    repair_quotes(plan, evidence)
+    assign_quote_pages(plan, evidence)
     review = derive_step_wells(plan)
     more, errors = validate_draft(plan, evidence, draft["meta"]["layout"])
     draft["review"], draft["errors"] = review + more, errors
@@ -381,6 +715,12 @@ def validate_draft(plan: dict, evidence: dict, layout: dict | None = None) -> tu
             item["quote"] = quote
         review.append(item)
 
+    title = (plan.get("title") or "").strip()
+    if not title:
+        flag("title", "missing_value", "no title found; filename is used instead")
+    elif not _phrase_in(title, doc):
+        flag("title", "ungrounded_value", f"{title} not in the document")
+
     for key in sorted(liquids):
         liq = liquids[key] or {}
         base = f"liquids.{key}"
@@ -388,7 +728,7 @@ def validate_draft(plan: dict, evidence: dict, layout: dict | None = None) -> tu
         if not (liq.get("name") or "").strip():
             errors.append({"path": f"{base}.name", "code": "empty_name",
                            "reason": "liquid needs a name"})
-        if not _quote_in_doc(quote, doc):
+        if liq.get("quote_source") != "code" and not _quote_in_doc(quote, doc):
             flag(base, "ungrounded_quote", "quote not in the document", quote)
             continue
         nq = norm_quote(quote)
@@ -426,7 +766,7 @@ def validate_draft(plan: dict, evidence: dict, layout: dict | None = None) -> tu
             if t not in liquids:
                 errors.append({"path": f"{base}.treatments", "code": "unknown_liquid",
                                "reason": f"no such liquid: {t}"})
-        if not _quote_in_doc(quote, doc):
+        if c.get("quote_source") != "code" and not _quote_in_doc(quote, doc):
             flag(base, "ungrounded_quote", "quote not in the document", quote)
             continue
         nq = norm_quote(quote)
@@ -456,7 +796,7 @@ def validate_draft(plan: dict, evidence: dict, layout: dict | None = None) -> tu
         if not (s.get("text") or "").strip():
             errors.append({"path": f"{base}.text", "code": "empty_name",
                            "reason": "step needs text"})
-        if not _quote_in_doc(quote, doc):
+        if s.get("quote_source") != "code" and not _quote_in_doc(quote, doc):
             flag(base, "ungrounded_quote", "quote not in the document", quote)
             continue
         nq = norm_quote(quote)
@@ -565,6 +905,24 @@ def parse_draft_path(path: str):
 _ROW_VALUE = re.compile(r"^row\s+([a-h])$", re.IGNORECASE)
 
 
+def _num_text(raw) -> float | None:
+    """Strict float, else a leading number plus one alpha suffix (50 uL).
+
+    Never fishes digits out of identifiers: C2 and step 5 stay invalid.
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    t = (raw or "").strip() if isinstance(raw, str) else ""
+    try:
+        return float(t)
+    except (ValueError, TypeError):
+        pass
+    m = re.fullmatch(r"([-+]?\d+(?:\.\d+)?)\s*([a-zA-Z°µμ]+)", t)
+    return float(m.group(1)) if m else None
+
+
 def parse_target_value(draft: dict, raw: str):
     """'wells:<WellRef>' | 'condition:<id>' | 'all' | 'other' -> target dict."""
     t = (raw or "").strip()
@@ -608,11 +966,10 @@ def parse_draft_value(draft: dict, parsed, raw):
         if field == "label":
             return (True, raw.strip()) if raw.strip() else (False, "condition needs a label")
         if field == "replicates":
-            try:
-                n = int((raw or "").strip())
-            except (ValueError, TypeError):
+            val = _num_text(raw)
+            if val is None or not val.is_integer():
                 return False, "count must be a whole number"
-            return (True, n) if n >= 1 else (False, "count must be 1 or more")
+            return (True, int(val)) if val >= 1 else (False, "count must be 1 or more")
         m = _ROW_VALUE.match((raw or "").strip())
         if m:
             cols = sorted({int(w[1:]) for w in (c.get("wells") or [])
@@ -628,9 +985,8 @@ def parse_draft_value(draft: dict, parsed, raw):
         return False, f"no step {key + 1}"
     if field in ("minutes", "temp_c", "pipette.volume"):
         noun = {"minutes": "minutes", "temp_c": "temp", "pipette.volume": "volume"}[field]
-        try:
-            val = float((raw or "").strip())
-        except (ValueError, TypeError):
+        val = _num_text(raw)
+        if val is None:
             return False, f"{noun} must be a number"
         return (True, val) if val >= 0 else (False, f"{noun} must be 0 or more")
     if field == "pipette.target":
@@ -835,6 +1191,8 @@ def build_start_plan(plan: dict) -> dict:
                            for t in (c.get("treatments") or [])],
             "replicates": c.get("replicates"),
             "wells": list(c.get("wells") or []),
+            "quote": c.get("quote") or "",
+            "quote_page": c.get("quote_page"),
         }
     steps = []
     for s in plan.get("steps") or []:
@@ -848,6 +1206,7 @@ def build_start_plan(plan: dict) -> dict:
                    "text": text if n == 1 else f"{text} ({k + 1} of {n})",
                    "minutes": s.get("minutes"), "temp_c": s.get("temp_c"),
                    "tip": None, "caution": s.get("caution"),
+                   "quote": s.get("quote") or "", "quote_page": s.get("quote_page"),
                    "pipette": None, "wells": []}
             if p is not None:
                 wells = resolve_target(plan, p.get("target") or {})
