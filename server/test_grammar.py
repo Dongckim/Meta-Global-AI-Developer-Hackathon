@@ -793,7 +793,36 @@ class SpeakTests(unittest.TestCase):
 
     def test_speak_text(self):
         self.assertEqual(speak_text("✓ C2, C3 done"), "C 2, C 3 done")
-        self.assertEqual(speak_text("drug A · C2–C8 · 30 min"), "drug A, C 2 to C 8, 30 min")
+        self.assertEqual(speak_text("drug A · C2–C8 · 30 min"), "drug A, C 2 to C 8, 30 minutes")
+
+    def test_thanks_ends_the_session(self):
+        """A thank-you, the agent's name anywhere, repeats and punctuation aside."""
+        from server.grammar import match_session_end
+        for said in ("thanks milo", "Thank you, Milo.", "thanks, that's all", "that's all milo",
+                     "Thanks Milo, that's all.", "thanks thanks milo", "thank you so much Milo!",
+                     "okay thanks milo", "that's it for now"):
+            self.assertEqual(match_session_end(said, "Milo"), "thanks", said)
+        for said in ("thanks, now mark C3 done", "thanks milo, start a timer"):
+            self.assertIsNone(match_session_end(said, "Milo"), said)
+        self.assertEqual(match_session_end("stop, Milo", "Milo"), "stop")
+
+    def test_speakable(self):
+        """TTS only: symbols and units as words; the screen keeps them."""
+        from server.grammar import speakable
+        cases = {
+            "≤0.5% DMSO for 24–72 h": "at most 0.5% DMSO for 24 to 72 hours",
+            "≥1 mL": "at least 1 milliliter",
+            "~30 min at 37 °C": "about 30 minutes at 37 degrees C",
+            "100 µL of 10 µM drug": "100 microliters of 10 micromolar drug",
+            "10× PBS": "10 times PBS",
+            "spin 30 s": "spin 30 seconds",
+            "1 h": "1 hour",
+            "HEK293s and A549 cells": "HEK293s and A549 cells",
+            "5% CO2": "5% CO2",
+        }
+        for said, want in cases.items():
+            self.assertEqual(speakable(said), want, said)
+        self.assertEqual(speak_text("Add 100 µL to B2–B8."), "Add 100 microliters to B 2 to B 8.")
         self.assertEqual(speak_text("Done. " + "word " * 40 + "end."), "Done.")  # whole sentences only
         # at most two sentences; lists say the first item and a count
         self.assertEqual(speak_text("One. Two. Three."), "One. Two.")

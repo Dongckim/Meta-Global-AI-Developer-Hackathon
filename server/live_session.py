@@ -51,6 +51,8 @@ def live_keywords(record: dict, limit: int = 40) -> list[str]:
         wells += [w for w in (s or {}).get("wells") or [] if w not in wells]
     out += wells[:6]
     out += ["done", "exclude", "timer", "note", "next step"]
+    from server.tone import section
+    out += list(section("live").get("keywords") or [])  # common lab words (pip_voice.json live.keywords)
     seen, keep = set(), []
     for k in out:
         k = (k or "").strip()

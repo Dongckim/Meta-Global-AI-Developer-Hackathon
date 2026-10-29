@@ -227,8 +227,8 @@ def whats_next_reply(state: dict) -> str:
 _SESSION_THANKS = re.compile(
     r"(?:(?:ok(?:ay)?|great|perfect|cool)[\s,]+)?(?:thanks?|thank you|that'?s all|that is all|that'?s it)"
     r"(?: so much| very much| a lot)?"
-    r"(?:[\s,]+(?:that'?s all|that'?s it|that is all|for now))?(?:[\s,]+\w+)?")
-_SESSION_STOP = re.compile(r"(?:stop(?: listening)?|never ?mind|forget it)(?:[\s,]+\w+)?")
+    r"(?:[\s,]+(?:that'?s all|that'?s it|that is all|for now))?(?:[\s,]+(?P<tail>\w+))?")
+_SESSION_STOP = re.compile(r"(?:stop(?: listening)?|never ?mind|forget it)(?:[\s,]+(?P<tail>\w+))?")
 
 
 def collapse_repeats(text: str) -> str:
@@ -288,14 +288,16 @@ def answer_or_filler(text: str) -> bool:
 def match_session_end(text: str, name: str = "") -> str | None:
     """Live session end said as the whole turn: "thanks" (reply, then close)
     or "stop" (close now). A trailing word is allowed only when it is the
-    agent's name ("thanks Milo"); anything longer is a command."""
+    agent's name ("thanks Milo"); anything longer is a command. The name may
+    sit anywhere ("Thanks Milo, that's all")."""
     t = said_words(text)
+    if name:
+        t = " ".join(w for w in t.split() if w != name.lower()) or t
     for kind, pat in (("thanks", _SESSION_THANKS), ("stop", _SESSION_STOP)):
         m = pat.fullmatch(t)
         if not m:
             continue
-        tail = re.search(r"[\s,]+(\w+)$", t)
-        last = tail.group(1) if tail else ""
+        last = m.group("tail") or ""  # one extra word only if it's harmless
         known = {"all", "it", "now", "you", "thanks", "thank", "listening", "mind", "nevermind", "stop",
                  "much", "lot"}
         if last and last not in known and last != (name or "").lower():
@@ -846,6 +848,32 @@ _WELL_SAY_ONE = re.compile(r"\b([A-H])(\d{1,2})\b")
 _SPEAK_STRIP = "✓⏰💡↻●○⚠︎️"
 
 
+_UNITS = [(r"µ[lL]|μ[lL]|uL\b", "microliters"), (r"µM|μM|uM\b", "micromolar"), (r"mL\b|ml\b", "milliliters"),
+          (r"mM\b", "millimolar"), (r"nm\b", "nanometers"), (r"°\s*C\b", "degrees C"), (r"°\s*F\b", "degrees F"),
+          (r"(?:h|hrs?|hours?)\b", "hours"), (r"(?:min|mins|minutes?)\b", "minutes"), (r"(?:s|sec|secs|seconds?)\b", "seconds")]
+_SINGULAR = {"hours": "hour", "minutes": "minute", "seconds": "second", "microliters": "microliter",
+             "milliliters": "milliliter", "nanometers": "nanometer"}
+
+
+def speakable(text: str) -> str:
+    """Symbols and abbreviations as words, for TTS only (the screen keeps
+    them): ≤ at most, ≥ at least, ~ about, 24–72 24 to 72, 10× 10 times,
+    h/min/s hours/minutes/seconds, µL/µM/mL, °C degrees C. % stays."""
+    s = text or ""
+    s = re.sub(r"\s*≤\s*", " at most ", s)
+    s = re.sub(r"\s*≥\s*", " at least ", s)
+    s = re.sub(r"(^|\s)~\s*(?=\d)", r"\1about ", s)
+    s = re.sub(r"(?<=\d)\s*[–—-]\s*(?=\d)", " to ", s)  # 24–72 (B2–B8 is spell_wells')
+    s = re.sub(r"(?<=\d)\s*[×x]\b", " times", s)
+    s = re.sub(r"\s*×\s*", " times ", s)
+    for pat, word in _UNITS:
+        def unit(m, word=word):
+            n = m.group(1)
+            return f"{n} {_SINGULAR.get(word, word) if n == '1' else word}"
+        s = re.sub(rf"(?<![A-Za-z\d.])(\d+(?:\.\d+)?)\s*(?:{pat})", unit, s)  # not HEK293s
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def spell_wells(text: str) -> str:
     """Wells for speech: C3 -> 'C 3', C2–C8 -> 'C 2 to C 8'."""
     s = _WELL_SAY_RANGE.sub(lambda m: f"{m.group(1)} {m.group(2)} to {m.group(3)} {m.group(4)}", text or "")
@@ -873,7 +901,7 @@ def speak_text(text: str, limit: int = 140, more: str | None = None) -> str:
     if more is None:
         from server.tone import section
         more = section("live").get("more_on_screen") or "{n} more on screen."
-    s = spell_wells(short_list(text or "", more))
+    s = spell_wells(speakable(short_list(text or "", more)))
     s = s.translate({ord(c): None for c in _SPEAK_STRIP}).replace("·", ",")
     s = re.sub(r"\s+", " ", s)
     s = re.sub(r"\s+,", ",", s).strip(" ,")
