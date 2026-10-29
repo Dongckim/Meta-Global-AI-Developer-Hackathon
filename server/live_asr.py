@@ -119,6 +119,61 @@ class StreamResult:
     sent_ms: int
 
 
+class MetaStream:
+    """One realtime session: open (handshake + ack), send audio, end, events.
+    Live relays push the app's frames as they come (the app is a real-time
+    source); `stream_pcm` paces a file."""
+
+    def __init__(self, key: str, *, mode: str = "DIARIZATION", keywords: list[str] | None = None,
+                 language_bias: list[str] | None = None, url: str = REALTIME_URL):
+        self.key, self.mode, self.keywords, self.language_bias, self.url = \
+            key, mode, keywords, language_bias, url
+        self.ws = None
+        self.session_id: str | None = None
+        self.error: dict | None = None
+
+    async def open(self) -> bool:
+        """Connect and handshake. False (with `error`) when Meta refuses."""
+        import websockets
+        self.ws = await websockets.connect(self.url, max_size=None)
+        await self.ws.send(json.dumps(handshake(self.key, self.mode, self.keywords, self.language_bias)))
+        ack = json.loads(await asyncio.wait_for(self.ws.recv(), timeout=10))
+        if "type" in ack:  # an error instead of the ack
+            self.error = ack
+            return False
+        self.session_id = ack.get("sessionId")
+        return True
+
+    async def send_audio(self, pcm: bytes) -> None:
+        await self.ws.send(pcm)
+
+    async def end(self) -> None:
+        """endStream: half-close; keep reading until the server closes 1000."""
+        await self.ws.send(json.dumps({"type": "endStream"}))
+
+    async def events(self):
+        """Text events until the socket closes (binary frames skipped)."""
+        import websockets
+        try:
+            async for msg in self.ws:
+                if isinstance(msg, bytes):
+                    continue
+                ev = json.loads(msg)
+                if ev.get("type") == "error":
+                    self.error = ev
+                yield ev
+        except websockets.exceptions.ConnectionClosed:
+            return
+
+    @property
+    def close(self) -> tuple[int | None, str]:
+        return (self.ws.close_code, self.ws.close_reason or "") if self.ws else (None, "")
+
+    async def aclose(self) -> None:
+        if self.ws is not None:
+            await self.ws.close()
+
+
 async def stream_pcm(key: str, pcm_frames: Iterable[bytes], *, mode: str = "DIARIZATION",
                      keywords: list[str] | None = None, language_bias: list[str] | None = None,
                      on_event: Callable[[dict, float], None] = lambda ev, t: None,
@@ -126,46 +181,29 @@ async def stream_pcm(key: str, pcm_frames: Iterable[bytes], *, mode: str = "DIAR
     """Handshake, send frames on an absolute real-time schedule, endStream,
     read until close. `on_event(event, t)` gets t = seconds since the first
     audio frame was sent (audio time == wall time when paced)."""
-    import websockets
+    ms = MetaStream(key, mode=mode, keywords=keywords, language_bias=language_bias, url=url)
+    sent = 0
+    try:
+        if await ms.open():
+            t0 = time.perf_counter()
 
-    session_id, error, sent = None, None, 0
-    async with websockets.connect(url, max_size=None) as ws:
-        await ws.send(json.dumps(handshake(key, mode, keywords, language_bias)))
-        ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
-        if "type" in ack:  # an error instead of the ack
-            error = ack
-        else:
-            session_id = ack.get("sessionId")
-        t0 = time.perf_counter()
+            async def send():
+                nonlocal sent
+                for i, fr in enumerate(pcm_frames):
+                    delay = t0 + i * frame_ms / 1000 - time.perf_counter()
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    await ms.send_audio(fr)
+                    sent += 1
+                await ms.end()
 
-        async def send():
-            nonlocal sent
-            for i, fr in enumerate(pcm_frames):
-                delay = t0 + i * frame_ms / 1000 - time.perf_counter()
-                if delay > 0:
-                    await asyncio.sleep(delay)
-                await ws.send(fr)
-                sent += 1
-            await ws.send(json.dumps({"type": "endStream"}))
-
-        async def receive():
-            nonlocal error
-            try:
-                async for msg in ws:
-                    if isinstance(msg, bytes):
-                        continue
-                    ev = json.loads(msg)
-                    if ev.get("type") == "error":
-                        error = ev
-                    on_event(ev, time.perf_counter() - t0)
-            except websockets.exceptions.ConnectionClosed:
-                pass  # close code/reason are read below
-
-        if error is None:
             sender = asyncio.create_task(send())
             try:
-                await receive()
+                async for ev in ms.events():
+                    on_event(ev, time.perf_counter() - t0)
             finally:
                 sender.cancel()
-        code, reason = ws.close_code, ws.close_reason or ""
-    return StreamResult(session_id, code, reason, error, sent * frame_ms)
+        code, reason = ms.close
+    finally:
+        await ms.aclose()
+    return StreamResult(ms.session_id, code, reason, ms.error, sent * frame_ms)

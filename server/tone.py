@@ -23,10 +23,15 @@ def keys() -> list[str]:
     return [k for k, v in _data().items() if not k.startswith("_") and isinstance(v, list)]
 
 
+def section(name: str) -> dict:
+    """A settings block of pip_voice.json (persona, live, ...); {} if absent."""
+    v = _data().get(name)
+    return v if isinstance(v, dict) else {}
+
+
 def persona() -> dict:
     """Shown/spoken identity: agent_name, wake_phrase, voice, quality, ..."""
-    p = _data().get("persona")
-    return p if isinstance(p, dict) else {}
+    return section("persona")
 
 
 def agent_name() -> str:

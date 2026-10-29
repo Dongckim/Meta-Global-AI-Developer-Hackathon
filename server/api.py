@@ -58,13 +58,16 @@ from server import library as lib
 from server import protocol as proto
 from server import runs as runlog
 from server.store import RecordStore, describe_well_row
+from server import live_asr
 from server import tone
+from server.live_session import LiveConversation, live_keywords
+from server.live_session import settings as live_settings
 from server.tone import keys as tone_keys
 from server.tone import say
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -72,7 +75,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 6
+API_VERSION = 7
 
 BASE_URL = "https://api.meta.ai/v1"
 SPARK_MODEL = "muse-spark-1.3"
@@ -1207,6 +1210,99 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session:
         {"asr": asr_ms, "spark": spark_ms, "total": int((time.perf_counter() - total0) * 1000)},
         route, cards, info, sources, store.r["version"], {"transcript": transcript},
     )
+
+
+@app.websocket("/voice/live")
+async def voice_live(ws: WebSocket):
+    """Live conversation relay (shared/schemas/live.schema.json): app PCM16
+    16 kHz frames -> Meta realtime (DIARIZATION); partials and ignored turns
+    go back as they come; owner turns run the one text path (_handle_text)
+    and the reply returns as a `turn` message (record changes ride SSE)."""
+    await ws.accept()
+    start = await ws.receive_json()
+    session = get_session((start or {}).get("session") or "bench")
+    meta = live_asr.MetaStream(_key(), mode="DIARIZATION", keywords=live_keywords(store.r),
+                               language_bias=["English"])
+    try:
+        ok = await meta.open()
+    except Exception as e:  # network, handshake timeout
+        ok, meta.error = False, {"message": f"{type(e).__name__}: {e}"}
+    if not ok:
+        print(f"live open failed: {meta.error}", flush=True)
+        await ws.send_json({"type": "error", "message": (meta.error or {}).get("message", "open failed")})
+        await meta.aclose()
+        await ws.close()
+        return
+    print(f"live open session={meta.session_id}", flush=True)
+    await ws.send_json({"type": "ready", "session_id": meta.session_id})
+    conv = LiveConversation(opened_at=time.monotonic(),
+                            window_s=float(live_settings().get("window_s") or 60),
+                            wake_phrase=tone.persona().get("wake_phrase") or "")
+    owner_q: asyncio.Queue = asyncio.Queue()
+    ended = False
+
+    async def end_stream():
+        nonlocal ended
+        if not ended:
+            ended = True
+            await meta.end()
+
+    async def uplink():
+        while True:
+            msg = await ws.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+            if msg.get("bytes"):
+                if not ended:
+                    await meta.send_audio(msg["bytes"])
+            elif msg.get("text") and json.loads(msg["text"]).get("type") == "end":
+                break
+        await end_stream()
+
+    async def downlink():
+        async for ev in meta.events():
+            for out in conv.feed(ev, time.monotonic()):
+                if out["type"] == "owner":
+                    owner_q.put_nowait(out["text"])
+                    continue
+                if out["type"] == "ignored":
+                    print(f'[voice] ignored speaker={out["speaker"]} text="{out["text"]}"', flush=True)
+                await ws.send_json(out)
+
+    async def worker():
+        while True:
+            text = await owner_q.get()
+            print(f'live owner turn: "{text}"', flush=True)
+            try:
+                resp = await _handle_text(text, session, "voice")
+            except Exception as e:  # keep the session; this turn says sorry
+                print(f"live turn failed: {type(e).__name__}: {e}", flush=True)
+                resp = _utterance_response([], [], say("didnt_catch", session), {}, "error", [],
+                                           {"dropped": 0, "drop_reasons": []}, [], store.r["version"])
+            await ws.send_json({"type": "turn", "transcript": text, "end_session": False, **resp})
+            conv.owner_replied(time.monotonic())
+
+    async def watchdog():
+        while not ended:
+            await asyncio.sleep(1)
+            if owner_q.empty() and conv.should_close(time.monotonic()):
+                print("live window over: endStream", flush=True)
+                await end_stream()
+
+    tasks = [asyncio.create_task(c()) for c in (uplink, worker, watchdog)]
+    try:
+        await downlink()  # ends when Meta closes (1000 after endStream, or an error)
+    finally:
+        for t in tasks:
+            t.cancel()
+        code, reason = meta.close
+        print(f"live closed {code} {reason!r}", flush=True)
+        try:
+            await ws.send_json({"type": "closed", "code": code, "reason": reason})
+            await ws.close()
+        except Exception:
+            pass  # the app already left
+        await meta.aclose()
 
 
 @app.post("/confirm")

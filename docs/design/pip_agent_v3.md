@@ -355,6 +355,14 @@ the key stays on the server (handshake `authorization.accessToken`).
   after normalization -> plan again. Today plan and run are interleaved
   (round 1 writes apply before the lookup round; session memory/tone state
   change during the model call), so this needs a pure planning step.
+- Checkpoint 1 (built): app `LiveLink` opens ws /voice/live on an accepted
+  wake (fallback: the per-utterance capture), streams 80 ms PCM16 16 kHz
+  frames from one more MicEngine sink (16 kHz as is, else converted), and
+  sends silence while the agent speaks. Server `LiveConversation` keeps the
+  owner (first label), strips a leading wake phrase, runs owner turns through
+  `_handle_text`, reports others as `ignored`; partials as they come.
+  Messages: shared/schemas/live.schema.json. Temporary close: 60 s quiet
+  after the last owner reply (or after opening). API 7.
 - Piece 1 (server only): server/live_asr.py relay + eval/live_asr_measure.py
   (real-time WAV playback, per-turn latency vs file VAD, label accuracy,
   `--simulate` plan-first estimate with real model time).

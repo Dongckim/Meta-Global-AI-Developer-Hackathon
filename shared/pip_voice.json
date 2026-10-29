@@ -9,6 +9,10 @@
     "rate": 0.4,
     "pitch": 0.92
   },
+  "live": {
+    "window_s": 60,
+    "ignored_line": "Another voice — ignored"
+  },
   "mark_done": [
     "Nice, {wells_spoken} are in.",
     "Got it — {wells_spoken} done.",
