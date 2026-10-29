@@ -27,10 +27,35 @@ final class Recorder {
         set { UserDefaults.standard.set(newValue, forKey: "pip.preferredInput") }
     }
 
+    /// Glasses output while the agent speaks (DEBUG diagnostics compare):
+    /// "hfp_only" keeps the call-quality HFP link; "a2dp_while_speaking"
+    /// switches to A2DP for the reply (the mic isn't needed then) and back.
+    static var outputMode: String {
+        get { UserDefaults.standard.string(forKey: "pip.outputMode") ?? "hfp_only" }
+        set { UserDefaults.standard.set(newValue, forKey: "pip.outputMode") }
+    }
+
+    /// Session mode: "default" or "voiceChat" (system voice processing).
+    static var sessionMode: String {
+        get { UserDefaults.standard.string(forKey: "pip.sessionMode") ?? "default" }
+        set { UserDefaults.standard.set(newValue, forKey: "pip.sessionMode") }
+    }
+
+    static var avMode: AVAudioSession.Mode { sessionMode == "voiceChat" ? .voiceChat : .default }
+
+    /// Listening session: HFP so the glasses mic works (A2DP too when the
+    /// always-A2DP toggle is on).
     static func configureSession() throws {
         var opts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
         if a2dpEnabled { opts.insert(.allowBluetoothA2DP) }
-        try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default, options: opts)
+        try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: avMode, options: opts)
+    }
+
+    /// Speaking session (a2dp_while_speaking): A2DP only, so output leaves the
+    /// HFP call link; the mic is unused while the agent speaks.
+    static func configureSpeechSession() throws {
+        try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: avMode,
+                                                        options: [.allowBluetoothA2DP])
     }
 
     static func hfpInput() -> AVAudioSessionPortDescription? {

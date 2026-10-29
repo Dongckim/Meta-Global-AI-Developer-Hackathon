@@ -427,13 +427,43 @@ final class VoiceSession {
         speakStartedAt = Date()
         state = .speaking
         live?.muted = true // the mic would hear the agent: stream silence
+        let route = MicEngine.shared
+        if route.speechSwitchApplies {
+            // a2dp_while_speaking: output moves to A2DP first (the live link
+            // keeps streaming silence on its own timer meanwhile)
+            Task { @MainActor [weak self] in
+                await route.beginSpeech()
+                guard let self, g == self.gen else { await route.endSpeech(); return }
+                self.say(text, gen: g, switched: true)
+            }
+        } else {
+            say(text, gen: g, switched: false)
+        }
+    }
+
+    /// Speaks for turn `g`; after it, a switched route returns to HFP before
+    /// the mic opens again, so listening shows only once the mic really hears.
+    private func say(_ text: String?, gen g: Int, switched: Bool) {
+        MicEngine.shared.speechStarted(liveMuted: live.map { $0.muted })
         speaker.speak(text) { @MainActor [weak self] in
+            MicEngine.shared.speechFinished()
             guard let self else { return }
             Log.voice.info("[voice] tts done gen=\(g)/\(self.gen) state=\(self.state.rawValue, privacy: .public)")
-            self.live?.muted = false
-            guard g == self.gen, self.state == .speaking else { return }
-            self.state = self.restState
-            self.resumeWake()
+            let reopen: @MainActor () -> Void = { [weak self] in
+                guard let self else { return }
+                self.live?.muted = false
+                guard g == self.gen, self.state == .speaking else { return }
+                self.state = self.restState
+                self.resumeWake()
+            }
+            if switched {
+                Task { @MainActor in
+                    await MicEngine.shared.endSpeech()
+                    reopen()
+                }
+            } else {
+                reopen()
+            }
         }
     }
 

@@ -129,10 +129,12 @@ final class LiveMic {
     }
 
     /// Re-attach to a rebuilt engine, keeping the same send and mute state.
+    /// The new sink attaches before the old one leaves, so the engine never
+    /// drops to zero sinks (which would tear it down and release the session).
     func restart() async {
         guard let send else { return }
         let wasMuted = muted.value
-        if let id = sinkID { MicEngine.shared.unsubscribe(id) }
+        let old = sinkID
         sinkID = nil
         do {
             try await start(send: send)
@@ -140,6 +142,7 @@ final class LiveMic {
         } catch {
             Log.audio.error("[audio] live sink re-attach failed: \(error.localizedDescription, privacy: .public)")
         }
+        if let old { MicEngine.shared.unsubscribe(old) }
         setMuted(wasMuted)
     }
 

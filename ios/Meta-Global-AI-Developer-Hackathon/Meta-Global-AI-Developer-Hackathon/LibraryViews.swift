@@ -345,10 +345,15 @@ struct PastRunView: View {
 // MARK: - Glasses audio (iOS Bluetooth; no DAT dependency)
 
 struct GlassesAudioSection: View {
+    /// Speaks through the voice session (same route switch and [audio] tts
+    /// logs as a real reply); falls back to the bus without one.
+    var voice: VoiceSession? = nil
     @State private var inputs: [AVAudioSessionPortDescription] = []
     @State private var routeText = "—"
     @State private var pick = Recorder.preferredInputUID
     @State private var a2dp = Recorder.a2dpEnabled
+    @State private var outputMode = Recorder.outputMode
+    @State private var sessionMode = Recorder.sessionMode
     @State private var testing = false
     @State private var testResult = ""
     @State private var player: AVAudioPlayer?
@@ -378,6 +383,26 @@ struct GlassesAudioSection: View {
                     try? Recorder.configureSession()
                     refresh()
                 }
+            #if DEBUG
+            // Compare Milo's voice on the glasses; [audio] tts start/end and
+            // "speech route" log lines show what each choice did.
+            Picker("Output while speaking", selection: $outputMode) {
+                Text("HFP only").tag("hfp_only")
+                Text("A2DP while speaking").tag("a2dp_while_speaking")
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: outputMode) { _, v in Recorder.outputMode = v }
+            Picker("Session mode", selection: $sessionMode) {
+                Text("default").tag("default")
+                Text("voiceChat").tag("voiceChat")
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: sessionMode) { _, v in
+                Recorder.sessionMode = v
+                try? Recorder.configureSession()
+                refresh()
+            }
+            #endif
             TimelineView(.animation(minimumInterval: 1.0 / 15)) { _ in
                 LevelBar(level: tester.currentPeak)
             }
@@ -387,7 +412,9 @@ struct GlassesAudioSection: View {
                     .buttonStyle(.bordered).controlSize(.small)
                     .disabled(testing)
                 Button("Hear \(Persona.current.agentName)") {
-                    SpeechBus.shared.speak("Glasses audio check. Can you hear \(Persona.current.agentName)?")
+                    let line = "Glasses audio check. Can you hear \(Persona.current.agentName)? "
+                        + "Step four done, three wells left: D2, D6 and D7."
+                    if let voice { voice.speak(line) } else { SpeechBus.shared.speak(line) }
                 }
                 .buttonStyle(.bordered).controlSize(.small)
             }
@@ -522,7 +549,7 @@ struct DiagnosticsView: View {
                                 voice?.type(t)
                             }
                     }
-                    GlassesAudioSection()
+                    GlassesAudioSection(voice: voice)
                     #if DEBUG
                     SampleRecorder()
                     #endif
