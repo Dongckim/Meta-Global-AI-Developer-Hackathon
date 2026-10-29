@@ -22,7 +22,7 @@ struct WakeMatcherTests {
 
 @MainActor
 final class FakeWake: WakeControlling {
-    var onWake: (() -> Void)?
+    var onWake: (() -> Bool)?
     var onFailed: (() -> Void)?
     var running = false
     var debugDetail = "fake"
@@ -30,7 +30,7 @@ final class FakeWake: WakeControlling {
     var stops = 0
     func start() async throws { starts += 1; running = true }
     func stop() { stops += 1; running = false }
-    func fire() { onWake?() }
+    @discardableResult func fire() -> Bool { onWake?() ?? false }
 }
 
 @MainActor
@@ -81,7 +81,9 @@ struct VoiceSessionTests {
                              capture: FakeCapture? = nil,
                              speaker: FakeSpeaker? = nil,
                              chimed: Flag? = nil,
-                             mic: (() async -> Bool)? = nil) -> VoiceSession {
+                             mic: (() async -> Bool)? = nil,
+                             stuck: TimeInterval = 45,
+                             speakMargin: TimeInterval = 5) -> VoiceSession {
         VoiceSession.sharedWakeOn()
         let flag = chimed ?? Flag()
         return VoiceSession(wake: wake ?? FakeWake(), capture: capture ?? FakeCapture(),
@@ -90,7 +92,8 @@ struct VoiceSessionTests {
                             supportStub: { .ok },
                             micRequest: mic,
                             silenceTimeout: 0.05, minCapture: 0.02,
-                            maxCapture: 5, awaitSpeech: 0.1)
+                            maxCapture: 5, awaitSpeech: 0.1, stuckTimeout: stuck,
+                            speakMargin: speakMargin)
     }
 
     private func settle(until: @escaping () -> Bool, timeout: Double = 3) async -> Bool {
@@ -110,8 +113,8 @@ struct VoiceSessionTests {
         capture.script = [0.5, 0.5, 0, 0, 0, 0] // speech, then silence -> auto stop
         voice.open(trigger: .wakeWord)
         #expect(chimed.value)
-        #expect(wake.stops == 1)
         #expect(await settle { voice.state == .listening })
+        #expect(wake.stops == 1)
         #expect(await settle { voice.state == .transcribing })
         #expect(voice.pendingAudio != nil)
         #expect(capture.stops == 1)
@@ -266,6 +269,176 @@ struct VoiceSessionTests {
         #expect(await settle(timeout: 4) { voice.state == .ready && capture.stops >= 1 })
         #expect(voice.pendingAudio == nil)
         #expect(voice.noticeGen == gen) // silent: a stray detection, not a turn
+    }
+
+    @Test func wakeKeepsEngineUntilCaptureAttached() async {
+        let wake = FakeWake(), capture = FakeCapture()
+        capture.startDelay = 200_000_000
+        let voice = makeSession(wake: wake, capture: capture)
+        voice.activate()
+        #expect(await settle { wake.running })
+        voice.open(trigger: .manual)
+        #expect(await settle { capture.starts == 1 })
+        #expect(wake.running) // still attached while capture spins up
+        #expect(await settle { voice.state == .listening })
+        #expect(!wake.running)
+        voice.endManual()
+    }
+
+    @Test func wakeIgnoredWhileCaptureStarting() async {
+        let chimed = Flag()
+        let wake = FakeWake(), capture = FakeCapture()
+        capture.startDelay = 200_000_000
+        let voice = makeSession(wake: wake, capture: capture, chimed: chimed)
+        voice.activate()
+        voice.open(trigger: .manual)
+        wake.fire()
+        #expect(!chimed.value)
+        #expect(await settle { voice.state == .listening })
+        #expect(capture.starts == 1)
+        voice.endManual()
+    }
+
+    @Test func audioLostRestartsWakeAndEndsCapture() async {
+        let wake = FakeWake(), capture = FakeCapture()
+        let voice = makeSession(wake: wake, capture: capture)
+        voice.activate()
+        #expect(await settle { wake.starts == 1 })
+        voice.audioLost() // idle: wake restarts from scratch
+        #expect(wake.stops >= 1)
+        #expect(await settle { wake.starts == 2 })
+        voice.open(trigger: .manual)
+        #expect(await settle { voice.state == .listening })
+        voice.audioLost() // mid-capture: finishes like a release
+        #expect(voice.state == .transcribing)
+        #expect(capture.stops == 1)
+    }
+
+    /// Ready baseline every cycle must return to.
+    private func expectIdle(_ voice: VoiceSession, _ wake: FakeWake,
+                            _ capture: FakeCapture, cycles: Int) async {
+        #expect(voice.state == .ready)
+        #expect(voice.activeTrigger == nil)
+        #expect(voice.pendingAudio == nil)
+        #expect(voice.listeningSince == nil)
+        #expect(capture.starts == cycles && capture.stops == cycles)
+        #expect(await settle { wake.running }) // wake resumed
+    }
+
+    @Test func threeManualCyclesReturnToIdle() async {
+        let wake = FakeWake(), capture = FakeCapture(), speaker = FakeSpeaker()
+        let voice = makeSession(wake: wake, capture: capture, speaker: speaker, mic: { true })
+        voice.activate()
+        for i in 1...3 {
+            voice.beginManual()
+            #expect(await settle { voice.state == .listening })
+            voice.endManual()
+            #expect(voice.state == .transcribing)
+            voice.didRespond(hasSources: false)
+            voice.speak("Marked C\(i) done.")
+            #expect(voice.state == .speaking)
+            speaker.complete()
+            await expectIdle(voice, wake, capture, cycles: i)
+        }
+    }
+
+    @Test func threeWakeCyclesReturnToIdle() async {
+        let wake = FakeWake(), capture = FakeCapture(), speaker = FakeSpeaker()
+        let voice = makeSession(wake: wake, capture: capture, speaker: speaker)
+        voice.activate()
+        for i in 1...3 {
+            #expect(await settle { wake.running })
+            capture.script = [0.5, 0.5, 0, 0, 0, 0]
+            wake.fire()
+            #expect(await settle { voice.state == .transcribing })
+            voice.didRespond(hasSources: false)
+            voice.speak("Okay.")
+            speaker.complete()
+            await expectIdle(voice, wake, capture, cycles: i)
+        }
+    }
+
+    @Test func speakingTimesOutWithoutTTSDone() async {
+        let wake = FakeWake(), speaker = FakeSpeaker()
+        let voice = makeSession(wake: wake, speaker: speaker, speakMargin: 0.1)
+        voice.activate()
+        voice.speak("") // speaker never calls onDone
+        #expect(voice.state == .speaking)
+        #expect(await settle { voice.state == .ready })
+        #expect(speaker.stops >= 1)
+        #expect(await settle { wake.running })
+    }
+
+    @Test func admissionTable() {
+        typealias V = VoiceSession
+        let all: [V.State] = [.ready, .listening, .transcribing, .thinking, .speaking, .searching]
+        for s in all {
+            for starting in [false, true] {
+                let wake = V.admission(state: s, trigger: .wakeWord, starting: starting)
+                let manual = V.admission(state: s, trigger: .manual, starting: starting)
+                let label = Comment(rawValue: "\(s) starting=\(starting)")
+                switch s {
+                case .ready:
+                    #expect(wake == (starting ? .ignore : .accept), label)
+                    #expect(manual == (starting ? .ignore : .accept), label)
+                case .speaking:
+                    #expect(wake == .ignore, label)
+                    #expect(manual == .bargeIn, label)
+                default:
+                    #expect(wake == .ignore, label)
+                    #expect(manual == .ignore, label)
+                }
+            }
+        }
+    }
+
+    @Test func wakeAcceptedFromReadyAfterEveryCycle() async {
+        let wake = FakeWake(), capture = FakeCapture(), speaker = FakeSpeaker()
+        let voice = makeSession(wake: wake, capture: capture, speaker: speaker)
+        voice.activate()
+        for _ in 1...3 {
+            #expect(await settle { wake.running })
+            capture.script = [0.5, 0.5, 0, 0, 0, 0]
+            #expect(wake.fire()) // ready must accept (was "ignored: wake while ready")
+            #expect(await settle { voice.state == .transcribing })
+            #expect(voice.activeTrigger == nil) // wake capture released its trigger
+            voice.didRespond(hasSources: false)
+            voice.speak("Okay.")
+            speaker.complete()
+        }
+    }
+
+    @Test func rejectedWakeReportsFalse() async {
+        let wake = FakeWake(), speaker = FakeSpeaker()
+        let voice = makeSession(wake: wake, speaker: speaker)
+        voice.activate()
+        voice.speak("talking")
+        #expect(!wake.fire()) // speaking ignores wake: listener must not consume it
+        speaker.complete()
+        #expect(await settle { voice.state == .ready })
+        #expect(await settle { wake.running })
+        #expect(wake.fire())
+    }
+
+    @Test func wakeLatchConsumesOnlyAccepted() {
+        var latch = WakeLatch()
+        #expect(latch.hear("hey pip"))
+        // rejected: fresh task, nothing carried -> the next "Hey Pip" offers again
+        latch.newTask(carry: nil)
+        #expect(!latch.hear("show c5")) // stale phrase gone
+        #expect(latch.hear("hey pip"))
+        latch.accept()
+        #expect(!latch.hear("hey pip hey pip")) // accepted: held until a new task
+        latch.newTask(carry: "um hey")
+        #expect(latch.hear("pip")) // split across the boundary still matches
+    }
+
+    @Test func stuckStateReturnsToReady() async {
+        let voice = makeSession(stuck: 0.1)
+        voice.activate()
+        voice.didRespond(hasSources: false) // reply that never speaks
+        #expect(voice.state == .thinking)
+        #expect(await settle { voice.state == .ready })
     }
 
     @Test func silenceGate() {

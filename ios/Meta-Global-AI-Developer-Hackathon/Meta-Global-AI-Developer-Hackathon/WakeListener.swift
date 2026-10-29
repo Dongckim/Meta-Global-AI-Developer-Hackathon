@@ -95,8 +95,9 @@ final class WakeListener {
         }
     }
 
-    /// Fired once per detection; the owner stops the listener when opening.
-    var onWake: (() -> Void)?
+    /// Offered per detection; true = accepted (the owner stops the listener
+    /// when the capture attaches). A rejection re-arms on a fresh task.
+    var onWake: (() -> Bool)?
     /// Fired when restarts keep failing (backoff tripped); owner latches.
     var onFailed: (() -> Void)?
 
@@ -109,16 +110,17 @@ final class WakeListener {
     private let live = RequestBox()
     private var task: SFSpeechRecognitionTask?
     private var sinkID: UUID?
-    private var tail: [String] = []
+    private var latch = WakeLatch()
     private var lastText = ""
+    /// Recognition-task counter (own numbering, not VoiceSession.gen).
     private var generation = 0
-    private var fired = false
     private var restarts = RestartGate(limit: 5, window: 10)
     private(set) var running = false
 
     func start() async throws {
         guard !running else { return }
         guard recognizer != nil else { throw WakeError.noRecognizer }
+        Log.wake.info("[wake] start: preparing engine")
         let rate = try await MicEngine.shared.prepare()
         guard let input = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate,
                                         channels: 1, interleaved: false),
@@ -128,8 +130,8 @@ final class WakeListener {
         else { throw WakeError.cannotConvert }
         counter.reset()
         lastError = nil
-        fired = false
-        tail = []
+        latch = WakeLatch()
+        lastText = ""
         restarts = RestartGate(limit: 5, window: 10)
         running = true
         let live = self.live
@@ -146,7 +148,9 @@ final class WakeListener {
             var fed = false
             var err: NSError?
             let status = conv.value.convert(to: out, error: &err) { _, st in
-                if fed { st.pointee = .endOfStream; return nil }
+                // Streaming: .noDataNow keeps the converter open. .endOfStream
+                // ended it after the first buffer (device log: bufs=1 forever).
+                if fed { st.pointee = .noDataNow; return nil }
                 fed = true
                 st.pointee = .haveData
                 return buf.value
@@ -159,6 +163,7 @@ final class WakeListener {
     }
 
     func stop() {
+        Log.wake.info("[wake] stop running=\(self.running) sink=\(self.sinkID != nil) bufs=\(self.counter.value)")
         generation += 1 // invalidates late callbacks
         task?.cancel()
         task = nil
@@ -176,6 +181,7 @@ final class WakeListener {
         req.shouldReportPartialResults = true
         req.contextualStrings = ["Hey Pip"]
         live.current = req
+        Log.wake.info("[wake] recognition task begin task=\(gen) bufs=\(self.counter.value)")
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             guard let self else { return }
             Task { @MainActor in
@@ -189,14 +195,21 @@ final class WakeListener {
         guard running, gen == generation else { return }
         if let result {
             lastText = result.bestTranscription.formattedString
-            if !fired, WakeMatcher.matches((tail + [lastText]).joined(separator: " ")) {
-                fired = true
-                onWake?()
+            Log.wake.info("[wake] heard final=\(result.isFinal) \"\(self.lastText, privacy: .public)\"")
+            if latch.hear(lastText) {
+                let accepted = onWake?() ?? false
+                Log.wake.info("[wake] fired accepted=\(accepted)")
+                if accepted {
+                    latch.accept()
+                } else {
+                    rearm() // the heard phrase must not re-offer; next one fires
+                }
                 return
             }
             if result.isFinal { restart() }
-        } else if error != nil {
+        } else if let error {
             lastError = (error as? LocalizedError)?.errorDescription ?? "recognition ended"
+            Log.wake.error("[wake] task error: \(error.localizedDescription, privacy: .public) bufs=\(self.counter.value)")
             restart()
         }
     }
@@ -206,20 +219,53 @@ final class WakeListener {
     /// churning when the recognizer keeps failing (auth revoked, etc.).
     private func restart() {
         guard running else { return }
+        Log.wake.info("[wake] restart task")
         if restarts.note(date: Date()) {
+            Log.wake.error("[wake] restart backoff tripped -> failed latch")
             lastError = "recognition keeps failing — tap Check in Setup to retry"
             let cb = onFailed
             stop()
             cb?()
             return
         }
+        newTask(carry: lastText)
+    }
+
+    /// Rejected offer: fresh task with nothing carried, outside the
+    /// failure backoff (a rejection is not a recognizer failure).
+    private func rearm() {
+        newTask(carry: nil)
+    }
+
+    private func newTask(carry: String?) {
         task?.cancel()
         task = nil
         live.current?.endAudio()
-        tail = lastText.lowercased().split { !$0.isLetter }.map(String.init).suffix(2)
-        fired = false
+        latch.newTask(carry: carry)
+        lastText = ""
         generation += 1
         beginTask(generation: generation)
+    }
+}
+
+/// Pure wake decision across recognition tasks. A detection is offered
+/// until the owner accepts it; only acceptance latches (until a new task).
+struct WakeLatch {
+    private(set) var fired = false
+    private var tail: [String] = []
+
+    /// One recognition result: true when it should be offered.
+    func hear(_ text: String) -> Bool {
+        !fired && WakeMatcher.matches((tail + [text]).joined(separator: " "))
+    }
+
+    mutating func accept() { fired = true }
+
+    /// New task. `carry` keeps the last two words so a phrase split across
+    /// the boundary still matches; nil (rejection) starts clean.
+    mutating func newTask(carry: String?) {
+        tail = carry.map { Array($0.lowercased().split { !$0.isLetter }.map(String.init).suffix(2)) } ?? []
+        fired = false
     }
 }
 

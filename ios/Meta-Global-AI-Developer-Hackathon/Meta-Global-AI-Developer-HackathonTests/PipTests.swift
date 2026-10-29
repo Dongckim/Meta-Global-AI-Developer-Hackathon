@@ -249,15 +249,23 @@ struct PipTests {
     }
 
     @Test func wavBytesDuration() {
-        func wav(frames: Int) -> Data {
-            var d = Data(count: 44 + frames * 2) // 16kHz mono 16-bit
-            var rate: UInt32 = 32000 // byteRate at [28..<32]
-            withUnsafeBytes(of: &rate) { d.replaceSubrange(28..<32, with: $0) }
-            return d
+        func u32(_ v: Int) -> Data { withUnsafeBytes(of: UInt32(v).littleEndian) { Data($0) } }
+        func chunk(_ id: String, _ body: Data) -> Data { Data(id.utf8) + u32(body.count) + body }
+        /// 16kHz mono 16-bit; `filler` adds a padding chunk before data like AVAudioFile.
+        func wav(frames: Int, filler: Int = 0) -> Data {
+            var fmt = Data([1, 0, 1, 0]) + u32(16000) + u32(32000) // PCM, mono, rate, byteRate
+            fmt += Data([2, 0, 16, 0])
+            var body = Data("WAVE".utf8) + chunk("fmt ", fmt)
+            if filler > 0 { body += chunk("FLLR", Data(count: filler)) }
+            body += chunk("data", Data(count: frames * 2))
+            return Data("RIFF".utf8) + u32(body.count) + body
         }
         #expect(Recorder.duration(of: wav(frames: 0)) == 0)
         #expect(abs((Recorder.duration(of: wav(frames: 1600)) ?? -1) - 0.1) < 0.001)
         #expect(abs((Recorder.duration(of: wav(frames: 16000)) ?? -1) - 1.0) < 0.001)
+        #expect(Recorder.duration(of: wav(frames: 0, filler: 4000)) == 0)
+        #expect(abs((Recorder.duration(of: wav(frames: 1600, filler: 4000)) ?? -1) - 0.1) < 0.001)
         #expect(Recorder.duration(of: Data(count: 10)) == nil)
+        #expect(Recorder.duration(of: Data(count: 4096)) == nil)
     }
 }

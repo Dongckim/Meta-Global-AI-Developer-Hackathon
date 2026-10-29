@@ -1,4 +1,5 @@
 import AVFoundation
+import os
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -69,9 +70,9 @@ struct ContentView: View {
     @State private var peekGen = 0
     @State private var peekTarget: String?
     @State private var lastViewScreen = ""
-    @State private var robotState = RobotState.idle
     /// App launch opens Home; the first snapshot moves the saved view there once.
     @State private var launchHomeSent = false
+    @State private var robotState = RobotState.idle
     @State private var draftState = DraftState.idle
     @State private var reviewTab = 0
     @State private var showImporter = false
@@ -121,7 +122,6 @@ struct ContentView: View {
         let v = lab.view
         let cur = v.current.screen, tgt = v.current.target
         guard !cur.isEmpty else { return }
-        let sheetWell = v.sheet.name == "well_card" && !v.sheet.target.isEmpty ? v.sheet.target
         if !launchHomeSent {
             launchHomeSent = true
             if cur != "home" {
@@ -129,6 +129,7 @@ struct ContentView: View {
                 return
             }
         }
+        let sheetWell = v.sheet.name == "well_card" && !v.sheet.target.isEmpty ? v.sheet.target
             : (cur == "well_card" && !tgt.isEmpty ? tgt : nil)
         if let w = sheetWell {
             if selectedWell?.id != w { selectedWell = WellSelect(id: w) }
@@ -268,6 +269,7 @@ struct ContentView: View {
             if on { connect(); loadLists() }
         }
         .onChange(of: scenePhase) { _, phase in
+            Log.voice.info("[voice] scenePhase \(String(describing: phase), privacy: .public)")
             if phase == .active { voice.activate() } else { voice.deactivate() }
         }
         .onChange(of: showSettings) { _, shown in if !shown { voice.refresh() } }
@@ -1268,12 +1270,14 @@ struct ContentView: View {
             let loud = Recorder.rms(of: url) ?? 0
             let data = try Data(contentsOf: url)
             try? FileManager.default.removeItem(at: url)
+            Log.voice.info("[voice] send? bytes=\(data.count) dur=\(Recorder.duration(of: data) ?? -1) rms=\(loud) min=\(PipClient.minVoiceDuration)")
             guard loud >= 0.001 else {
                 voice.didFail()
                 say("No sound reached the mic — on the simulator, check the Mac mic permission and input")
                 return
             }
             let r = try await PipClient.voice(wav: data)
+            Log.voice.info("[voice] /voice ok ignored=\(r.ignored ?? false) transcript=\"\(r.transcript, privacy: .public)\" speak=\(r.speak?.count ?? -1)")
             guard r.ignored != true else { voice.didFail(); return }
             if r.setup_done == true { dismissSyncOrSetup() }
             if r.sync_retry == true { retrySync() }
@@ -1284,6 +1288,7 @@ struct ContentView: View {
                    dropped: r.dropped ?? 0,
                    ui: r.ui, speak: r.speak, recordVersion: r.record_version)
         } catch let e as PipClient.VoiceError {
+            Log.voice.info("[voice] not sent: \(String(describing: e), privacy: .public)")
             voice.didFail()
             switch e {
             case .tooShort(let dur):
@@ -1291,6 +1296,7 @@ struct ContentView: View {
                     : String(format: "Too short (%.1fs) — press and hold to speak", dur))
             }
         } catch {
+            Log.voice.error("[voice] /voice failed: \(error.localizedDescription, privacy: .public)")
             voice.didFail()
             say("Error: \(error.localizedDescription)")
         }

@@ -243,6 +243,22 @@ smoke + iPad check.
   latch instead of churning; press/release pairing (pressGen) so a
   release before spin-up aborts instead of stranding listening; mic
   permission owned by beginManual.
+- Voice outage fixes (device log): the wake converter streams with
+  .noDataNow (.endOfStream fed it one buffer, ever); capture attaches to
+  the shared engine before wake detaches (tearing it down made every
+  press re-switch to glasses HFP and record 0 frames); 1024-frame tap;
+  WAV duration walks RIFF chunks (AVAudioFile pads the header); every
+  non-ready state times out to ready (listening at maxCapture, speaking
+  at text length/12 chars/s + 5s, else 45s). MicEngine owns the session:
+  it deactivates only with no sink, no prepare in flight and no TTS; an
+  interruption end or config change under live sinks fires onLost, and
+  VoiceSession restarts its consumers (the one restart path).
+- Voice admission is one table (`VoiceSession.admission`, state x trigger
+  -> accept / ignore / bargeIn): ready accepts both unless a capture is
+  already starting; speaking lets only the mic barge in. A wake is consumed
+  only when accepted (`onWake` returns it); a rejected one re-arms on a
+  fresh task. Every capture exit releases its trigger (the wake path leaked
+  it, so the 2nd "Hey Pip" was ignored as "starting").
 
 ## Standing rules (carried over)
 

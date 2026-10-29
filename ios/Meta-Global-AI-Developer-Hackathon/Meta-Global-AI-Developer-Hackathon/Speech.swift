@@ -91,6 +91,9 @@ final class SpeechBus: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
+    /// TTS holds the audio session (MicEngine won't deactivate under it).
+    var isSpeaking: Bool { synth.isSpeaking || synth.isPaused }
+
     func stop() {
         if synth.isSpeaking || synth.isPaused {
             synth.stopSpeaking(at: .immediate)

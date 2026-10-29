@@ -13,7 +13,8 @@ enum VoiceTrigger {
 
 /// Seams for tests; real types conform below.
 protocol WakeControlling: AnyObject {
-    var onWake: (() -> Void)? { get set }
+    /// Returns true when the session accepted the wake (listener consumes it).
+    var onWake: (() -> Bool)? { get set }
     var onFailed: (() -> Void)? { get set }
     var running: Bool { get }
     var debugDetail: String { get }
@@ -67,7 +68,14 @@ final class VoiceSession {
         set { UserDefaults.standard.set(newValue, forKey: "pip.wake") }
     }
 
-    private(set) var state: State = .ready
+    private(set) var state: State = .ready {
+        didSet {
+            if oldValue != state {
+                Log.voice.info("[voice] state \(oldValue.rawValue, privacy: .public) -> \(self.state.rawValue, privacy: .public) gen=\(self.gen) press=\(self.pressGen)")
+                armWatchdog()
+            }
+        }
+    }
     private(set) var listeningSince: Date?
     private(set) var lastHeld: Double = 0
     private(set) var wakeStatus = "Not checked"
@@ -89,8 +97,32 @@ final class VoiceSession {
         }
     }
 
-    /// Mic button enabled: idle, or speaking (barge-in interrupts).
-    var micLive: Bool { state == .ready || state == .speaking }
+    enum Admission: Equatable { case accept, ignore, bargeIn }
+
+    /// The one table for state x trigger. `starting`: a capture was
+    /// accepted and is spinning up (state still ready, wake still attached).
+    ///
+    /// | state                         | wake word | manual  |
+    /// |-------------------------------|-----------|---------|
+    /// | ready                         | accept    | accept  |
+    /// | ready + starting              | ignore    | ignore  |
+    /// | listening                     | ignore    | ignore  |
+    /// | transcribing/thinking/searching | ignore  | ignore  |
+    /// | speaking                      | ignore    | bargeIn |
+    ///
+    /// Wake never barges in: TTS through the speaker would wake itself.
+    static func admission(state: State, trigger: VoiceTrigger, starting: Bool) -> Admission {
+        switch (state, trigger) {
+        case (.ready, _): starting ? .ignore : .accept
+        case (.speaking, .manual): .bargeIn
+        default: .ignore
+        }
+    }
+
+    /// Mic button enabled where the table admits a press.
+    var micLive: Bool {
+        Self.admission(state: state, trigger: .manual, starting: false) != .ignore
+    }
 
     private let wake: WakeControlling
     private let capture: CaptureControlling
@@ -102,15 +134,32 @@ final class VoiceSession {
     private let minCapture: TimeInterval
     private let maxCapture: TimeInterval
     private let awaitSpeech: TimeInterval
+    private let stuckTimeout: TimeInterval
+    private let speakMargin: TimeInterval
+    private var speakLimit: TimeInterval = 0
     private var gen = 0
     private var pressGen = 0
-    private var activeTrigger: VoiceTrigger?
+    private(set) var activeTrigger: VoiceTrigger?
+    /// gen that set activeTrigger; only that capture's exit may clear it.
+    private var captureGen = 0
     private var activated = false
     private var startingWake = false
     private var wakeBroken = false
 
     convenience init() {
         self.init(wake: WakeListener(), capture: Recorder(), speaker: SpeechBus.shared)
+        MicEngine.shared.onLost = { [weak self] in self?.audioLost() }
+    }
+
+    /// Shared engine died under us: end a live capture as a release (or
+    /// drop a wake capture), and restart wake from scratch.
+    func audioLost() {
+        Log.voice.error("[voice] audio lost state=\(self.state.rawValue, privacy: .public) trigger=\(String(describing: self.activeTrigger), privacy: .public)")
+        if state == .listening {
+            if activeTrigger == .manual { endManual() } else { close() }
+        }
+        wake.stop()
+        resumeWake()
     }
 
     init(wake: WakeControlling,
@@ -122,7 +171,9 @@ final class VoiceSession {
          silenceTimeout: TimeInterval = 1.0,
          minCapture: TimeInterval = 0.5,
          maxCapture: TimeInterval = 20,
-         awaitSpeech: TimeInterval = 4) {
+         awaitSpeech: TimeInterval = 4,
+         stuckTimeout: TimeInterval = 45,
+         speakMargin: TimeInterval = 5) {
         self.wake = wake
         self.capture = capture
         self.speaker = speaker
@@ -133,7 +184,9 @@ final class VoiceSession {
         self.minCapture = minCapture
         self.maxCapture = maxCapture
         self.awaitSpeech = awaitSpeech
-        self.wake.onWake = { @MainActor [weak self] in self?.open(trigger: .wakeWord) }
+        self.stuckTimeout = stuckTimeout
+        self.speakMargin = speakMargin
+        self.wake.onWake = { @MainActor [weak self] in self?.open(trigger: .wakeWord) ?? false }
         self.wake.onFailed = { @MainActor [weak self] in
             self?.wakeBroken = true
             self?.emit("Wake-word keeps failing — tap Check in Setup to retry")
@@ -156,6 +209,7 @@ final class VoiceSession {
     }
 
     func deactivate() {
+        Log.voice.info("[voice] deactivate state=\(self.state.rawValue, privacy: .public)")
         activated = false
         wake.stop()
         gen += 1
@@ -188,29 +242,37 @@ final class VoiceSession {
 
     // MARK: - Triggers
 
-    /// Wake word opens from ready only (never mid-session, never mid-speech).
-    /// Manual opens from ready, or speaking (barge-in stops TTS first).
-    func open(trigger: VoiceTrigger) {
+    /// Opens a capture when `admission` accepts (or barges in). Returns
+    /// whether it was accepted, so the wake listener consumes only those.
+    @discardableResult
+    func open(trigger: VoiceTrigger) -> Bool {
         open(trigger: trigger, press: pressGen)
     }
 
-    private func open(trigger: VoiceTrigger, press: Int) {
-        switch trigger {
-        case .wakeWord:
-            guard state == .ready else { return }
-        case .manual:
-            if state == .speaking {
-                speaker.stop()
-            } else {
-                guard state == .ready else { return }
-            }
+    @discardableResult
+    private func open(trigger: VoiceTrigger, press: Int) -> Bool {
+        let starting = activeTrigger != nil
+        let a = Self.admission(state: state, trigger: trigger, starting: starting)
+        Log.voice.info("[voice] open \(String(describing: trigger), privacy: .public) state=\(self.state.rawValue, privacy: .public) starting=\(starting) -> \(String(describing: a), privacy: .public) press=\(press)/\(self.pressGen)")
+        switch a {
+        case .ignore: return false
+        case .bargeIn: speaker.stop()
+        case .accept: break
         }
         gen += 1
         let g = gen
+        captureGen = g
         activeTrigger = trigger
-        wake.stop()
+        // Wake keeps running until capture is attached (beginCapture): the
+        // shared engine stays up, so no route re-switch eats the press.
         if trigger == .wakeWord { chime() }
         Task { await beginCapture(trigger: trigger, gen: g, press: press) }
+        return true
+    }
+
+    /// Capture `g` ended (any path): drop its trigger unless a newer open owns it.
+    private func release(_ g: Int) {
+        if captureGen == g { activeTrigger = nil }
     }
 
     /// Mic press. Captures the press number synchronously so a release
@@ -219,6 +281,7 @@ final class VoiceSession {
     func beginManual() {
         pressGen += 1
         let p = pressGen
+        Log.voice.info("[voice] button press p=\(p) state=\(self.state.rawValue, privacy: .public) wakeRunning=\(self.wake.running)")
         Task {
             let ok: Bool
             if let micRequest {
@@ -226,6 +289,7 @@ final class VoiceSession {
             } else {
                 ok = await Recorder.requestPermission()
             }
+            Log.voice.info("[voice] press p=\(p) mic permission=\(ok)")
             guard ok else { emit("Microphone permission needed"); return }
             open(trigger: .manual, press: p)
         }
@@ -236,6 +300,7 @@ final class VoiceSession {
     /// manual capture. Wake captures end themselves on silence.
     func endManual() {
         pressGen += 1
+        Log.voice.info("[voice] button release press=\(self.pressGen) state=\(self.state.rawValue, privacy: .public) trigger=\(String(describing: self.activeTrigger), privacy: .public)")
         if activeTrigger == .manual {
             gen += 1
             activeTrigger = nil
@@ -280,14 +345,20 @@ final class VoiceSession {
     /// The one way Pip talks (replies, timers, import): speaking while
     /// TTS runs, then ready. Refused mid-listening (no self-feedback).
     func speak(_ text: String?) {
+        Log.voice.info("[voice] speak len=\(text?.count ?? -1) state=\(self.state.rawValue, privacy: .public) activated=\(self.activated)")
         guard state != .listening else { return }
         guard activated else { state = .ready; return }
         gen += 1
         let g = gen
         wake.stop()
+        // Expected length (~12 chars/s at the default rate) + margin; the
+        // watchdog ends speaking even if TTS never reports done.
+        speakLimit = Double(text?.count ?? 0) / 12 + speakMargin
         state = .speaking
         speaker.speak(text) { @MainActor [weak self] in
-            guard let self, g == self.gen, self.state == .speaking else { return }
+            guard let self else { return }
+            Log.voice.info("[voice] tts done gen=\(g)/\(self.gen) state=\(self.state.rawValue, privacy: .public)")
+            guard g == self.gen, self.state == .speaking else { return }
             self.state = .ready
             self.resumeWake()
         }
@@ -298,28 +369,39 @@ final class VoiceSession {
     private func beginCapture(trigger: VoiceTrigger, gen g: Int, press p: Int) async {
         guard p == pressGen else {
             // Released before we even started (permission was slow).
-            activeTrigger = nil
+            Log.voice.info("[voice] capture skipped: released before start")
+            release(g)
             resumeWake()
             return
         }
         do {
             try await capture.start()
+            Log.voice.info("[voice] capture started gen=\(g)/\(self.gen) press=\(p)/\(self.pressGen)")
         } catch {
+            Log.voice.error("[voice] capture start failed: \(error.localizedDescription, privacy: .public)")
+            release(g)
             guard g == gen else { return }
-            activeTrigger = nil
             emit("Recording failed: \(error.localizedDescription)")
             state = .ready
+            wake.stop() // fresh restart (a fired listener won't fire again)
             resumeWake()
             return
         }
-        guard g == gen else { try? capture.stop(); return }
+        guard g == gen else {
+            try? capture.stop()
+            release(g)
+            // An accepted wake was consumed: restart it fresh (resume checks state).
+            if trigger == .wakeWord { wake.stop(); resumeWake() }
+            return
+        }
         guard p == pressGen else {
             // Released before the engine spun up: unwind quietly.
             try? capture.stop()
-            activeTrigger = nil
+            release(g)
             resumeWake()
             return
         }
+        wake.stop()
         state = .listening
         listeningSince = Date()
         if trigger == .wakeWord {
@@ -342,7 +424,7 @@ final class VoiceSession {
             if !gate.heardSpeech, now >= awaitDeadline {
                 gen += 1
                 try? capture.stop()
-                activeTrigger = nil
+                release(g)
                 state = .ready
                 listeningSince = nil
                 resumeWake()
@@ -355,12 +437,17 @@ final class VoiceSession {
     }
 
     private func finishCapture(gen g: Int, silent: Bool) {
+        // Wake capture ends here (its trigger leaked before: the next
+        // "Hey Pip" was ignored as starting). Manual: endManual cleared it.
+        release(g)
         var url: URL?
         do {
             url = try capture.stop()
         } catch {
+            Log.voice.error("[voice] capture stop failed: \(error.localizedDescription, privacy: .public)")
             if !silent { emit("Couldn't save the recording") }
         }
+        Log.voice.info("[voice] capture finished silent=\(silent) held=\(self.listeningSince.map { Date().timeIntervalSince($0) } ?? -1) file=\(url != nil) gen=\(g)/\(self.gen)")
         if let t0 = listeningSince { lastHeld = Date().timeIntervalSince(t0) }
         listeningSince = nil
         guard g == gen else { return }
@@ -373,28 +460,61 @@ final class VoiceSession {
         pendingAudio = url
     }
 
+    /// No state is terminal: if a state outlives its limit with nothing
+    /// moving (same gen), go back to ready. Listening is capped at
+    /// maxCapture (a held button finishes as a release); the rest at stuckTimeout.
+    private func armWatchdog() {
+        guard state != .ready else { return }
+        let s = state, g = gen
+        let limit = switch s {
+        case .listening: maxCapture
+        case .speaking: speakLimit
+        default: stuckTimeout
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(limit))
+            guard let self, self.state == s, self.gen == g else { return }
+            Log.voice.error("[voice] watchdog: \(s.rawValue, privacy: .public) for \(limit)s -> ready")
+            if s == .listening, self.activeTrigger == .manual {
+                self.endManual()
+            } else {
+                self.close()
+            }
+        }
+    }
+
     private func support() -> WakeListener.Support {
         supportStub?() ?? WakeListener.support()
     }
 
     private func resumeWake() {
         guard activated, Self.wakeEnabled, state == .ready, !wakeBroken,
-              support() == .ok, !wake.running, !startingWake else { return }
+              support() == .ok, !wake.running, !startingWake else {
+            Log.wake.info("[wake] resume skipped activated=\(self.activated) enabled=\(Self.wakeEnabled) state=\(self.state.rawValue, privacy: .public) broken=\(self.wakeBroken) support=\(String(describing: self.support()), privacy: .public) running=\(self.wake.running) starting=\(self.startingWake)")
+            return
+        }
         startingWake = true
         let g = gen
+        Log.wake.info("[wake] resume start gen=\(g)")
         Task {
             defer { startingWake = false }
             do {
                 try await wake.start()
+                Log.wake.info("[wake] started gen=\(g)/\(self.gen)")
             } catch {
+                Log.wake.error("[wake] start failed: \(error.localizedDescription, privacy: .public)")
                 emit("Wake-word failed: \(error.localizedDescription)")
             }
-            guard g == gen else { wake.stop(); return }
+            guard g == gen else {
+                Log.wake.info("[wake] stale start (gen moved) -> stop")
+                wake.stop(); return
+            }
             refreshWakeStatus()
         }
     }
 
     private func emit(_ text: String) {
+        Log.voice.info("[voice] notice: \(text, privacy: .public)")
         notice = text
         noticeGen += 1
     }

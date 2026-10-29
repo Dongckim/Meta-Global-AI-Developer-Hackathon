@@ -130,13 +130,28 @@ final class Recorder {
         return Double(f.length) / f.fileFormat.sampleRate
     }
 
-    /// Clip length from WAV bytes (standard 44-byte header), or nil when malformed.
+    /// Clip length from WAV bytes, or nil when malformed. Walks the RIFF
+    /// chunks: AVAudioFile pads the header (a 4096-byte file held 0 frames).
     static func duration(of wav: Data) -> Double? {
-        guard wav.count >= 44 else { return nil }
-        let byteRate = UInt32(wav[28]) | UInt32(wav[29]) << 8
-            | UInt32(wav[30]) << 16 | UInt32(wav[31]) << 24
-        guard byteRate > 0 else { return nil }
-        return Double(wav.count - 44) / Double(byteRate)
+        let b = [UInt8](wav)
+        func u32(_ i: Int) -> Int {
+            Int(b[i]) | Int(b[i + 1]) << 8 | Int(b[i + 2]) << 16 | Int(b[i + 3]) << 24
+        }
+        guard b.count >= 12, b[0..<4].elementsEqual("RIFF".utf8),
+              b[8..<12].elementsEqual("WAVE".utf8) else { return nil }
+        var i = 12
+        var byteRate = 0
+        while i + 8 <= b.count {
+            let size = u32(i + 4)
+            if b[i..<i + 4].elementsEqual("fmt ".utf8), i + 20 <= b.count {
+                byteRate = u32(i + 16)
+            } else if b[i..<i + 4].elementsEqual("data".utf8) {
+                guard byteRate > 0 else { return nil }
+                return Double(min(size, b.count - i - 8)) / Double(byteRate)
+            }
+            i += 8 + size + (size & 1)
+        }
+        return nil
     }
 
     /// Loudness 0...1, or nil when unreadable. Exact 0 means digital silence.
