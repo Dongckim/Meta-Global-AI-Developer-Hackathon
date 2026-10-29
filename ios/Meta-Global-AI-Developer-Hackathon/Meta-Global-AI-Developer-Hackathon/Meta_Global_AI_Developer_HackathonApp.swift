@@ -111,8 +111,9 @@ enum DesignPreview: String {
 struct HeaderSamples: View {
     private let lines: [(VoiceSession.State, String, Bool)] = [
         (.ready, "Say “\(Persona.current.wakePhrase)”", false),
-        (.listening, "\(Persona.current.agentName) Listening", false),
-        (.thinking, "\(Persona.current.agentName) Thinking", true),
+        (.listening, "Listening", true),
+        (.transcribing, "“Yes”", true),
+        (.thinking, "Thinking", true),
         (.speaking, "Nice, C2–C8 are in.", false),
         (.speaking, "Got it — one active run, the Drug A / Drug B dosing protocol from tonight.", false),
         (.speaking, "Step 3 of 5, add 10 µL of Drug A working solution to each Drug A well. Four wells left: C5 to C8, then incubate.", false),
@@ -123,7 +124,11 @@ struct HeaderSamples: View {
         ScrollView {
             VStack(spacing: 0) {
                 ForEach(lines.indices, id: \.self) { i in
-                    TopHeaderView(style: Theme.orbStyle(for: lines[i].0), text: lines[i].1, dots: lines[i].2)
+                    TopHeaderView(style: Theme.orbStyle(for: lines[i].0), text: lines[i].1, dots: lines[i].2,
+                                  you: lines[i].0 == .transcribing,
+                                  status: [.listening, .thinking, .searching].contains(lines[i].0),
+                                  live: lines[i].0 != .ready,
+                                  hearing: [.listening, .transcribing].contains(lines[i].0))
                         .border(Color.black.opacity(0.08))
                 }
             }

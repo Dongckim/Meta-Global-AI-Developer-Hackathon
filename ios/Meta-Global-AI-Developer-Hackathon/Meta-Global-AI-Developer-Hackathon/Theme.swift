@@ -295,8 +295,9 @@ enum Theme {
             return OrbStyle(breathe: breatheThinking, ring: nil,
                             scale: 1.12, aurora: .think, hollow: false)
         case .speaking:
+            // final design: `.pip.speaking .orb{scale:1.18}`
             return OrbStyle(breathe: nil, ring: nil,
-                            scale: 1, aurora: .voice(amp: 0),
+                            scale: 1.18, aurora: .voice(amp: 0),
                             hollow: true)
         case .searching:
             return OrbStyle(breathe: nil, ring: nil,
@@ -313,6 +314,16 @@ enum Theme {
         var text: String
         /// Trailing animated dots (.pip .dots).
         var dots: Bool
+        /// A person is talking: gray "You" prefix (.pip .you).
+        var you: Bool = false
+        /// Status word in blue (.pip .lst: Listening / Thinking / Searching the web).
+        var status: Bool = false
+    }
+
+    /// Final design v26: the header pill lights up (`.pip.live`) while the
+    /// agent listens, thinks and answers; quiet otherwise.
+    static func pipLive(_ state: VoiceSession.State) -> Bool {
+        state != .ready
     }
 
     /// Ready line when "Hey Pip" can't run: nil = it can. Permission
@@ -339,21 +350,21 @@ enum Theme {
             // diff: design says "Say <name>" but the trigger is the wake phrase.
             return PipLine(text: "Say “\(Persona.current.wakePhrase)”", dots: false)
         case .listening:
-            return PipLine(text: "\(Persona.current.agentName) Listening", dots: false)
+            return PipLine(text: "Listening", dots: true, status: true)
         case .transcribing:
             if let partialText, !partialText.isEmpty {
-                return PipLine(text: partialText, dots: false)
+                return PipLine(text: "“\(partialText)”", dots: false, you: true)
             }
-            return PipLine(text: "Transcribing", dots: true)
+            return PipLine(text: "Listening", dots: true, status: true)
         case .thinking:
-            return PipLine(text: "\(Persona.current.agentName) Thinking", dots: true)
+            return PipLine(text: "Thinking", dots: true, status: true)
         case .speaking:
             if !speakText.isEmpty {
-                return PipLine(text: speakText, dots: false)
+                return PipLine(text: "“\(speakText)”", dots: false)
             }
             return PipLine(text: "Speaking", dots: true)
         case .searching:
-            return PipLine(text: "\(Persona.current.agentName) Searching", dots: true)
+            return PipLine(text: "Searching the web", dots: true, status: true)
         }
     }
 

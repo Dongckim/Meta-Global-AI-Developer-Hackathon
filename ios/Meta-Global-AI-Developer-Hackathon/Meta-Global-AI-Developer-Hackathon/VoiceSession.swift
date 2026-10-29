@@ -743,8 +743,15 @@ struct TopHeader: View {
         let line = Theme.pipText(for: voice.state, speakText: speakText,
                                  partialText: partialText, wake: voice.wakeSupport,
                                  wakeOn: VoiceSession.wakeEnabled)
-        TopHeaderView(style: Theme.orbStyle(for: voice.state), text: voice.aside ?? line.text,
-                      dots: voice.aside == nil && line.dots, muted: voice.aside != nil,
+        let idle = voice.inSession && voice.state == .listening
+        TopHeaderView(style: Theme.orbStyle(for: voice.state),
+                      text: voice.aside ?? (idle ? Theme.sessionIdleLine : line.text),
+                      dots: voice.aside == nil && !idle && line.dots,
+                      you: voice.aside == nil && line.you,
+                      status: voice.aside == nil && !idle && line.status,
+                      live: voice.aside == nil && !idle && Theme.pipLive(voice.state),
+                      hearing: voice.state == .transcribing || (voice.state == .listening && !idle),
+                      muted: voice.aside != nil || idle,
                       blocked: voice.state == .ready
                           && Theme.talkBlocker(wake: voice.wakeSupport, wakeOn: true) != nil,
                       onBlockedTap: onBlockedTap)
@@ -759,6 +766,14 @@ struct TopHeaderView: View {
     var style: Theme.OrbStyle
     var text: String
     var dots: Bool
+    /// Someone is talking: "You" in gray before the quoted words.
+    var you = false
+    /// The line is a status word (blue, design `.lst`); its dots go blue too.
+    var status = false
+    /// Listening / thinking / answering: the group sits on the lit pill.
+    var live = false
+    /// The mic is taking speech: the orb brightens (quiet otherwise).
+    var hearing = false
     /// Gray line (another voice ignored).
     var muted = false
     var blocked = false
@@ -777,13 +792,28 @@ struct TopHeaderView: View {
             .padding(.leading, px(64))
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: px(16)) {
-                OrbDisc(style: style, diameter: px(52))
+                OrbDisc(style: style, diameter: px(52), bright: hearing)
                     .frame(width: px(52) * Theme.orbMaxScale)
                 // 22 px (design .t24) by review; the design .pip is 26
                 WordReveal(text: text, dots: dots, size: px(22), lines: 2,
-                           color: muted ? Theme.mutT : .primary)
+                           color: muted ? Theme.mutT : (status ? Theme.blue : .primary),
+                           prefix: you ? "You" : nil, weight: status ? .medium : .regular,
+                           dotColor: status ? Theme.blue : Theme.mutT)
             }
             .frame(minHeight: px(64))
+            // design `.pip.live`: rgba(255,255,255,.94), padding 0 30 0 8,
+            // shadow 0 1 2 rgba(0,0,0,.05) + 0 12 34 -14 rgba(0,113,227,.45)
+            .padding(.leading, live ? px(8) : 0)
+            .padding(.trailing, live ? px(30) : 0)
+            .background {
+                if live {
+                    Capsule().fill(.white.opacity(0.94))
+                        .shadow(color: .black.opacity(0.05), radius: px(1), y: px(1))
+                        .shadow(color: Theme.blue.opacity(0.45), radius: px(17), y: px(12))
+                        .transition(.opacity)
+                }
+            }
+            .animation(Theme.ease(duration: 0.35), value: live)
             // keep clear of the mode label on both sides so the group stays centered
             .frame(maxWidth: max(0, width - 2 * px(64 + 180)))
             .contentShape(Rectangle())
@@ -803,20 +833,30 @@ struct TopHeaderView: View {
 struct OrbDisc: View {
     var style: Theme.OrbStyle
     var diameter: CGFloat = 40
+    /// Bright white core and stronger glow while hearing someone.
+    var bright = false
     @State private var on = false
 
     var body: some View {
         ZStack {
             Circle()
+                // design polish: the header orb is a hollow blue ring
                 .fill(RadialGradient(
-                    gradient: Gradient(stops: style.hollow
-                        ? Theme.orbSpeakingStops : Theme.orbStops),
-                    center: .init(x: 0.5, y: 0.52),
+                    gradient: Gradient(stops: Theme.orbSpeakingStops),
+                    center: .init(x: 0.5, y: 0.5),
                     startRadius: 0, endRadius: diameter / 2))
+                .overlay {
+                    // hearing someone: the ring fills with a bright white core
+                    Circle()
+                        .fill(RadialGradient(colors: [.white, .white.opacity(0.6), .clear],
+                                             center: .center, startRadius: 0, endRadius: diameter * 0.42))
+                        .opacity(bright ? 1 : 0)
+                        .animation(Theme.ease(duration: 0.35), value: bright)
+                }
                 .frame(width: diameter, height: diameter)
                 .blur(radius: diameter * 0.075)
-                // the orb itself glows; no larger aurora around it
-                .shadow(color: glow.opacity(0.75), radius: diameter * 0.18)
+                // quiet: a soft glow; hearing: a stronger one
+                .shadow(color: glow.opacity(bright ? 0.9 : 0.45), radius: diameter * (bright ? 0.3 : 0.16))
                 .scaleEffect(breathe * style.scale)
                 .opacity(breatheOpacity)
                 .animation(breatheAnim, value: on)
@@ -868,12 +908,16 @@ struct WordReveal: View {
     /// Lines before truncating (header: 2).
     var lines: Int = 1
     var color: Color = .primary
+    /// Gray lead word ("You" while a person talks).
+    var prefix: String? = nil
+    var weight: Font.Weight = .regular
+    var dotColor: Color = Theme.mutT
     @State private var shown = false
 
     var body: some View {
         HStack(spacing: 6) {
             textFlow
-            if dots { ThinkingDots() }
+            if dots { ThinkingDots(color: dotColor) }
         }
         .id(text)
         .onAppear { shown = true }
@@ -883,10 +927,10 @@ struct WordReveal: View {
         // Single Text keeps selection/ VoiceOver simple; per-word reveal
         // via staggered overlay is overkill at bar size, so the line fades
         // in as one while the orb carries the motion.
-        Text(text)
+        let lead = prefix.map { Text("\($0) ").foregroundColor(Theme.mutT) } ?? Text("")
+        return (lead + Text(text).foregroundColor(color).fontWeight(weight))
             .font(Theme.ui(size))
             .tracking(-0.012 * size)
-            .foregroundStyle(color)
             .lineLimit(lines)
             .multilineTextAlignment(.leading)
             .truncationMode(.tail)
@@ -898,13 +942,14 @@ struct WordReveal: View {
 
 /// Trailing `.pip .dots`: three 7px dots, sequential blink.
 struct ThinkingDots: View {
+    var color: Color = Theme.mutT
     @State private var on = false
 
     var body: some View {
         HStack(spacing: 6) {
             ForEach(0 ..< 3) { i in
                 Circle()
-                    .fill(Theme.mutT)
+                    .fill(color)
                     .frame(width: 7, height: 7)
                     .opacity(on ? 1 : 0.25)
                     .animation(

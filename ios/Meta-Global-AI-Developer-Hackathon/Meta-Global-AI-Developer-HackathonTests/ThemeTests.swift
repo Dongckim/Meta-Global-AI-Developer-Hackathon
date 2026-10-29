@@ -49,6 +49,7 @@ struct OrbStyleTests {
         #expect(s.ring == nil)
         #expect(s.hollow == true)
         #expect(s.aurora == .voice(amp: 0))
+        #expect(s.scale == 1.18) // final design .pip.speaking .orb
     }
 
     @Test func searchingSweeps() {
@@ -63,11 +64,18 @@ struct PipLineTests {
         #expect(Theme.pipText(for: .ready, speakText: "", partialText: nil)
             == Theme.PipLine(text: "Say “\(Persona.current.wakePhrase)”", dots: false))
         #expect(Theme.pipText(for: .listening, speakText: "", partialText: nil)
-            == Theme.PipLine(text: "\(Persona.current.agentName) Listening", dots: false))
+            == Theme.PipLine(text: "Listening", dots: true, status: true)) // design .lst
         #expect(Theme.pipText(for: .thinking, speakText: "", partialText: nil)
-            == Theme.PipLine(text: "\(Persona.current.agentName) Thinking", dots: true))
+            == Theme.PipLine(text: "Thinking", dots: true, status: true))
         #expect(Theme.pipText(for: .searching, speakText: "", partialText: nil)
-            == Theme.PipLine(text: "\(Persona.current.agentName) Searching", dots: true))
+            == Theme.PipLine(text: "Searching the web", dots: true, status: true))
+    }
+
+    @Test func headerPillLightsWhileTheAgentIsBusy() {
+        #expect(!Theme.pipLive(.ready))
+        for st: VoiceSession.State in [.listening, .transcribing, .thinking, .searching, .speaking] {
+            #expect(Theme.pipLive(st), Comment(rawValue: st.rawValue))
+        }
     }
 
     @Test func transcribingShowsPartialSlot() {
@@ -75,14 +83,15 @@ struct PipLineTests {
                               partialText: nil).dots == true)
         let live = Theme.pipText(for: .transcribing, speakText: "",
                                  partialText: "Note B4, small bubble")
-        #expect(live == Theme.PipLine(text: "Note B4, small bubble",
-                                       dots: false))
+        // a person talking: quoted, "You" pill, dots while still hearing
+        #expect(live == Theme.PipLine(text: "“Note B4, small bubble”",
+                                       dots: false, you: true))
     }
 
     @Test func speakingShowsReplyVerbatim() {
         let live = Theme.pipText(for: .speaking, speakText: "C3 excluded.",
                                  partialText: nil)
-        #expect(live == Theme.PipLine(text: "C3 excluded.", dots: false))
+        #expect(live == Theme.PipLine(text: "“C3 excluded.”", dots: false))
         #expect(Theme.pipText(for: .speaking, speakText: "",
                               partialText: nil).dots == true)
     }
@@ -261,7 +270,7 @@ struct TalkLineTests {
                               wake: .ok).text == "Say “\(Persona.current.wakePhrase)”")
         // other states are unaffected
         #expect(Theme.pipText(for: .listening, speakText: "", partialText: nil,
-                              wake: .micDenied).text == "\(Persona.current.agentName) Listening")
+                              wake: .micDenied).text == "Listening")
     }
 }
 
