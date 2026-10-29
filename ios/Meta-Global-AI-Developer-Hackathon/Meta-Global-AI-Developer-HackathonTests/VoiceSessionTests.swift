@@ -68,6 +68,7 @@ final class FakeCapture: CaptureControlling {
 @MainActor
 final class FakeSpeaker: SpeakerControlling {
     var texts: [String?] = []
+    var lastWordAt = Date.distantPast
     var stops = 0
     private var done: (() -> Void)?
     func speak(_ text: String?, onDone: @escaping () -> Void) {
@@ -90,6 +91,8 @@ final class FakeLive: LiveControlling {
         if fail { throw LiveError.refused("test") }
     }
     func end() { ends += 1 }
+    var audioRestarts = 0
+    func restartAudio() async { audioRestarts += 1 }
     func send(_ ev: LiveEvent) { onEvent?(ev) }
 }
 
@@ -107,7 +110,9 @@ struct VoiceSessionTests {
                              mic: (() async -> Bool)? = nil,
                              stuck: TimeInterval = 45,
                              speakMargin: TimeInterval = 5,
-                             live: FakeLive? = nil) -> VoiceSession {
+                             live: FakeLive? = nil,
+                             ended: Flag? = nil,
+                             firstClose: Bool = false) -> VoiceSession {
         VoiceSession.sharedWakeOn()
         let flag = chimed ?? Flag()
         return VoiceSession(wake: wake ?? FakeWake(), capture: capture ?? FakeCapture(),
@@ -118,7 +123,9 @@ struct VoiceSessionTests {
                             silenceTimeout: 0.05, minCapture: 0.02,
                             maxCapture: 5, awaitSpeech: 0.1, stuckTimeout: stuck,
                             speakMargin: speakMargin,
-                            liveFactory: live.map { l in { l } })
+                            liveFactory: live.map { l in { l } },
+                            endChime: { ended?.value = true },
+                            closeDay: { _ in firstClose })
     }
 
     private func settle(until: @escaping () -> Bool, timeout: Double = 3) async -> Bool {
@@ -491,9 +498,76 @@ struct VoiceSessionTests {
         speaker.complete()
         #expect(voice.state == .listening && !live.muted) // back to the open session
         #expect(!wake.running) // wake stays off during the session
-        live.send(.closed("window"))
+        live.send(.closed(why: "window"))
         #expect(voice.state == .ready && !voice.inSession)
         #expect(await settle { wake.running }) // wake resumes after the session
+    }
+
+    @Test func longSpeechInSessionIsNeverCutAndStallsKeepTheSession() async {
+        let wake = FakeWake(), speaker = FakeSpeaker(), live = FakeLive()
+        let voice = makeSession(wake: wake, speaker: speaker, speakMargin: 0.3, live: live)
+        await openSession(voice, wake)
+        voice.speak(String(repeating: "C2 has bubbles. ", count: 40)) // a long list
+        for _ in 0..<6 { // words keep coming for ~0.9 s, longer than the margin
+            try? await Task.sleep(for: .milliseconds(150))
+            speaker.lastWordAt = Date()
+        }
+        #expect(voice.state == .speaking && voice.inSession) // progressing: not cut
+        // the voice stalls: recover to listening, the session stays open
+        #expect(await settle { voice.state == .listening })
+        #expect(voice.inSession && live.ends == 0 && !live.muted && speaker.stops >= 1)
+    }
+
+    @Test func audioLossInSessionReattachesInsteadOfClosing() async {
+        let wake = FakeWake(), live = FakeLive()
+        let voice = makeSession(wake: wake, live: live)
+        await openSession(voice, wake)
+        voice.audioLost()
+        #expect(await settle { live.audioRestarts == 1 })
+        #expect(voice.inSession && voice.state == .listening && live.ends == 0)
+    }
+
+    private func openSession(_ voice: VoiceSession, _ wake: FakeWake) async {
+        voice.activate()
+        _ = await settle { wake.running }
+        wake.fire()
+        _ = await settle { voice.inSession }
+    }
+
+    @Test func windowCloseChimesAndSaysFirstCloseLineOnce() async {
+        let wake = FakeWake(), speaker = FakeSpeaker(), live = FakeLive(), ended = Flag()
+        let voice = makeSession(wake: wake, speaker: speaker, live: live, ended: ended, firstClose: true)
+        await openSession(voice, wake)
+        #expect(voice.edgeFade == Theme.edgeFade)
+        live.send(.closed(why: "window"))
+        #expect(ended.value && voice.edgeFade == Theme.edgeSessionFade) // sound + 1 s fade
+        #expect(speaker.texts == [Persona.live.firstCloseLine]) // the day's first close
+    }
+
+    @Test func laterClosesAndExplicitEndStayQuiet() async {
+        let wake = FakeWake(), speaker = FakeSpeaker(), live = FakeLive(), ended = Flag()
+        let voice = makeSession(wake: wake, speaker: speaker, live: live, ended: ended, firstClose: false)
+        await openSession(voice, wake)
+        live.send(.closed(why: "window"))
+        #expect(ended.value && speaker.texts.isEmpty) // not the day's first close
+        let wake2 = FakeWake(), speaker2 = FakeSpeaker(), live2 = FakeLive(), ended2 = Flag()
+        let voice2 = makeSession(wake: wake2, speaker: speaker2, live: live2, ended: ended2, firstClose: true)
+        await openSession(voice2, wake2)
+        live2.send(.closed(why: "end_session")) // "thanks" already got its reply
+        #expect(ended2.value && speaker2.texts.isEmpty)
+    }
+
+    @Test func brokenStreamFallsBackForAWhile() async {
+        let wake = FakeWake(), capture = FakeCapture(), live = FakeLive(), ended = Flag()
+        let voice = makeSession(wake: wake, capture: capture, live: live, ended: ended)
+        await openSession(voice, wake)
+        live.send(.closed(why: "error"))
+        #expect(!ended.value && voice.aside == Persona.live.fallbackLine && !voice.inSession)
+        #expect(await settle { wake.running })
+        capture.script = [0.5, 0.5, 0, 0, 0, 0]
+        wake.fire()
+        #expect(await settle { voice.state == .transcribing }) // per-utterance capture now
+        #expect(live.starts == 1 && capture.starts == 1)
     }
 
     @Test func liveIgnoredShowsAsideAndKeepsListening() async {

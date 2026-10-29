@@ -186,6 +186,10 @@ enum Theme {
     static let edgeRadius: CGFloat = 32
     static let edgeSpin: Double = 2.6
     static let edgeFade: Double = 0.5
+    /// A live session's close fades slower.
+    static let edgeSessionFade: Double = 1.0
+    /// Top line while a live session is open and nobody talks.
+    static let sessionIdleLine = "Listening…"
 
     struct EdgeStyle: Equatable {
         var colors: [Color]
@@ -200,18 +204,22 @@ enum Theme {
     /// Edge glow from voice state only. `level` = smoothed mic RMS, `pulse`
     /// 0...1 decaying from the last TTS word. nil = not drawn (ready).
     static func edgeStyle(for state: VoiceSession.State, level: Float, pulse: Double,
-                          reduceMotion: Bool) -> EdgeStyle? {
+                          reduceMotion: Bool, session: Bool = false) -> EdgeStyle? {
         var s: EdgeStyle
-        switch state {
-        case .ready:
+        switch (state, session) {
+        case (.ready, _):
             return nil
-        case .listening:
+        case (.listening, true):
+            // session idle: open but quiet — dim and slow
+            s = EdgeStyle(colors: edgeListening, spin: edgeSpin * 3, brightness: 0.3, thickness: 0.8)
+        case (.listening, false), (.transcribing, true):
+            // someone is talking (in a session, partials mean speech)
             let n = CGFloat(min(1, max(0, level / 0.12)))
             s = EdgeStyle(colors: edgeListening, spin: edgeSpin,
                           brightness: 0.8 + 0.2 * Double(n), thickness: 1 + 0.6 * n)
-        case .transcribing, .thinking, .searching:
+        case (.transcribing, false), (.thinking, _), (.searching, _):
             s = EdgeStyle(colors: edgeListening, spin: edgeSpin * 2, brightness: 0.55, thickness: 1)
-        case .speaking:
+        case (.speaking, _):
             let p = min(1, max(0, pulse))
             s = EdgeStyle(colors: edgeSpeaking, spin: edgeSpin,
                           brightness: 0.8 + 0.2 * p, thickness: 1 + 0.35 * CGFloat(p))

@@ -274,7 +274,12 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             Log.voice.info("[voice] scenePhase \(String(describing: phase), privacy: .public)")
-            if phase == .active { voice.activate() } else { voice.deactivate() }
+            // inactive (Control Center, alerts) keeps a live session; background ends it
+            if phase == .active {
+                voice.activate()
+            } else if phase == .background || !voice.inSession {
+                voice.deactivate()
+            }
         }
         .onChange(of: showSettings) { _, shown in if !shown { voice.refresh() } }
         .onChange(of: voice.pendingAudio) { _, url in

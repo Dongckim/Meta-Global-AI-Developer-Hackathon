@@ -43,7 +43,7 @@ struct EdgeGlow: View {
             }
         }
         .opacity(active ? 1 : 0)
-        .animation(.easeInOut(duration: Theme.edgeFade), value: active)
+        .animation(.easeInOut(duration: voice.edgeFade), value: active)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .onChange(of: active, initial: true) { _, on in
@@ -51,7 +51,7 @@ struct EdgeGlow: View {
                 shown = true
             } else {
                 Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(Theme.edgeFade))
+                    try? await Task.sleep(for: .seconds(voice.edgeFade))
                     if !active { shown = false }
                 }
             }
@@ -64,7 +64,8 @@ struct EdgeGlow: View {
         let _ = meter.lastTick = now
         let level = meter.follower.step(MicEngine.shared.level, dt: dt)
         let pulse = Theme.wordPulse(since: SpeechBus.shared.lastWordAt, now: now)
-        let live = Theme.edgeStyle(for: voice.state, level: level, pulse: pulse, reduceMotion: reduceMotion)
+        let live = Theme.edgeStyle(for: voice.state, level: level, pulse: pulse, reduceMotion: reduceMotion,
+                                   session: voice.inSession)
         let _ = live.map { meter.lastStyle = $0 }
         if let style = live ?? meter.lastStyle {
             let px = { (v: CGFloat) in Theme.px(v, in: width) }

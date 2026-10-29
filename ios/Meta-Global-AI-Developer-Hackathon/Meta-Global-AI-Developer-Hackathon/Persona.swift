@@ -19,6 +19,26 @@ struct Persona: Decodable, Equatable {
 
     static let current: Persona = load(from: Bundle.main.url(forResource: "pip_voice", withExtension: "json"))
 
+    /// Live conversation lines (pip_voice.json `live`).
+    struct Live: Decodable, Equatable {
+        var firstCloseLine: String
+        var fallbackLine: String
+        enum CodingKeys: String, CodingKey {
+            case firstCloseLine = "first_close_line", fallbackLine = "fallback_line"
+        }
+    }
+
+    static let live: Live = {
+        struct File: Decodable { var live: Live }
+        guard let url = Bundle.main.url(forResource: "pip_voice", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let file = try? JSONDecoder().decode(File.self, from: data) else {
+            Log.voice.error("[voice] live lines missing in pip_voice.json")
+            return Live(firstCloseLine: "", fallbackLine: "")
+        }
+        return file.live
+    }()
+
     /// Neutral stand-in when the bundled file is missing or broken (logged).
     static let fallback = Persona(agentName: "Assistant", wakePhrase: "", voice: "", quality: "premium",
                                   language: "en-US", rate: 0.52, pitch: 0.92)

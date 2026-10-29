@@ -31,6 +31,8 @@ protocol CaptureControlling: AnyObject {
 protocol SpeakerControlling: AnyObject {
     func speak(_ text: String?, onDone: @escaping () -> Void)
     func stop()
+    /// When TTS last started a word: speech still progressing.
+    var lastWordAt: Date { get }
 }
 
 extension WakeListener: WakeControlling {
@@ -95,6 +97,12 @@ final class VoiceSession {
     private(set) var liveTurn: VoiceResponse?
     private(set) var liveTurnGen = 0
     var inSession: Bool { live != nil }
+    /// Edge fade for the next disappearance: 1 s when a session closes.
+    private(set) var edgeFade: Double = Theme.edgeFade
+    /// After a broken stream, wakes use the per-utterance capture until then.
+    private var liveBackoffUntil: Date = .distantPast
+    private let endChime: () -> Void
+    private let closeDay: (Date) -> Bool
     private(set) var notice = ""
     private(set) var noticeGen = 0
 
@@ -148,7 +156,7 @@ final class VoiceSession {
     private let awaitSpeech: TimeInterval
     private let stuckTimeout: TimeInterval
     private let speakMargin: TimeInterval
-    private var speakLimit: TimeInterval = 0
+    private var speakStartedAt = Date.distantPast
     private var gen = 0
     private var pressGen = 0
     private(set) var activeTrigger: VoiceTrigger?
@@ -164,10 +172,15 @@ final class VoiceSession {
         MicEngine.shared.onLost = { [weak self] in self?.audioLost() }
     }
 
-    /// Shared engine died under us: end a live capture as a release (or
-    /// drop a wake capture), and restart wake from scratch.
+    /// Shared engine died under us: end a capture as a release (or drop a
+    /// wake capture) and restart wake from scratch. A live session is not
+    /// closed: its mic sink re-attaches to the rebuilt engine.
     func audioLost() {
-        Log.voice.error("[voice] audio lost state=\(self.state.rawValue, privacy: .public) trigger=\(String(describing: self.activeTrigger), privacy: .public)")
+        Log.voice.error("[voice] audio lost state=\(self.state.rawValue, privacy: .public) trigger=\(String(describing: self.activeTrigger), privacy: .public) live=\(self.live != nil)")
+        if let live {
+            Task { await live.restartAudio() }
+            return
+        }
         if state == .listening {
             if activeTrigger == .manual { endManual() } else { close() }
         }
@@ -187,7 +200,9 @@ final class VoiceSession {
          awaitSpeech: TimeInterval = 4,
          stuckTimeout: TimeInterval = 45,
          speakMargin: TimeInterval = 5,
-         liveFactory: (@MainActor () -> LiveControlling)? = nil) {
+         liveFactory: (@MainActor () -> LiveControlling)? = nil,
+         endChime: @escaping () -> Void = { AudioServicesPlaySystemSound(1114) },
+         closeDay: @escaping (Date) -> Bool = VoiceSession.firstCloseToday) {
         self.wake = wake
         self.capture = capture
         self.speaker = speaker
@@ -201,6 +216,8 @@ final class VoiceSession {
         self.stuckTimeout = stuckTimeout
         self.speakMargin = speakMargin
         self.liveFactory = liveFactory
+        self.endChime = endChime
+        self.closeDay = closeDay
         self.wake.onWake = { @MainActor [weak self] in self?.open(trigger: .wakeWord) ?? false }
         self.wake.onFailed = { @MainActor [weak self] in
             self?.wakeBroken = true
@@ -226,7 +243,7 @@ final class VoiceSession {
     func deactivate() {
         Log.voice.info("[voice] deactivate state=\(self.state.rawValue, privacy: .public)")
         activated = false
-        if live != nil { endLive("app inactive") }
+        if live != nil { endLive("app background") }
         wake.stop()
         gen += 1
         if state == .listening {
@@ -291,7 +308,7 @@ final class VoiceSession {
         // Wake keeps running until capture is attached (beginCapture): the
         // shared engine stays up, so no route re-switch eats the press.
         if trigger == .wakeWord { chime() }
-        if trigger == .wakeWord, let make = liveFactory {
+        if trigger == .wakeWord, let make = liveFactory, Date() >= liveBackoffUntil {
             Task { await beginLive(make, gen: g, press: press) }
         } else {
             Task { await beginCapture(trigger: trigger, gen: g, press: press) }
@@ -382,9 +399,9 @@ final class VoiceSession {
         gen += 1
         let g = gen
         wake.stop()
-        // Expected length (~12 chars/s at the default rate) + margin; the
-        // watchdog ends speaking even if TTS never reports done.
-        speakLimit = Double(text?.count ?? 0) / 12 + speakMargin
+        // The watchdog follows the voice's real progress (word boundaries),
+        // so a long reply at any rate never trips it; only a stall does.
+        speakStartedAt = Date()
         state = .speaking
         live?.muted = true // the mic would hear the agent: stream silence
         speaker.speak(text) { @MainActor [weak self] in
@@ -412,6 +429,7 @@ final class VoiceSession {
             self.liveEvent(ev)
         }
         live = link
+        edgeFade = Theme.edgeFade
         do {
             try await link.start(session: "bench")
         } catch {
@@ -442,8 +460,8 @@ final class VoiceSession {
             partialText = nil
             liveTurn = r
             liveTurnGen += 1
-        case .closed(let reason):
-            endLive(reason)
+        case .closed(let why):
+            endLive(why)
         }
     }
 
@@ -458,20 +476,45 @@ final class VoiceSession {
         }
     }
 
-    /// Session over (server closed, error, app inactive): back to ready and
-    /// wake detection resumes. A reply still speaking finishes first.
-    private func endLive(_ reason: String) {
+    /// Session over: back to ready and wake detection resumes (a reply still
+    /// speaking finishes first). A normal close fades the edge over 1 s with a
+    /// small sound; the day's first window close also says the close line. A
+    /// broken stream shows the fallback line and wakes use the per-utterance
+    /// capture for a while.
+    private func endLive(_ why: String) {
         guard let link = live else { return }
-        Log.voice.info("[voice] live session end: \(reason, privacy: .public)")
+        Log.voice.info("[voice] live close reason=\(why, privacy: .public)")
         live = nil
         link.onEvent = nil
         link.end()
         partialText = nil
+        edgeFade = Theme.edgeSessionFade
         if state == .listening || state == .transcribing {
             state = .ready
             listeningSince = nil
         }
+        switch why {
+        case "error":
+            liveBackoffUntil = Date().addingTimeInterval(120)
+            showAside(Persona.live.fallbackLine)
+        case "client":
+            break // the app left (background): nothing to announce
+        default:
+            endChime()
+            if why != "end_session", closeDay(Date()), !Persona.live.firstCloseLine.isEmpty {
+                speak(Persona.live.firstCloseLine)
+            }
+        }
         resumeWake()
+    }
+
+    /// True the first time it's asked on a calendar day (then remembered).
+    static func firstCloseToday(_ now: Date) -> Bool {
+        let day = now.formatted(.iso8601.year().month().day())
+        let key = "pip.liveFirstCloseDay"
+        guard UserDefaults.standard.string(forKey: key) != day else { return false }
+        UserDefaults.standard.set(day, forKey: key)
+        return true
     }
 
     // MARK: - Private
@@ -573,23 +616,46 @@ final class VoiceSession {
     /// No state is terminal: if a state outlives its limit with nothing
     /// moving (same gen), go back to ready. Listening is capped at
     /// maxCapture (a held button finishes as a release); the rest at stuckTimeout.
+    /// No state is terminal. Speaking ends when the voice stalls (no word
+    /// boundary for `speakMargin` s); listening caps at maxCapture; others
+    /// at stuckTimeout. In a live session a timeout recovers to listening and
+    /// never closes the session (only the window, an explicit end, the max
+    /// duration or a broken stream do).
     private func armWatchdog() {
         guard state != .ready else { return }
         let s = state, g = gen
-        let limit = switch s {
-        case .listening: live != nil ? 600 : maxCapture // the server closes a quiet session
-        case .speaking: speakLimit
-        default: stuckTimeout
-        }
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(limit))
+            if s == .speaking {
+                while true {
+                    try? await Task.sleep(for: .seconds(0.5))
+                    guard let self, self.state == s, self.gen == g else { return }
+                    let last = max(self.speakStartedAt, self.speaker.lastWordAt)
+                    if Date().timeIntervalSince(last) >= self.speakMargin { break }
+                }
+            } else {
+                guard let limit = self?.watchLimit(s) else { return }
+                try? await Task.sleep(for: .seconds(limit))
+            }
             guard let self, self.state == s, self.gen == g else { return }
-            Log.voice.error("[voice] watchdog: \(s.rawValue, privacy: .public) for \(limit)s -> ready")
-            if s == .listening, self.activeTrigger == .manual {
+            Log.voice.error("[voice] watchdog: \(s.rawValue, privacy: .public) stuck -> \(self.live != nil ? "listening (session kept)" : "ready", privacy: .public)")
+            if live != nil {
+                if s == .speaking { speaker.stop() }
+                live?.muted = false
+                partialText = nil
+                gen += 1
+                state = .listening
+            } else if s == .listening, self.activeTrigger == .manual {
                 self.endManual()
             } else {
                 self.close()
             }
+        }
+    }
+
+    private func watchLimit(_ s: State) -> TimeInterval {
+        switch s {
+        case .listening: live != nil ? 600 : maxCapture
+        default: stuckTimeout
         }
     }
 

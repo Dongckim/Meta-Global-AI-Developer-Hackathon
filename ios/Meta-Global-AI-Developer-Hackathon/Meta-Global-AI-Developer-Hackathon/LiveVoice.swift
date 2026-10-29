@@ -10,18 +10,22 @@ enum LiveEvent {
     case ignored(line: String)
     /// The owner's turn, processed by the server like a /voice reply.
     case turn(VoiceResponse, endSession: Bool)
-    /// The session is over (server window, error, or the socket dropped).
-    case closed(String)
+    /// The session is over. `why`: window / max_duration / end_session /
+    /// client / server (normal) or error (the stream broke).
+    case closed(why: String)
 }
 
 /// Seam for tests; LiveLink is the real one.
 @MainActor
 protocol LiveControlling: AnyObject {
     var onEvent: ((LiveEvent) -> Void)? { get set }
-    /// Sends silence instead of the mic (while the agent speaks).
+    /// The agent is speaking: send silence instead of the mic and tell the
+    /// server (its window clock pauses).
     var muted: Bool { get set }
     func start(session: String) async throws
     func end()
+    /// The engine was rebuilt (route change, interruption): re-attach the mic.
+    func restartAudio() async
 }
 
 /// Float samples at 16 kHz -> 80 ms PCM16 LE mono frames (2560 bytes).
@@ -54,13 +58,33 @@ final class FlagBox: @unchecked Sendable {
 }
 
 /// One more sink on the one MicEngine tap: 16 kHz stays as is (glasses
-/// HFP), other rates convert to 16 kHz; frames go to `send`.
+/// HFP), other rates convert to 16 kHz; frames go to `send`. While muted
+/// (the agent speaks) the tap's audio is dropped and an audio-queue timer
+/// sends 80 ms of silence on its own clock, so the stream keeps real time
+/// whatever TTS, the UI or the engine do.
 @MainActor
 final class LiveMic {
     let muted = FlagBox()
     private var sinkID: UUID?
+    private var send: (@Sendable (Data) -> Void)?
+    private var silence: DispatchSourceTimer?
+    private let audioQueue = DispatchQueue(label: "live.silence", qos: .userInteractive)
+
+    func setMuted(_ on: Bool) {
+        muted.set(on)
+        silence?.cancel()
+        silence = nil
+        guard on, let send else { return }
+        let t = DispatchSource.makeTimerSource(queue: audioQueue)
+        let frame = Data(count: PCMFramer.frameBytes)
+        t.schedule(deadline: .now(), repeating: .milliseconds(80), leeway: .milliseconds(5))
+        t.setEventHandler { send(frame) }
+        t.resume()
+        silence = t
+    }
 
     func start(send: @escaping @Sendable (Data) -> Void) async throws {
+        self.send = send
         let rate = try await MicEngine.shared.prepare()
         guard let input = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate,
                                         channels: 1, interleaved: false),
@@ -90,15 +114,33 @@ final class LiveMic {
                 guard err == nil, status != .error else { return }
                 src = out
             }
+            guard !muted.value else { return } // the silence timer speaks for us
             guard let ch = src.floatChannelData, src.frameLength > 0 else { return }
             let samples = UnsafeBufferPointer(start: ch[0], count: Int(src.frameLength))
-            for frame in framer.value.framer.append(samples, muted: muted.value) { send(frame) }
+            for frame in framer.value.framer.append(samples, muted: false) { send(frame) }
         }
     }
 
     func stop() {
+        silence?.cancel()
+        silence = nil
         if let id = sinkID { MicEngine.shared.unsubscribe(id) }
         sinkID = nil
+    }
+
+    /// Re-attach to a rebuilt engine, keeping the same send and mute state.
+    func restart() async {
+        guard let send else { return }
+        let wasMuted = muted.value
+        if let id = sinkID { MicEngine.shared.unsubscribe(id) }
+        sinkID = nil
+        do {
+            try await start(send: send)
+            Log.audio.info("[audio] live sink re-attached")
+        } catch {
+            Log.audio.error("[audio] live sink re-attach failed: \(error.localizedDescription, privacy: .public)")
+        }
+        setMuted(wasMuted)
     }
 
     /// Tap-thread-only state holder.
@@ -128,7 +170,11 @@ final class LiveLink: LiveControlling {
 
     var muted: Bool {
         get { mic.muted.value }
-        set { mic.muted.set(newValue) }
+        set {
+            guard newValue != mic.muted.value else { return }
+            mic.setMuted(newValue)
+            task?.send(.string(#"{"type":"tts","speaking":\#(newValue)}"#)) { _ in }
+        }
     }
 
     func start(session: String) async throws {
@@ -162,13 +208,19 @@ final class LiveLink: LiveControlling {
         task?.send(.string(#"{"type":"end"}"#)) { _ in }
     }
 
+    func restartAudio() async {
+        guard !finished else { return }
+        await mic.restart()
+    }
+
     private func receiveLoop(_ t: URLSessionWebSocketTask) async {
         while !finished {
             do {
                 let m = try await t.receive()
                 handle(m)
             } catch {
-                finish("socket: \(error.localizedDescription)")
+                Log.voice.error("[voice] live socket: \(error.localizedDescription, privacy: .public)")
+                finish("error")
             }
         }
     }
@@ -189,22 +241,24 @@ final class LiveLink: LiveControlling {
             }
             onEvent?(.turn(r, endSession: obj["end_session"] as? Bool ?? false))
         case "error":
-            finish("error: \(obj["message"] as? String ?? "?")")
+            Log.voice.error("[voice] live error: \(obj["message"] as? String ?? "?", privacy: .public)")
+            finish("error")
         case "closed":
-            finish("closed \(obj["code"].map { "\($0)" } ?? "-") \(obj["reason"] as? String ?? "")")
+            Log.voice.info("[voice] live closed code=\(obj["code"].map { "\($0)" } ?? "-", privacy: .public) why=\(obj["why"] as? String ?? "?", privacy: .public)")
+            finish(obj["why"] as? String ?? "server")
         default:
             break
         }
     }
 
-    private func finish(_ reason: String) {
+    private func finish(_ why: String) {
         guard !finished else { return }
         finished = true
         mic.stop()
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
-        Log.voice.info("[voice] live finished: \(reason, privacy: .public)")
-        onEvent?(.closed(reason))
+        Log.voice.info("[voice] live finished: \(why, privacy: .public)")
+        onEvent?(.closed(why: why))
     }
 
     private static func object(_ m: URLSessionWebSocketTask.Message) -> [String: Any] {

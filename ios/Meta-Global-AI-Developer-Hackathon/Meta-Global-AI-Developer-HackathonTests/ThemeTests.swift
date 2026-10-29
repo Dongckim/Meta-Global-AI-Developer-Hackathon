@@ -347,6 +347,11 @@ struct EdgeGlowTests {
         #expect(think.spin == Theme.edgeSpin * 2 && think.brightness < quiet.brightness)
         let speak = Theme.edgeStyle(for: .speaking, level: 0, pulse: 1, reduceMotion: false)!
         #expect(speak.colors == Theme.edgeSpeaking && speak.thickness > 1)
+        // In a session: quiet = idle (dim, slow); a partial (transcribing) = listening.
+        let idle = Theme.edgeStyle(for: .listening, level: 0.5, pulse: 0, reduceMotion: false, session: true)!
+        #expect(idle.brightness < think.brightness && idle.spin! > Theme.edgeSpin)
+        let talk = Theme.edgeStyle(for: .transcribing, level: 0.5, pulse: 0, reduceMotion: false, session: true)!
+        #expect(talk == loud)
         // Reduce Motion: no rotation, brightness still follows the voice.
         let still = Theme.edgeStyle(for: .listening, level: 0.5, pulse: 0, reduceMotion: true)!
         #expect(still.spin == nil && still.brightness == loud.brightness)
