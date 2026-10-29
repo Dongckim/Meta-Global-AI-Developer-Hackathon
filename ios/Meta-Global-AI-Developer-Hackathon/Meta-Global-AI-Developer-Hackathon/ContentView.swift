@@ -59,7 +59,6 @@ struct ContentView: View {
     @State private var lab = LabState()
     @State private var log: [String] = ["\(Persona.current.agentName) ready — speak or type"]
     @State private var debug: DebugRun?
-    @State private var showDebug = false
     @State private var showSettings = false
     @State private var lastReply = ""
     @State private var voice = VoiceSession()
@@ -316,7 +315,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             contractBanners
             TopHeader(voice: voice, speakText: lastReply, partialText: voice.partialText,
-                      timers: lab.timers,
+                      timers: showsBench ? [] : lab.timers,  // the bench lists its own timers
                       onBlockedTap: openSync)
             Group {
                 if let src = viewingSource {
@@ -395,37 +394,83 @@ struct ContentView: View {
         }
     }
 
+    /// The run bench is on screen (no source, past run, protocol or home).
+    private var showsBench: Bool {
+        viewingSource == nil && viewingRun == nil && selectedProtocol == nil
+            && !(showHome || lab.run == nil)
+    }
+
+    /// Bench, ver 2 (Figma 37:13521): plate card and group legend beside
+    /// the step, timers, what's left and the registry's Say button. It
+    /// starts right under the header with the design's 64 px side margins;
+    /// design px scale with the space so landscape and portrait both fit
+    /// without scrolling, and spare height stays at the bottom.
     private var experimentView: some View {
         GeometryReader { g in
-            let inner = g.size.width - 32
-            let left = inner * 0.58
-            HStack(spacing: 12) {
-                VStack(spacing: 8) {
-                    HStack(spacing: 6) {
-                        Circle().fill(.green).frame(width: 8, height: 8)
-                        Text("LIVE · \(lab.run?.label ?? lab.run?.protocolName ?? "–") · v\(lab.version)")
-                            .font(.caption2).foregroundStyle(.secondary)
-                        Spacer()
+            let w = g.size.width, h = g.size.height
+            let wide = w >= h
+            // design px: landscape 1376 wide x (32 + 700 + 32) tall; portrait 928 x 1410
+            let u = wide ? min(w / 1376, h / 764) : min(w / 928, h / 1410)
+            Group {
+                if wide {
+                    // the side column takes what the margins, plate and gap leave
+                    let side = max(0, w - 2 * 64 * u - 800 * u - 36 * u)
+                    HStack(alignment: .top, spacing: 36 * u) {
+                        plateColumn(u)
+                        benchSide(u).frame(width: side)
                     }
-                    PlateView(lab: lab, selected: Binding(
-                        get: { selectedWell },
-                        set: { if let id = $0?.id { sendAction("open", ["target": id]) } }
-                    ))
-                    ConditionBars(lab: lab)
+                    .frame(height: 700 * u)
+                } else {
+                    VStack(spacing: 40 * u) {
+                        plateColumn(u)
+                        benchSide(u).frame(width: 800 * u)
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
                 }
-                .frame(width: left)
-                VStack(spacing: 8) {
-                    StepCard(lab: lab, onEndRun: endRun, onSource: openCurrentSource)
-                    responseCard
-                    TimerList(lab: lab)
-                    MemoList(lab: lab) { sendAction("open", ["target": $0]) }
-                    logSection.frame(maxHeight: .infinity)
-                    hintsBar
-                    inputBar
-                }
-                .frame(width: inner - left - 12)
             }
-            .padding()
+            .padding(.top, 32 * u)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .background { BenchCanvas() }
+    }
+
+    private func plateColumn(_ u: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            PlateView(lab: lab, selected: Binding(
+                get: { selectedWell },
+                set: { if let id = $0?.id { sendAction("open", ["target": id]) } }
+            ))
+            .padding(28 * u)
+            .frame(width: 800 * u, height: 566 * u)
+            .benchCard(radius: 44 * u)
+            Spacer(minLength: 24 * u)
+            ConditionBars(lab: lab, u: u).frame(height: 97 * u)
+        }
+        .frame(width: 800 * u)
+    }
+
+    private func benchSide(_ u: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            StepCard(lab: lab, u: u, onSource: openCurrentSource)
+            Spacer(minLength: 24 * u)
+            TimerList(lab: lab, u: u)
+            Group {
+                if lab.cards.isEmpty {
+                    RemainingCard(lab: lab, u: u)
+                } else {
+                    // shortcut: the old card panel inside a ver 2 card, until the
+                    // confirm-card screens (Figma 37:13714...) are built
+                    CardPanel(cards: lab.cards, onAnswer: answer(id:ok:), onAnswerAll: answerAll)
+                        .padding(20 * u)
+                        .frame(maxHeight: 260 * u)
+                        .benchCard(radius: 32 * u)
+                }
+            }
+            .padding(.top, 10 * u)
+            if let b = screens.first(where: { $0.id == currentScreen })?.buttons?.first {
+                SayButton(button: b, size: 34 * u) { sendAction($0.action, $0.args ?? [:]) }
+                    .padding(.top, 36 * u)
+            }
         }
     }
 
@@ -454,68 +499,6 @@ struct ContentView: View {
     }
 
     // MARK: - Subviews
-
-    /// The current Pip response, or the card(s) awaiting an answer. Fixed slot.
-    private var responseCard: some View {
-        Group {
-            if !lab.cards.isEmpty {
-                CardPanel(cards: lab.cards, onAnswer: answer(id:ok:), onAnswerAll: answerAll)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(Persona.current.agentName).font(.caption.bold()).foregroundStyle(.secondary)
-                    Text(lastReply.isEmpty ? "Speak or type a command" : lastReply)
-                        .font(.body)
-                        .foregroundStyle(lastReply.isEmpty ? .secondary : .primary)
-                }
-                .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
-                .padding(10)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
-            }
-        }
-    }
-
-    private var logSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("Log").font(.headline)
-                Spacer()
-                Button(showDebug ? "Hide debug" : "Debug") { showDebug.toggle() }
-                    .font(.caption)
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-            Text(routeLine).font(.caption2).foregroundStyle(.secondary)
-            if showDebug {
-                Text("voice: \(SpeechBus.shared.voiceInfo)").font(.caption2).foregroundStyle(.secondary)
-            }
-            if showDebug, let d = debug {
-                debugPanel(d)
-            } else if showDebug {
-                Text("No runs yet").font(.caption).foregroundStyle(.secondary)
-            }
-            logView
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private var logView: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
-                    ForEach(log.indices, id: \.self) { i in
-                        Text(log[i]).font(.callout).textSelection(.enabled)
-                    }
-                    Color.clear.frame(height: 1).id("logBottom")
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .onChange(of: log.count) { _, _ in
-                proxy.scrollTo("logBottom", anchor: .bottom)
-            }
-        }
-    }
 
     private var robotPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -834,27 +817,6 @@ struct ContentView: View {
             .buttonStyle(.bordered).controlSize(.small)
             Spacer()
         }
-    }
-
-    private func debugPanel(_ d: DebugRun) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("“\(d.input)”").font(.caption).lineLimit(2)
-            Text("route: \(d.route ?? "-")").font(.caption2).foregroundStyle(.secondary)
-            ForEach(d.calls.indices, id: \.self) { i in
-                Text("\(d.calls[i].name)(\(d.calls[i].args))").font(.caption2.monospaced())
-            }
-            ForEach(d.sources, id: \.self) { s in
-                Text("src: \(s)").font(.caption2).foregroundStyle(.secondary)
-            }
-            Text("reply v\(d.recordVersion) · sync v\(lab.version)")
-                .font(.caption2)
-                .foregroundStyle(d.recordVersion == lab.version ? Color.secondary : Color.red)
-            Text(msLine(d.ms))
-                .font(.caption2).foregroundStyle(.secondary)
-            Divider()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 4)
     }
 
     // MARK: - Logic

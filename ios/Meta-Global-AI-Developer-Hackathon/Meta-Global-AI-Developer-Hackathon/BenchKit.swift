@@ -101,13 +101,7 @@ struct TimerChip: View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             if let s = Self.summary(timers, now: ctx.date) {
                 HStack(spacing: size * 0.45) {
-                    ZStack {
-                        Circle().stroke(Theme.cardOff, lineWidth: size * 0.12)
-                        Circle().trim(from: 0, to: s.progress)
-                            .stroke(Theme.polishBlue, style: StrokeStyle(lineWidth: size * 0.12, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                    }
-                    .frame(width: size * 0.9, height: size * 0.9)
+                    TimerRing(progress: s.progress, size: size * 0.9)
                     Text(s.wells).fontWeight(.semibold).foregroundStyle(Theme.text1)
                     Text("\(s.minutesLeft) min").foregroundStyle(Theme.text3)
                     if s.more > 0 {
@@ -118,10 +112,27 @@ struct TimerChip: View {
                 .lineLimit(1)
                 .padding(.horizontal, size * 0.55)
                 .frame(height: size * 50 / 22)
-                .background(Capsule().fill(.white.opacity(0.8))
+                .background(Capsule().fill(Theme.chip)
                     .shadow(color: .black.opacity(0.04), radius: 1, y: 1))
                 .accessibilityElement(children: .combine)
             }
         }
+    }
+}
+
+/// Elapsed-time ring of a timer (chip and timer rows).
+struct TimerRing: View {
+    /// Elapsed fraction 0...1.
+    var progress: Double
+    var size: CGFloat
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Theme.cardOff, lineWidth: size * 0.13)
+            Circle().trim(from: 0, to: progress)
+                .stroke(Theme.polishBlue, style: StrokeStyle(lineWidth: size * 0.13, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: size, height: size)
     }
 }

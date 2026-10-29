@@ -16,6 +16,8 @@ struct WellSelect: Identifiable {
 
 // MARK: - Plate
 
+/// 96-well plate, ver 2 (Figma 37:13521): pitch 58, well 48, axis labels
+/// 16. Sized from its frame; colors only from `Theme`.
 struct PlateView: View {
     @Bindable var lab: LabState
     @Binding var selected: WellSelect?
@@ -23,19 +25,19 @@ struct PlateView: View {
     var body: some View {
         GeometryReader { g in
             let cell = min(g.size.width / 12.8, g.size.height / 8.8)
-            let d = cell * 0.74
-            let labelFont = Font.system(size: max(9, d * 0.3))
+            let d = cell * 48 / 58
+            let labelFont = Font.system(size: max(9, d / 3), weight: .medium)
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
                     Color.clear.frame(width: cell * 0.8, height: cell * 0.8)
                     ForEach(1...12, id: \.self) { c in
-                        Text("\(c)").font(labelFont).foregroundStyle(.secondary)
+                        Text("\(c)").font(labelFont).foregroundStyle(Theme.text4)
                             .frame(width: cell, height: cell * 0.8)
                     }
                 }
                 ForEach(plateRows, id: \.self) { r in
                     HStack(spacing: 0) {
-                        Text(r).font(labelFont).foregroundStyle(.secondary)
+                        Text(r).font(labelFont).foregroundStyle(Theme.text4)
                             .frame(width: cell * 0.8, height: cell)
                         ForEach(1...12, id: \.self) { c in
                             WellDot(well: "\(r)\(c)", lab: lab, d: d) {
@@ -52,7 +54,6 @@ struct PlateView: View {
 }
 
 struct WellDot: View {
-    @Environment(\.colorScheme) private var scheme
     let well: String
     @Bindable var lab: LabState
     let d: CGFloat
@@ -63,75 +64,81 @@ struct WellDot: View {
     private var doneEarlier: Bool { lab.doneEarlier.contains(well) }
     private var redo: Bool { lab.redo[well] != nil }
     private var noted: Bool { lab.hasNote(well) }
-    private var cond: String? { lab.conditionOf(well) }
     private var current: Bool { lab.currentPlanned.contains(well) }
     private var lit: Bool { lab.flashing.contains(well) }
+    private var tone: Color { lab.groupIndex(lab.conditionOf(well)).map(Theme.groupTone) ?? Theme.text1 }
 
-    /// Design `.well` states: current-step targets are done (filled) or
-    /// now (blue ring); other wells show earlier-step done dimmed, else
-    /// planned (group ring). Excluded holds across steps.
+    /// Step record states: this step's done wells filled in their group
+    /// tone, its remaining targets white with a blue ring, earlier steps'
+    /// done wells dimmed, excluded wells empty with a cross.
+    private var filled: Bool { !excluded && (done || (!current && doneEarlier)) }
+    private var now: Bool { current && !done && !excluded }
+
     private var fill: Color {
-        if excluded { return scheme == .dark ? Color(white: 0.6) : Color(white: 0.35) }
-        if done { return conditionColor(cond) }
-        if !current, doneEarlier { return conditionColor(cond).opacity(0.35) }
-        return .clear
+        if filled { return done ? tone : tone.opacity(0.45) }
+        return now ? Theme.card : Theme.wellEmpty
     }
 
     private var edge: (Color, CGFloat) {
-        if lit { return (.yellow, 3) }
-        if current, !done, !excluded { return (Theme.blue, 3) }
-        if cond != nil { return (conditionColor(cond), 1.5) }
-        return (.secondary.opacity(0.5), 1.5)
+        if lit { return (Theme.text1, d * 3 / 48) }
+        if now { return (Theme.polishBlue, d * 3 / 48) }
+        return (.clear, 0)
     }
-
-    private var markFg: Color { (excluded || done || (!current && doneEarlier)) ? .white : .primary }
 
     var body: some View {
         Button(action: onTap) {
             Circle()
-                .fill(fill)
+                .fill(fill.shadow(.inner(color: .black.opacity(filled || now ? 0 : 0.07), radius: 1, y: 1)))
                 .frame(width: d, height: d)
-                .overlay(Circle().stroke(edge.0, lineWidth: edge.1).frame(width: d, height: d))
+                .overlay(Circle().strokeBorder(edge.0, lineWidth: edge.1))
                 .overlay {
                     if excluded {
-                        Image(systemName: "xmark").font(.system(size: d * 0.4, weight: .bold)).foregroundStyle(markFg)
+                        Image(systemName: "xmark").font(.system(size: d * 0.36, weight: .medium))
+                            .foregroundStyle(Theme.text2)
                     } else if redo {
-                        Text("↻").font(.system(size: d * 0.44, weight: .bold)).foregroundStyle(markFg)
+                        Text("↻").font(.system(size: d * 0.4, weight: .semibold))
+                            .foregroundStyle(filled ? .white : Theme.text1)
                     }
                 }
                 .overlay(alignment: .topTrailing) {
                     if noted {
-                        Circle().fill(.red).frame(width: d * 0.22, height: d * 0.22)
-                            .offset(x: d * 0.04, y: -d * 0.04)
+                        Circle().fill(Theme.text1)
+                            .overlay(Circle().strokeBorder(.white, lineWidth: d * 2.5 / 48))
+                            .frame(width: d * 11 / 48, height: d * 11 / 48)
                     }
                 }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(well)
         .animation(.easeInOut(duration: 0.3), value: "\(excluded)\(done)\(doneEarlier)\(redo)\(noted)\(lit)\(current)")
     }
 }
 
-// MARK: - Group bars
+// MARK: - Group legend
 
+/// One line per plan group: dot in its plate tone, label, usable-done
+/// count ("n 7"), and "/need" while short.
 struct ConditionBars: View {
     @Bindable var lab: LabState
+    /// Design px -> points.
+    var u: CGFloat = 0.6
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 0) {
             ForEach(lab.conditionProgress(), id: \.key) { g in
-                let ok = g.have >= g.need
-                HStack(spacing: 6) {
-                    Text(g.label).font(.caption).frame(width: 56, alignment: .leading)
-                    Text(String(repeating: "■", count: g.have) + String(repeating: "□", count: max(g.need - g.have, 0)))
-                        .font(.caption.monospaced())
-                        .foregroundStyle(ok ? .green : .orange)
-                    Text("\(g.have)/\(g.need)").font(.caption.bold())
-                        .foregroundStyle(ok ? .green : .orange)
+                HStack(spacing: 12 * u) {
+                    Circle().fill(lab.groupIndex(g.key).map(Theme.groupTone) ?? Theme.text1)
+                        .frame(width: 12 * u, height: 12 * u)
+                    Text(g.label).font(.system(size: 28 * u)).foregroundStyle(Theme.text1)
+                    (Text("n ").foregroundStyle(Theme.text2)
+                     + Text("\(g.have)").fontWeight(.semibold).foregroundStyle(Theme.text1)
+                     + Text(g.have < g.need ? "/\(g.need)" : "").foregroundStyle(Theme.text2))
+                        .font(.system(size: 34 * u)).tracking(-0.68 * u)
                 }
+                .lineLimit(1).minimumScaleFactor(0.6)
+                .frame(maxWidth: .infinity)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 4)
     }
 }
 
@@ -229,105 +236,162 @@ struct WellSheet: View {
 
 // MARK: - Side panel
 
+/// "Step 4 of 5", the step name, its amount and wells, and one bar per
+/// step (done / now / later).
 struct StepCard: View {
     @Bindable var lab: LabState
-    var onEndRun: (() -> Void)?
+    /// Design px -> points.
+    var u: CGFloat = 0.6
     var onSource: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(title).font(.headline)
-                Spacer()
-                if onEndRun != nil {
-                    Button("End run") { onEndRun?() }
-                        .buttonStyle(.bordered).controlSize(.small)
-                }
-            }
-            if let line = lab.currentKindLine {
-                Text(line).font(.caption).foregroundStyle(.secondary)
-            }
-            if let tip = lab.currentTip {
-                Text("💡 \(tip)").font(.callout)
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Step \(lab.stepIndex + 1) of \(lab.steps.count)")
+                .font(.system(size: 28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text2)
+            Text(lab.steps[lab.stepIndex])
+                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u)
+                .foregroundStyle(Theme.text1)
+                .lineLimit(1).minimumScaleFactor(0.5)
+                .padding(.top, 8 * u)
+            if let detail {
+                Text(detail).font(.system(size: 28 * u)).tracking(-0.34 * u)
+                    .foregroundStyle(Theme.text1).lineLimit(1).minimumScaleFactor(0.6)
+                    .padding(.top, 14 * u)
             }
             if let caution = lab.currentCaution {
-                if onSource != nil {
-                    Button { onSource?() } label: {
-                        Text("⚠️ Protocol: \(caution)").font(.callout)
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    Text("⚠️ Protocol: \(caution)").font(.callout)
+                Button { onSource?() } label: {
+                    Label(caution, systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 22 * u)).foregroundStyle(Theme.text3)
+                        .lineLimit(2).multilineTextAlignment(.leading)
+                }
+                .buttonStyle(.plain).disabled(onSource == nil)
+                .padding(.top, 10 * u)
+            }
+            HStack(spacing: 8 * u) {
+                ForEach(lab.steps.indices, id: \.self) { i in
+                    Capsule().fill(i < lab.stepIndex ? Theme.text1
+                                   : i == lab.stepIndex ? Theme.polishBlue : Theme.card)
+                        .frame(height: 6 * u)
                 }
             }
+            .padding(.top, 22 * u)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
     }
 
-    private var title: String {
-        let name = lab.steps[lab.stepIndex]
-        var t = "Step \(lab.stepIndex + 1) of \(lab.steps.count) · \(name)"
-        if let r = lab.currentRange, !name.contains(r) { t += " · \(r)" }
-        return t
+    /// "10 µL · D2–D8": amount, time, temperature, then the step's wells.
+    private var detail: String? {
+        var bits: [String] = []
+        if lab.stepIndex < lab.planSteps.count {
+            let s = lab.planSteps[lab.stepIndex]
+            if let p = s.pipette, let v = p.volume {
+                let unit = p.unit ?? "uL"
+                bits.append(fmtNum(v) + " " + (unit.lowercased() == "ul" ? "µL" : unit))
+            }
+            if let m = s.minutes { bits.append(fmtNum(m) + " min") }
+            if let t = s.tempC { bits.append(fmtNum(t) + " °C") }
+        }
+        if let r = lab.currentRange { bits.append(r) }
+        return bits.isEmpty ? nil : bits.joined(separator: " · ")
     }
 }
 
+/// Running timers as rows (ring, wells, step, minutes left), soonest
+/// first, then the plan's next timed step ("After step 4").
 struct TimerList: View {
     @Bindable var lab: LabState
-    @State private var expanded = false
+    /// Design px -> points.
+    var u: CGFloat = 0.6
+    var maxRows = 2
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1.0)) { ctx in
-            timerCard(now: ctx.date)
+            let vis = lab.visibleTimers(now: ctx.date)
+                .sorted { left($0, ctx.date) < left($1, ctx.date) }
+            VStack(alignment: .leading, spacing: 5 * u) {
+                ForEach(vis.prefix(maxRows)) { t in row(t, now: ctx.date) }
+                if vis.count > maxRows {
+                    Text("+\(vis.count - maxRows)").font(.system(size: 22 * u, weight: .medium))
+                        .foregroundStyle(Theme.polishBlue).padding(.leading, 14 * u)
+                }
+                if let (n, step) = upcoming { upcomingRow(n, step) }
+            }
         }
     }
 
-    private func timerCard(now: Date) -> some View {
-        let vis = lab.visibleTimers(now: now)
-        return VStack(alignment: .leading, spacing: 4) {
-            Button {
-                expanded.toggle()
-            } label: {
-                HStack {
-                    Text("Timers (\(vis.count))").font(.headline)
-                    Spacer()
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .buttonStyle(.plain)
-            if expanded {
-                if vis.isEmpty {
-                    Text("No timers").font(.callout).foregroundStyle(.secondary)
-                } else {
-                    ScrollView {
-                        ForEach(vis, id: \.id) { t in
-                            row(t, now: now)
-                        }
-                    }
-                    .frame(maxHeight: 220)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    private func left(_ t: TimerEntry, _ now: Date) -> Double {
+        t.minutes * 60 - now.timeIntervalSince(t.started)
     }
 
     private func row(_ t: TimerEntry, now: Date) -> some View {
-        let rem = t.minutes * 60 - now.timeIntervalSince(t.started)
+        let rem = left(t, now)
         let over = rem <= 0
         let blink = over && Int(now.timeIntervalSince1970 * 2) % 2 == 0
-        return HStack {
-            Text(t.label).font(.callout)
-            Spacer()
-            Text(over ? "done" : fmtClock(rem))
-                .font(.callout.monospacedDigit().bold())
-                .foregroundStyle(over ? .red : .primary)
+        return HStack(spacing: 14 * u) {
+            TimerRing(progress: t.minutes > 0 ? min(1, max(0, 1 - rem / (t.minutes * 60))) : 1,
+                      size: 30 * u)
+            Text(t.wells.isEmpty ? t.label : t.wells)
+                .font(.system(size: 26 * u, weight: .semibold)).foregroundStyle(Theme.text1)
+            if !t.wells.isEmpty {
+                Text(t.step).font(.system(size: 24 * u, weight: .light)).foregroundStyle(Theme.text2)
+            }
+            Spacer(minLength: 0)
+            Text(over ? "done" : "\(Int((rem / 60).rounded(.up))) min")
+                .font(.system(size: 26 * u, weight: .semibold).monospacedDigit())
+                .foregroundStyle(Theme.text1)
         }
+        .lineLimit(1).minimumScaleFactor(0.6)
+        .padding(.horizontal, 12 * u)
+        .frame(height: 43 * u)
+        .background(Capsule().fill(Theme.chip).shadow(color: .black.opacity(0.04), radius: 1, y: 1))
         .opacity(blink ? 0.25 : 1)
+    }
+
+    /// Next plan step with a duration, after the current one.
+    private var upcoming: (Int, PlanStep)? {
+        lab.planSteps.indices.dropFirst(lab.stepIndex + 1)
+            .first { lab.planSteps[$0].minutes != nil }
+            .map { ($0, lab.planSteps[$0]) }
+    }
+
+    private func upcomingRow(_ n: Int, _ step: PlanStep) -> some View {
+        HStack(spacing: 14 * u) {
+            Circle().strokeBorder(Theme.text4, style: StrokeStyle(lineWidth: 2 * u, dash: [3 * u, 3 * u]))
+                .frame(width: 24 * u, height: 24 * u)
+            if let r = wellRangeLabel(step.wells) {
+                Text(r).font(.system(size: 22 * u, weight: .semibold)).foregroundStyle(Theme.text5)
+            }
+            Text(step.text).font(.system(size: 21 * u, weight: .light)).foregroundStyle(Theme.text2)
+            Spacer(minLength: 0)
+            Text("After step \(n)").font(.system(size: 20 * u)).foregroundStyle(Theme.text2)
+        }
+        .lineLimit(1).minimumScaleFactor(0.6)
+        .padding(.horizontal, 15 * u)
+    }
+}
+
+/// "4 left" and which wells: the current step's targets not yet done.
+struct RemainingCard: View {
+    @Bindable var lab: LabState
+    /// Design px -> points.
+    var u: CGFloat = 0.6
+
+    var body: some View {
+        let left = lab.remaining
+        VStack(alignment: .leading, spacing: 6 * u) {
+            HStack(spacing: 14 * u) {
+                Circle().fill(Theme.polishBlue.opacity(0.5)).frame(width: 14 * u, height: 14 * u)
+                Text("\(left.count) left").font(.system(size: 40 * u, weight: .semibold))
+                    .tracking(-0.88 * u).foregroundStyle(Theme.text1)
+            }
+            if !left.isEmpty {
+                Text(wellRuns(left)).font(.system(size: 28 * u)).tracking(-0.34 * u)
+                    .foregroundStyle(Theme.text1).lineLimit(2).minimumScaleFactor(0.6)
+            }
+        }
+        .padding(.horizontal, 36 * u).padding(.vertical, 28 * u)
+        .frame(maxWidth: .infinity, minHeight: 145 * u, alignment: .leading)
+        .benchCard(radius: 32 * u)
     }
 }
 

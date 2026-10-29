@@ -70,8 +70,14 @@ struct EdgeGlow: View {
         if let style = live ?? meter.lastStyle {
             let px = { (v: CGFloat) in Theme.px(v, in: width) }
             let angle = style.spin.map { now.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: $0) / $0 * 360 } ?? 0
-            band(style, angle: angle, width: px(Theme.edgeSoftBand) * style.thickness, radius: px(Theme.edgeRadius))
-                .blur(radius: px(Theme.edgeSoftBlur))
+            let blur = px(Theme.edgeSoftBlur)
+            // The band's outer edge, corners and blur falloff sit one blur
+            // radius past the screen, so no clipped corner arc shows; only
+            // the soft inner edge is on screen, as thick as before.
+            band(style, angle: angle, width: px(Theme.edgeSoftBand) * style.thickness + blur,
+                 radius: px(Theme.edgeRadius))
+                .padding(-blur)
+                .blur(radius: blur)
                 .opacity(style.brightness)
                 .drawingGroup()
         }

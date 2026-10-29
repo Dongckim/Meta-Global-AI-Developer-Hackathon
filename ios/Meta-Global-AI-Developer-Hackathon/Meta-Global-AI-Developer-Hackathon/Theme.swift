@@ -56,6 +56,17 @@ enum Theme {
     static let cardOff = Color(hex: 0xE2E2E7)
     /// Bottom-right blue glow: rgba(0,113,227,.11) blur 118.
     static let canvasGlow = polishBlue.opacity(0.11)
+    /// Plate axis labels.
+    static let text4 = Color(hex: 0xAEAEB2)
+    /// Upcoming (not started) timer wells.
+    static let text5 = Color(hex: 0x48484A)
+    /// Empty well (with an inset shadow).
+    static let wellEmpty = Color(hex: 0xEFEFF2)
+    /// Translucent white chip and timer row.
+    static let chip = Color.white.opacity(0.8)
+    /// Plate groups in plan order (design gc / dot / gb); cycles past three.
+    static let groupTones: [Color] = [Color(hex: 0x8E8E93), Color(hex: 0x1D1D1F), Color(hex: 0x5A5A5E)]
+    static func groupTone(_ index: Int) -> Color { groupTones[index % groupTones.count] }
 
     // MARK: - Muted grays
 

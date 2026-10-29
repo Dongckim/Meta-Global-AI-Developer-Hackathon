@@ -53,6 +53,17 @@ struct PipTests {
         #expect(lab.hasNote("C2"))
         #expect(lab.memos(for: "C2").map(\.text) == ["bubbles"])
         #expect(lab.wellSource["C2"] == "voice")
+        // bench: what's left of this step, and each group's tone slot
+        #expect(lab.remaining == ["C3"])
+        #expect(lab.groupIndex("drug_A") == 0 && lab.groupIndex(nil) == nil)
+    }
+
+    @Test func wellRunsJoinsRowRuns() {
+        // same as the server's join_wells_ranges
+        #expect(wellRuns(["D8", "D2", "D6", "D7"]) == "D2, D6–D8")
+        #expect(wellRuns(["C2", "B3", "B4"]) == "B3–B4, C2")
+        #expect(wellRuns(["c5"]) == "C5")
+        #expect(wellRuns([]) == "")
     }
 
     @Test @MainActor func doneSplitsByStep() {

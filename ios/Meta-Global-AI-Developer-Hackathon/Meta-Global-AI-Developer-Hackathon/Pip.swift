@@ -542,6 +542,26 @@ func wellRangeLabel(_ wells: [String]) -> String? {
     return rows.sorted().joined(separator: ", ")
 }
 
+/// Row-major run join, as the server's join_wells_ranges:
+/// [D2, D6, D7, D8] -> "D2, D6–D8". Empty for no wells.
+func wellRuns(_ wells: [String]) -> String {
+    let pts = Set(wells.map { $0.uppercased() }).compactMap { w -> (String, Int)? in
+        guard let col = Int(w.dropFirst()), (1...12).contains(col),
+              let row = w.first.map(String.init), "ABCDEFGH".contains(row) else { return nil }
+        return (row, col)
+    }.sorted { ($0.0, $0.1) < ($1.0, $1.1) }
+    var runs: [(String, Int, Int)] = []
+    for (row, col) in pts {
+        if let last = runs.last, last.0 == row, col == last.2 + 1 {
+            runs[runs.count - 1].2 = col
+        } else {
+            runs.append((row, col, col))
+        }
+    }
+    return runs.map { $0.1 == $0.2 ? "\($0.0)\($0.1)" : "\($0.0)\($0.1)–\($0.0)\($0.2)" }
+        .joined(separator: ", ")
+}
+
 // MARK: - Lab state (render model; the server owns the record)
 
 @MainActor
@@ -615,6 +635,16 @@ final class LabState {
 
     func conditionOf(_ well: String) -> String? {
         conditions.first { $0.value.wells.contains(well) }?.key
+    }
+
+    /// Plan order of a condition (sorted keys), for its plate tone.
+    func groupIndex(_ key: String?) -> Int? {
+        key.flatMap { conditions.keys.sorted().firstIndex(of: $0) }
+    }
+
+    /// Current-step targets not done or excluded yet.
+    var remaining: [String] {
+        currentPlanned.subtracting(done).subtracting(excluded.keys).sorted()
     }
 
     func conditionLabel(_ well: String) -> String? {
