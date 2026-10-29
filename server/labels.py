@@ -29,6 +29,20 @@ def shorten_title(title: str) -> str:
     return " ".join(t.split()[:4]) or (title or "").strip()
 
 
+def step_short_title(step: dict) -> str:
+    """Screen title of a plan step (<= 4 words): the extracted short_title,
+    else "Add <liquid>" for a pipette step, else the step sentence through
+    shorten_title ("Incubate the plate for 30 min" -> "Incubate the plate")."""
+    s = step or {}
+    own = " ".join((s.get("short_title") or "").split()[:4])
+    if own:
+        return own
+    liquid = ((s.get("pipette") or {}).get("liquid") or "").strip()
+    if s.get("kind") == "pipette" and liquid:
+        return " ".join(f"Add {liquid}".split()[:4])
+    return shorten_title(s.get("text") or "")
+
+
 def protocol_short(doc: dict | None, fallback: str = "") -> str:
     doc = doc or {}
     return (doc.get("short_title") or "").strip() or shorten_title(doc.get("name") or fallback) or "untitled"

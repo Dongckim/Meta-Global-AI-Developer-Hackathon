@@ -101,4 +101,18 @@ said += [p["label"] for p in c.get("/protocols").json()["protocols"]]
 assert all(no_ids(x) for x in said), [x for x in said if not no_ids(x)]
 assert any("run" in x and "Here's" in x for x in said), said
 print("LB5 ok: no internal ids in user text")
+
+# LB6. Step screen titles: the extracted short_title, else one rule; every
+# snapshot step carries one (old plans included).
+assert L.step_short_title({"short_title": "Add Drug B now please", "text": "x"}) == "Add Drug B now"
+assert L.step_short_title({"kind": "pipette", "text": "drug B D2–D8",
+                           "pipette": {"liquid": "Drug B"}}) == "Add Drug B"
+assert L.step_short_title({"kind": "incubate",
+                           "text": "Incubate the plate for 30 min at 37 °C"}) == "Incubate the plate"
+st = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+st.start_demo_run()
+titles = [s["short_title"] for s in st.snapshot()["plan"]["steps"]]
+assert all(t and len(t.split()) <= 4 for t in titles), titles
+assert "short_title" not in st.r["plan"]["steps"][0], "rule fills the snapshot, never the record"
+print("LB6 ok: every step has a short screen title")
 print("ALL PASS")

@@ -65,6 +65,7 @@
             "properties": {
               "kind": {"type": "string"},
               "text": {"type": "string"},
+              "short_title": {"type": "string", "description": "Screen title, <= 4 words (labels.step_short_title)."},
               "minutes": {"type": ["number", "null"]},
               "temp_c": {"type": ["number", "null"]},
               "tip": {"type": ["string", "null"]},

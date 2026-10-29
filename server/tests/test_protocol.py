@@ -111,20 +111,20 @@ def _pip(liquid, target, volume=None, unit=None, repeat=None):
 
 
 STEPS = [
-    {"kind": "pipette", "text": "add 100 uL media to all wells", "quote": S1,
+    {"kind": "pipette", "text": "add 100 uL media to all wells", "short_title": "", "quote": S1,
      "minutes": None, "temp_c": None, "caution": None,
      "pipette": _pip("media", {"type": "all_used", "value": None}, 100, "uL")},
-    {"kind": "pipette", "text": "add vehicle to control wells", "quote": S2,
+    {"kind": "pipette", "text": "add vehicle to control wells", "short_title": "", "quote": S2,
      "minutes": None, "temp_c": None, "caution": None,
      "pipette": _pip("vehicle", {"type": "condition", "value": "control"})},
-    {"kind": "pipette", "text": "add drug A to drug A wells", "quote": S3,
+    {"kind": "pipette", "text": "add drug A to drug A wells", "short_title": "", "quote": S3,
      "minutes": None, "temp_c": None,
      "caution": "do not mix up and down after adding",
      "pipette": _pip("drug_a", {"type": "condition", "value": "drug_a"})},
-    {"kind": "pipette", "text": "add drug B to drug B wells", "quote": S4,
+    {"kind": "pipette", "text": "add drug B to drug B wells", "short_title": "", "quote": S4,
      "minutes": None, "temp_c": None, "caution": None,
      "pipette": _pip("drug_b", {"type": "condition", "value": "drug_b"})},
-    {"kind": "incubate", "text": "incubate 30 min", "quote": S5,
+    {"kind": "incubate", "text": "incubate 30 min", "short_title": "", "quote": S5,
      "minutes": 30, "temp_c": None, "caution": None, "pipette": None},
 ]
 
@@ -147,7 +147,7 @@ with patch("httpx.AsyncClient", FakeClient):
     bad = {"liquids": [], "conditions": [{"id": "x"}], "steps": []}
     assert proto.validate_against_schema(bad, proto.PROTOCOL_SCHEMA), "label required"
     notip = {"liquids": [], "conditions": [], "steps": [
-        {"kind": "pipette", "text": "t", "quote": "q", "minutes": None,
+        {"kind": "pipette", "text": "t", "short_title": "", "quote": "q", "minutes": None,
          "temp_c": None, "caution": None, "tip": "x", "pipette": None}]}
     assert proto.validate_against_schema(notip, proto.PROTOCOL_SCHEMA), "no tip field"
     print("P1 ok: schema strict-clean, mini-validator works, no tip")
@@ -232,12 +232,12 @@ with patch("httpx.AsyncClient", FakeClient):
                            "replicates": 5, "wells": ["B2-B6"],
                            "quote": "control wells are B2, B3, B4, B5, B6."}],
            "steps": [
-               {"kind": "wash", "text": "wash twice", "quote": "Wash twice with buffer.",
+               {"kind": "wash", "text": "wash twice", "short_title": "", "quote": "Wash twice with buffer.",
                 "minutes": None, "temp_c": None, "caution": "do not centrifuge",
                 "pipette": {"liquid": "x", "volume": None, "unit": None,
                             "target": {"type": "condition", "value": "control"},
                             "mix": None, "repeat": 2}},
-               {"kind": "wash", "text": "wash thrice", "quote": "Wash twice with buffer.",
+               {"kind": "wash", "text": "wash thrice", "short_title": "", "quote": "Wash twice with buffer.",
                 "minutes": None, "temp_c": None, "caution": None,
                 "pipette": {"liquid": "x", "volume": 50, "unit": "drops",
                             "target": {"type": "condition", "value": "control"},
@@ -269,7 +269,7 @@ with patch("httpx.AsyncClient", FakeClient):
     codes = {(i["path"], i["code"]) for i in d["review"]}
     assert ("conditions.control.wells", "overflow") in codes, d["review"]
     mins = {"liquids": [], "conditions": [], "steps": [
-        {"kind": "wait", "text": "wait", "quote": S5, "minutes": 45,
+        {"kind": "wait", "text": "wait", "short_title": "", "quote": S5, "minutes": 45,
          "temp_c": None, "caution": None, "pipette": None}]}
     d = proto.build_draft(mins, demo_evidence(), "x.pdf")
     assert ("steps.0.minutes", "ungrounded_value") in {(i["path"], i["code"]) for i in d["review"]}
@@ -365,7 +365,7 @@ with patch("httpx.AsyncClient", FakeClient):
             "conditions": {"control": {"label": "control", "treatments": [],
                                       "replicates": 2, "wells": ["B2", "B3"],
                                       "quote": "q"}},
-            "steps": [{"kind": "wash", "text": "wash twice", "quote": "q",
+            "steps": [{"kind": "wash", "text": "wash twice", "short_title": "", "quote": "q",
                        "minutes": None, "temp_c": None, "caution": None,
                        "pipette": {"liquid": "pbs", "volume": 200, "unit": "ul",
                                    "target": {"type": "condition", "value": "control"},
@@ -470,7 +470,7 @@ with patch("httpx.AsyncClient", FakeClient):
     raw = {"liquids": [{"id": "medium", "name": "medium", "concentration": None,
                         "prep": None, "quote": l1}],
            "conditions": [], "steps": [
-        {"kind": "pipette", "text": "Add medium",
+        {"kind": "pipette", "text": "Add medium", "short_title": "",
          "quote": "Add 100 uL of fresh medium to every well that will be used.",
          "minutes": None, "temp_c": None,
          "caution": "Tip: dispense slowly against the well wall so the cell "
@@ -488,7 +488,7 @@ with patch("httpx.AsyncClient", FakeClient):
 
     # P15c. numbers absent from the doc still flag; source stays model.
     raw = {"liquids": [], "conditions": [], "steps": [
-        {"kind": "incubate", "text": "incubate", "quote": S5, "minutes": 99,
+        {"kind": "incubate", "text": "incubate", "short_title": "", "quote": S5, "minutes": 99,
          "temp_c": None, "caution": None, "pipette": None}]}
     d = proto.build_draft(raw, demo_evidence(), "x.pdf")
     assert ("steps.0.minutes", "ungrounded_value") in {

@@ -583,6 +583,8 @@ class RecordStore:
 
     def snapshot(self) -> dict:
         snap = json.loads(json.dumps(self.r))
+        for st in (snap.get("plan") or {}).get("steps") or []:
+            st["short_title"] = labels.step_short_title(st)  # one rule, old plans included
         if snap.get("run"):  # what the app shows instead of the run id
             snap["run"]["label"] = self.run_label(self.active_run_doc() or snap["run"])["display"]
         return snap

@@ -93,6 +93,10 @@
             "type": "string",
             "description": "The document sentence, lightly trimmed."
           },
+          "short_title": {
+            "type": "string",
+            "description": "The action in at most 4 words for the screen (Add Drug B), or empty."
+          },
           "quote": {
             "type": "string",
             "description": "Verbatim document sentence this step comes from."
@@ -154,7 +158,7 @@
             "additionalProperties": false
           }
         },
-        "required": ["kind", "text", "quote", "minutes", "temp_c", "caution", "pipette"],
+        "required": ["kind", "text", "short_title", "quote", "minutes", "temp_c", "caution", "pipette"],
         "additionalProperties": false
       }
     }

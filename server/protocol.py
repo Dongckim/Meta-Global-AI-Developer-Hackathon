@@ -50,9 +50,11 @@ EXTRACT_PROMPT = (
     "replicates, wells, quote}; treatments holds liquid ids; replicates is "
     "the count or null when unstated; wells holds WellRef strings (B2, "
     "B2-B8) ONLY when the document states positions, else null. "
-    "steps: bench actions in document order as {kind, text, quote, minutes, "
-    "temp_c, caution, pipette}; text is the document sentence lightly "
-    "trimmed; seeding/design sentences belong to conditions, never steps; "
+    "steps: bench actions in document order as {kind, text, short_title, quote, "
+    "minutes, temp_c, caution, pipette}; text is the document sentence lightly "
+    "trimmed; short_title names the action in at most 4 words for the screen "
+    "(e.g. Add Drug B, Incubate plate); "
+    "seeding/design sentences belong to conditions, never steps; "
     "minutes/temp_c are stated numbers or null; pipette holds "
     "{liquid id, volume, unit, target, mix, repeat} for pipette, wash, and "
     "aspirate steps, else null; target type is wells (stated WellRef "
@@ -619,6 +621,7 @@ def build_draft(raw: dict, evidence: dict, source: str) -> dict:
         steps.append({
             "kind": s.get("kind") or "other",
             "text": s.get("text") or "",
+            "short_title": " ".join((s.get("short_title") or "").split()[:4]),
             "quote": s.get("quote") or "",
             "minutes": s.get("minutes"),
             "temp_c": s.get("temp_c"),
@@ -1216,6 +1219,7 @@ def build_start_plan(plan: dict) -> dict:
             text = s.get("text") or ""
             row = {"kind": s.get("kind") or "other",
                    "text": text if n == 1 else f"{text} ({k + 1} of {n})",
+                   "short_title": s.get("short_title") or "",
                    "minutes": s.get("minutes"), "temp_c": s.get("temp_c"),
                    "tip": None, "caution": s.get("caution"),
                    "quote": s.get("quote") or "", "quote_page": s.get("quote_page"),

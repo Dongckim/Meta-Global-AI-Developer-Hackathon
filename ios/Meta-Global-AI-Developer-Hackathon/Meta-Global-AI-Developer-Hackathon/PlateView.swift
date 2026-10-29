@@ -248,10 +248,11 @@ struct StepCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Step \(lab.stepIndex + 1) of \(lab.steps.count)")
                 .font(.system(size: 28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text2)
-            Text(lab.steps[lab.stepIndex])
+            Text(title)
                 .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u)
                 .foregroundStyle(Theme.text1)
-                .lineLimit(1).minimumScaleFactor(0.5)
+                .lineLimit(2).truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 8 * u)
             if let detail {
                 Text(detail).font(.system(size: 28 * u)).tracking(-0.34 * u)
@@ -277,6 +278,12 @@ struct StepCard: View {
             .padding(.top, 22 * u)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The step's short title ("Add Drug B"), else its sentence.
+    private var title: String {
+        let short = lab.stepIndex < lab.planSteps.count ? lab.planSteps[lab.stepIndex].shortTitle : nil
+        return short.flatMap { $0.isEmpty ? nil : $0 } ?? lab.steps[lab.stepIndex]
     }
 
     /// "10 µL · D2–D8": amount, time, temperature, then the step's wells.

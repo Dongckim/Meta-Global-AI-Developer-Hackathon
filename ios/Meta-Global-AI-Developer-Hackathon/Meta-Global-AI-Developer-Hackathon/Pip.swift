@@ -60,6 +60,8 @@ struct PlanPipette: Decodable {
 struct PlanStep: Decodable {
     var kind: String
     var text: String
+    /// Screen title, <= 4 words (server labels.step_short_title).
+    var shortTitle: String?
     var minutes: Double?
     var tempC: Double?
     var tip: String?
@@ -70,7 +72,7 @@ struct PlanStep: Decodable {
     var quotePage: Int?
 
     enum CodingKeys: String, CodingKey {
-        case kind, text, minutes, tempC = "temp_c", tip, caution, pipette, wells,
+        case kind, text, shortTitle = "short_title", minutes, tempC = "temp_c", tip, caution, pipette, wells,
              quote, quotePage = "quote_page"
     }
 
@@ -78,6 +80,7 @@ struct PlanStep: Decodable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         kind = try c.decode(String.self, forKey: .kind)
         text = try c.decode(String.self, forKey: .text)
+        shortTitle = try c.decodeIfPresent(String.self, forKey: .shortTitle)
         minutes = try c.decodeIfPresent(Double.self, forKey: .minutes)
         tempC = try c.decodeIfPresent(Double.self, forKey: .tempC)
         tip = try c.decodeIfPresent(String.self, forKey: .tip)

@@ -79,7 +79,7 @@ RAW = {
     "conditions": [{"id": "control", "label": "control", "treatments": ["media"],
                     "replicates": 5, "wells": None,
                     "quote": "Seed cells in control, drug A, and drug B wells, 5 replicates each."}],
-    "steps": [{"kind": "pipette", "text": "add media", "quote": S1,
+    "steps": [{"kind": "pipette", "text": "add media", "short_title": "", "quote": S1,
                "minutes": None, "temp_c": None, "caution": None,
                "pipette": {"liquid": "media", "volume": 100, "unit": "uL",
                            "target": {"type": "condition", "value": "control"},
