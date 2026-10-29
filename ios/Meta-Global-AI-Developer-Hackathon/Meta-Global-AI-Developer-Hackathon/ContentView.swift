@@ -57,7 +57,6 @@ struct ViewingSource: Equatable {
 /// memos → log (fills rest) → input. Nothing overlays anything.
 struct ContentView: View {
     @State private var lab = LabState()
-    @State private var input = ""
     @State private var log: [String] = ["\(Persona.current.agentName) ready — speak or type"]
     @State private var debug: DebugRun?
     @State private var showDebug = false
@@ -827,27 +826,7 @@ struct ContentView: View {
                 Image(systemName: ttsOn ? "speaker.wave.2.fill" : "speaker.slash.fill")
             }
             .buttonStyle(.bordered).controlSize(.small)
-            TextField("Type a command", text: $input)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit { submit() }
-            if voice.state == .listening, let t0 = voice.listeningSince {
-                TimelineView(.periodic(from: t0, by: 0.2)) { ctx in
-                    Text(String(format: "%.1fs", ctx.date.timeIntervalSince(t0)))
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.red)
-                }
-                .frame(width: 52, alignment: .trailing)
-            }
-            Button(action: {}) {
-                Image(systemName: voice.state == .listening ? "mic.fill" : "mic")
-                    .font(.title2)
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .background(voice.state == .listening ? .red : .blue, in: Circle())
-            }
-            .buttonStyle(HoldStyle { pressed in pressed ? startHold() : endHold() })
-            .disabled(!voice.micLive)
-            .opacity(voice.micLive ? 1 : 0.5)
+            Spacer()
         }
     }
 
@@ -1248,39 +1227,6 @@ struct ContentView: View {
         for id in lab.cards.map(\.id) {
             sendAction("answer_card", ["card_id": id, "ok": true], quiet: false)
         }
-    }
-
-    private func submit() {
-        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !busy else { return }
-        input = ""
-        say("> \(text)")
-        Task { await sendText(text) }
-    }
-
-    @MainActor
-    private func sendText(_ text: String) async {
-        busy = true
-        defer { busy = false }
-        do {
-            let r = try await PipClient.orchestrate(text: text)
-            voice.didRespond(hasSources: !r.sources.isEmpty)
-            handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
-                   route: r.route, input: text, sources: r.sources,
-                   dropped: r.dropped ?? 0,
-                   ui: r.ui, speak: r.speak, recordVersion: r.record_version)
-        } catch {
-            voice.didFail()
-            say("Error: \(error.localizedDescription)")
-        }
-    }
-
-    private func startHold() {
-        voice.beginManual()
-    }
-
-    private func endHold() {
-        voice.endManual()
     }
 
     @MainActor
