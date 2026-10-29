@@ -46,8 +46,46 @@ struct Meta_Global_AI_Developer_HackathonApp: App {
 
     var body: some Scene {
         WindowGroup {
+            #if DEBUG
+            if let preview = DesignPreview(rawValue:
+                UserDefaults.standard.string(forKey: "uiPreview") ?? "") {
+                preview.view
+            } else {
+                ContentView(dat: dat)
+            }
+            #else
             ContentView(dat: dat)
+            #endif
         }
         .modelContainer(sharedModelContainer)
     }
 }
+
+#if DEBUG
+/// Design captures without glasses: launch with `-uiPreview
+/// splash|connecting|ready` (optionally `-uiPreviewTime <s>` to freeze).
+enum DesignPreview: String {
+    case splash, connecting, ready
+
+    @ViewBuilder var view: some View {
+        switch self {
+        case .splash:
+            SplashView {}
+        case .connecting:
+            GlassesSyncScreen(dat: nil, onSkip: {}, onComplete: {}, previewRows: [
+                .init(state: .ok, value: "Linked", hint: nil),
+                .init(state: .checking, value: "Searching nearby…", hint: nil),
+                .init(state: .failed, value: "", hint: nil),
+                .init(state: .failed, value: "", hint: nil),
+            ])
+        case .ready:
+            GlassesSyncScreen(dat: nil, onSkip: {}, onComplete: {}, previewRows: [
+                .init(state: .ok, value: "Linked", hint: nil),
+                .init(state: .ok, value: "Found · 82%", hint: nil),
+                .init(state: .ok, value: "Allowed", hint: nil),
+                .init(state: .ok, value: "Glasses mic", hint: nil),
+            ])
+        }
+    }
+}
+#endif

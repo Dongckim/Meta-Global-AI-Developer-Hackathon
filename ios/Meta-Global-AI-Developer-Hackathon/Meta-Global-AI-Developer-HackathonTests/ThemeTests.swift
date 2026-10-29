@@ -91,6 +91,8 @@ struct SyncStyleTests {
         #expect(Theme.syncStyle(for: .ok).icon == .tick)
         #expect(Theme.syncStyle(for: .failed).icon == .hollow)
         #expect(Theme.syncStyle(for: .ok).rowOpacity == 1)
+        #expect(Theme.syncStyle(for: .checking).rowOpacity == 1)
+        #expect(Theme.syncStyle(for: .failed).rowOpacity == 0.38)
     }
 }
 
@@ -113,7 +115,7 @@ struct SyncRowTests {
         let conn = SyncRows.glasses(status: .connected, name: "RB Meta",
                                     battery: 85, error: nil)
         #expect(conn.state == .ok)
-        #expect(conn.value == "RB Meta · 85%")
+        #expect(conn.value == "Found · 85%")
         let found = SyncRows.glasses(status: .found, name: "RB Meta",
                                      battery: nil, error: nil)
         #expect(found.state == .failed)
@@ -154,5 +156,24 @@ struct SyncGateTests {
             == false)
         #expect(SyncGate.needed(rows: rows(allOk: true), skipped: true)
             == false)
+    }
+}
+
+struct KeyframesTests {
+    @Test func bezierEndpointsAndCurves() {
+        #expect(Keyframes.ease(0) == 0)
+        #expect(abs(Keyframes.ease(1) - 1) < 1e-6)
+        // --ease front-loads: well past halfway at 30%
+        #expect(Keyframes.ease(0.3) > 0.6)
+        #expect(abs(Keyframes.easeInOut(0.5) - 0.5) < 1e-4)
+        // --spring overshoots before settling
+        #expect((0 ..< 100).contains { Keyframes.spring(Double($0) / 100) > 1 })
+    }
+
+    @Test func pingPongPeaksAtHalfPeriod() {
+        #expect(Keyframes.pingPong(0, period: 6) == 0)
+        #expect(abs(Keyframes.pingPong(3, period: 6) - 1) < 1e-6)
+        #expect(abs(Keyframes.pingPong(6, period: 6)) < 1e-6)
+        #expect(abs(Keyframes.pingPong(1, period: 6) - Keyframes.pingPong(5, period: 6)) < 1e-9)
     }
 }

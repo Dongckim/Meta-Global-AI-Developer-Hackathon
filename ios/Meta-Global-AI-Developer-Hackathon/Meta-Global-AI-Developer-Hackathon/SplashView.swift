@@ -1,50 +1,38 @@
 import SwiftUI
 
 /// Launch splash (design `data-id="splash"`): dark canvas, blue aurora
-/// bloom, Glassistant brandmark. Self-dismisses after the bloom; tap skips.
+/// bloom, Glassistant brandmark. Self-dismisses after 2.6s (design
+/// `runSplash`); tap skips.
 struct SplashView: View {
     var onDone: () -> Void
+    @State private var start = Date()
 
     var body: some View {
-        GeometryReader { g in
-            ZStack {
-                Theme.chromeBg.ignoresSafeArea()
-                AuroraView(palette: Theme.auroraBlue, mode: .bloomThenBreath)
-                    .ignoresSafeArea()
-                Text("Glassistant")
-                    .font(.system(
-                        size: Theme.px(96, in: g.size.width), weight: .semibold))
-                    .foregroundStyle(.white)
-                    .shadow(color: Color(hex: 0x003C8C).opacity(0.35),
-                            radius: 60, y: 6)
-                    .brandIn()
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { onDone() }
-            .task {
-                try? await Task.sleep(for: .seconds(Theme.splashBloom + 0.4))
-                onDone()
+        TimelineView(.animation) { ctx in
+            let t = Keyframes.elapsed(ctx.date, since: start)
+            // brandIn 1.4s --ease .25s both: from opacity 0,
+            // letter-spacing .06em, blur 14
+            let p = Keyframes.tween(t, delay: 0.25, duration: 1.4)
+            DarkCanvas {
+                ZStack {
+                    AuroraView(mode: .splash, t: t)
+                    Text("Glassistant")
+                        .font(.system(size: 96, weight: .semibold))
+                        .tracking((0.06 + (-0.035 - 0.06) * p) * 96)
+                        .foregroundStyle(.white)
+                        .frame(height: 96)
+                        .shadow(color: Color(hex: 0x003C8C).opacity(0.35),
+                                radius: 30, y: 6)
+                        .blur(radius: 14 * (1 - p))
+                        .opacity(p)
+                }
             }
         }
-    }
-}
-
-private extension View {
-    /// brandIn 1.4s ease, .25s delay, from below at 0 opacity.
-    func brandIn() -> some View {
-        modifier(BrandIn())
-    }
-}
-
-private struct BrandIn: ViewModifier {
-    @State private var on = false
-
-    func body(content: Content) -> some View {
-        content
-            .opacity(on ? 1 : 0)
-            .offset(y: on ? 0 : 24)
-            .onAppear {
-                withAnimation(Theme.ease(duration: 1.4).delay(0.25)) { on = true }
-            }
+        .contentShape(Rectangle())
+        .onTapGesture { onDone() }
+        .task {
+            try? await Task.sleep(for: .seconds(2.6))
+            onDone()
+        }
     }
 }

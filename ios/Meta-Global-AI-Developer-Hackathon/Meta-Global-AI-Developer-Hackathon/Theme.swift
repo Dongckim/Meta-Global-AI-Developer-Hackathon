@@ -30,8 +30,11 @@ enum Theme {
     static let black = Color(hex: 0x000000)
     /// --blue (accent)
     static let blue = Color(hex: 0x0090FF)
-    /// --dark
-    static let dark = Color(hex: 0x232324)
+    /// --dark (polish layer; the base sheet's #232324 is overridden)
+    static let dark = Color(hex: 0x1C1C1E)
+    /// --blue in the polish layer (sync tick); `blue` keeps the base value
+    /// the orb gradient was drawn with.
+    static let polishBlue = Color(hex: 0x0071E3)
     /// --sub
     static let sub = Color(hex: 0xEDEDED)
     /// --track
@@ -105,13 +108,19 @@ enum Theme {
     static func ui(_ px: CGFloat, weight: Font.Weight = .regular) -> Font {
         .system(size: px, weight: weight)
     }
-    /// .t60 display. diff: 60px is for the full canvas; the top Pip line
-    /// uses `.pipLine` (below) instead.
-    static let t60 = Font.system(size: 60, weight: .light)
-    /// .t30 row title.
-    static let t30 = Font.system(size: 30, weight: .light)
-    /// .t24 row value.
-    static let t24 = Font.system(size: 24, weight: .light)
+    /// .t60 (polish layer: 400 52px/1.1, -.022em); sizes are design px,
+    /// used inside `DarkCanvas`, which scales the 1376x1032 canvas.
+    static let t60Size: CGFloat = 52
+    static let t60Line: CGFloat = 52 * 1.1
+    static let t60Tracking: CGFloat = -0.022 * 52
+    /// .t30 (polish layer: 400 28px/1.32, -.012em).
+    static let t30 = Font.system(size: 28, weight: .regular)
+    static let t30Line: CGFloat = 28 * 1.32
+    static let t30Tracking: CGFloat = -0.012 * 28
+    /// .t24 (polish layer: 400 22px/1.36, -.006em).
+    static let t24 = Font.system(size: 22, weight: .regular)
+    static let t24Line: CGFloat = 22 * 1.36
+    static let t24Tracking: CGFloat = -0.006 * 22
     /// .pip top line: 300 30px. diff: design canvas size; the shipped top
     /// line caps at 17pt via `pipLine(in:)` so it fits the app bar.
     static func pipLine(in width: CGFloat) -> Font {
@@ -155,6 +164,7 @@ enum Theme {
 
     /// Design width in px; sizes scale linearly with the real width.
     static let canvasWidth: CGFloat = 1376
+    static let canvasHeight: CGFloat = 1032
     static func px(_ designPx: CGFloat, in width: CGFloat) -> CGFloat {
         guard width > 0 else { return designPx }
         return designPx * width / canvasWidth
@@ -265,7 +275,8 @@ enum Theme {
     }
 
     /// (row opacity, icon style). `.srow` rests at opacity .38 and lights
-    /// to 1 when done; `.sico` spins / fills white with a blue tick.
+    /// to 1 while checking (.on) or done (.ok); `.sico` spins / fills
+    /// white with a blue tick.
     struct SyncStyle: Equatable {
         var rowOpacity: Double
         var icon: SyncIcon
@@ -279,12 +290,12 @@ enum Theme {
     static func syncStyle(for row: SyncRow) -> SyncStyle {
         switch row {
         case .checking:
-            return SyncStyle(rowOpacity: 0.38, icon: .spin)
+            return SyncStyle(rowOpacity: 1, icon: .spin)
         case .ok:
             return SyncStyle(rowOpacity: 1, icon: .tick)
         case .failed:
-            // diff: the design's fail treatment is per-demo JS; failed
-            // rows stay dim with a hollow icon and a reason + Retry.
+            // diff: the design has no failure; failed rows use the
+            // pending look (dim, hollow) with a short reason as the value.
             return SyncStyle(rowOpacity: 0.38, icon: .hollow)
         }
     }

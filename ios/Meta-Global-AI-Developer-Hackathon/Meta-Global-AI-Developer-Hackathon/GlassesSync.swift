@@ -2,111 +2,9 @@ import AVFoundation
 import MWDATCore
 import SwiftUI
 
-/// Blurred-blob aurora behind splash, sync, and the voice orb.
-/// Whole-field motion follows the design keyframes (readyBreath, pulse,
-/// think, sweep, syncFlow, splashBloom); blobs also drift on alternating
-/// 7s/9s loops like the design's wobble.
-struct AuroraView: View {
-    enum Mode: Equatable {
-        case flow // syncFlow 6s
-        case breath // readyBreath 5s
-        case pulse // pulse 1.6s
-        case still(scale: CGFloat)
-        case think // think 4s, opacity .7
-        case voice(amp: Double) // scale(1.24 + amp * .16)
-        case sweep // sweep 2.4s
-        case bloomThenBreath // splashBloom 2.4s once, then breath
-    }
-
-    var palette: [Color] = Theme.auroraBlue
-    var mode: Mode = .flow
-    @State private var on = false
-
-    var body: some View {
-        GeometryReader { g in
-            let w = g.size.width, h = g.size.height
-            ZStack {
-                ForEach(0 ..< 6) { i in
-                    Ellipse()
-                        .fill(palette[i % palette.count])
-                        .frame(width: w * [0.75, 0.55, 0.6, 0.45, 0.5, 0.3][i],
-                               height: h * [0.8, 0.6, 0.62, 0.5, 0.45, 0.35][i])
-                        .position(x: w * [0.5, 0.18, 0.82, 0.35, 0.66, 0.5][i],
-                                  y: h * [0.4, 0.72, 0.7, 0.62, 0.45, 0.55][i])
-                        .blur(radius: max(18, w / 14))
-                        .opacity(i == 5 ? 0.55 : 0.3)
-                        .offset(x: on ? (i % 2 == 0 ? 9 : -9) : (i % 2 == 0 ? -9 : 9))
-                        .animation(
-                            .easeInOut(duration: i % 2 == 0 ? 7 : 9)
-                                .repeatForever(autoreverses: true),
-                            value: on
-                        )
-                }
-            }
-            .scaleEffect(scale)
-            .rotationEffect(.degrees(rotation))
-            .offset(x: xTravel * w / max(1, Theme.canvasWidth))
-            .opacity(opacity * (mode == .bloomThenBreath ? (on ? 1 : 0) : 1))
-            .animation(anim, value: on)
-        }
-        .onAppear { on = true }
-    }
-
-    private var scale: CGFloat {
-        switch mode {
-        case .flow: on ? 0.98 : 0.85
-        case .breath: on ? 1.05 : 1
-        case .pulse: on ? 1.2 : 1.1
-        case let .still(s): s
-        case .think: on ? 0.82 : 0.75
-        case let .voice(amp): 1.24 + CGFloat(amp) * 0.16
-        case .sweep: on ? 0.95 : 0.9
-        case .bloomThenBreath: on ? 1 : 0.45
-        }
-    }
-
-    private var rotation: Double {
-        switch mode {
-        case .think: on ? 5 : -5
-        case .bloomThenBreath: on ? 0 : -8
-        default: 0
-        }
-    }
-
-    private var xTravel: CGFloat {
-        switch mode {
-        case .flow: on ? 60 : -60
-        case .sweep: on ? 40 : -40
-        default: 0
-        }
-    }
-
-    private var opacity: Double {
-        mode == .think ? 0.7 : 1
-    }
-
-    private var anim: Animation? {
-        switch mode {
-        case .flow:
-            .easeInOut(duration: Theme.syncFlow).repeatForever(autoreverses: true)
-        case .breath:
-            .easeInOut(duration: Theme.readyBreath).repeatForever(autoreverses: true)
-        case .pulse:
-            .easeInOut(duration: Theme.pulse).repeatForever(autoreverses: true)
-        case .still: nil
-        case .think:
-            .easeInOut(duration: Theme.think).repeatForever(autoreverses: true)
-        case .voice: nil
-        case .sweep:
-            .easeInOut(duration: Theme.sweep).repeatForever(autoreverses: true)
-        case .bloomThenBreath:
-            Theme.ease(duration: Theme.splashBloom)
-        }
-    }
-}
-
 /// Pure sync-row derivation from live device state. No progress simulation:
-/// every row renders the current value, or an explicit failure + reason.
+/// every row renders the current value, or a failure with a short reason
+/// as the value. `hint` is the longer fix, read by VoiceOver.
 enum SyncRows {
     struct Row: Equatable {
         var state: Theme.SyncRow
@@ -122,12 +20,12 @@ enum SyncRows {
         }
         switch registration {
         case .registered:
-            return Row(state: .ok, value: "Registered", hint: nil)
+            return Row(state: .ok, value: "Linked", hint: nil)
         case .registering:
-            return Row(state: .checking, value: "Waiting…",
+            return Row(state: .checking, value: "Linking…",
                        hint: "Approve in the Meta AI app.")
         case .available:
-            return Row(state: .failed, value: "Not registered",
+            return Row(state: .failed, value: "Not linked",
                        hint: "Register to link the Meta AI app.")
         case .unavailable:
             return Row(state: .failed, value: "Unavailable",
@@ -144,11 +42,10 @@ enum SyncRows {
         }
         switch status {
         case .connected:
-            var v = name ?? "Connected"
-            if let battery { v += " · \(battery)%" }
-            return Row(state: .ok, value: v, hint: nil)
+            let v = battery.map { "Found · \($0)%" } ?? "Found"
+            return Row(state: .ok, value: v, hint: name)
         case .found:
-            return Row(state: .failed, value: name ?? "Found",
+            return Row(state: .failed, value: "Not connected",
                        hint: "Found, not linked — wake the glasses.")
         case .registered:
             return Row(state: .failed, value: "Not found",
@@ -163,7 +60,7 @@ enum SyncRows {
 
     static func audio(hfpName: String?) -> Row {
         if let hfpName {
-            return Row(state: .ok, value: "HFP · \(hfpName)", hint: nil)
+            return Row(state: .ok, value: "Glasses mic", hint: hfpName)
         }
         return Row(state: .failed, value: "iPad mic",
                    hint: "Pick glasses audio in Control Center.")
@@ -172,7 +69,7 @@ enum SyncRows {
     static func camera(_ permission: PermissionStatus?) -> Row {
         switch permission {
         case .granted:
-            return Row(state: .ok, value: "Granted", hint: nil)
+            return Row(state: .ok, value: "Allowed", hint: nil)
         case .denied:
             return Row(state: .failed, value: "Denied",
                        hint: "Enable camera in the Meta AI app.")
@@ -216,22 +113,36 @@ enum SyncGate {
     }
 }
 
+
 /// Fullscreen Glasses sync step (design `data-id="sync"`): live device
-/// rows on a dark aurora canvas. Auto-advances shortly after all rows
-/// turn ok ("Glasses ready"); Retry re-checks, Skip proceeds without.
+/// rows on the dark aurora canvas. Auto-advances shortly after all rows
+/// turn ok ("Glasses ready"). Failed rows are tappable where a fix
+/// exists (register, camera); Retry/Skip show only while a row failed.
 struct GlassesSyncScreen: View {
     var dat: GlassesDAT?
     /// Bumped by voice "retry the glasses check" (server sync_retry).
     var refreshGen: Int = 0
     var onSkip: () -> Void
     var onComplete: () -> Void
+    #if DEBUG
+    /// Fixed rows for design captures (`-uiPreview connecting|ready`).
+    var previewRows: [SyncRows.Row]?
+    #endif
     @State private var hfpName: String?
-    @State private var celebrated = false
     @State private var registerNudge = false
-    @State private var spin = false
+    @State private var start = Date()
+    /// Clock time when every row turned ok (drives readyGlow / bump).
+    @State private var readyAt: Double?
+
+    /// Display order: design rows 1-3, then "Live video" -> glasses audio.
+    private static let titles = ["Meta AI app", "Ray-Ban Meta", "Camera", "Glasses audio"]
 
     private var rows: [SyncRows.Row] {
-        SyncGate.rows(dat: dat, hfpName: hfpName)
+        #if DEBUG
+        if let previewRows { return previewRows }
+        #endif
+        let r = SyncGate.rows(dat: dat, hfpName: hfpName)
+        return [r[0], r[1], r[3], r[2]]
     }
 
     private var allOk: Bool {
@@ -242,57 +153,43 @@ struct GlassesSyncScreen: View {
         dat?.registrationState == .registering
     }
 
+    private var canRegister: Bool {
+        guard let dat else { return false }
+        return dat.registrationState != .registered && !dat.busy
+            && dat.registrationState != .unavailable
+    }
+
     var body: some View {
-        GeometryReader { g in
-            ZStack {
-                Theme.chromeBg.ignoresSafeArea()
-                AuroraView(palette: Theme.auroraBlue, mode: .flow)
-                    .ignoresSafeArea()
-                    .opacity(0.5)
-                VStack(alignment: .leading, spacing: 0) {
-                    header(width: g.size.width)
-                    row(title: "Meta AI app", row: rows[0], width: g.size.width,
-                        nudge: registerNudge && isRegistering) {
-                        if let dat, dat.registrationState != .registered,
-                           !dat.busy, dat.registrationState != .unavailable {
-                            Button("Register") { dat.register() }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.regular)
-                        }
+        TimelineView(.animation) { ctx in
+            let t = Keyframes.elapsed(ctx.date, since: start)
+            DarkCanvas {
+                ZStack {
+                    AuroraView(mode: readyAt.map { .syncReady(since: $0) } ?? .sync, t: t)
+                    syncBlock(t)
+                    if rows.contains(where: { $0.state == .failed }) {
+                        footer
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                            .padding(.bottom, 44)
                     }
-                    row(title: "Ray-Ban Meta", row: rows[1],
-                        width: g.size.width) {}
-                    row(title: "Glasses audio", row: rows[2],
-                        width: g.size.width) {}
-                    row(title: "Camera", row: rows[3], width: g.size.width) {
-                        if let dat, dat.cameraPermission != .granted {
-                            Button(dat.cameraPermission == nil ? "Check" : "Enable") {
-                                if dat.cameraPermission == nil {
-                                    dat.checkCameraPermission()
-                                } else {
-                                    dat.askCameraRedirect()
-                                }
-                            }
-                            .buttonStyle(.bordered).controlSize(.regular)
-                        }
-                    }
-                    Spacer()
-                    footer
                 }
-                .padding(.horizontal, Theme.px(64, in: g.size.width))
-                .padding(.vertical, 48)
-            }
-            .overlay(alignment: .topTrailing) {
-                #if DEBUG
-                mockCorner
-                #endif
             }
         }
-        .onAppear { refreshAudio(); dat?.checkCameraPermission() }
+        .overlay(alignment: .topTrailing) {
+            #if DEBUG
+            if previewRows == nil { mockCorner }
+            #endif
+        }
+        .onAppear {
+            if allOk { readyAt = 0 }
+            refreshAudio()
+            dat?.checkCameraPermission()
+        }
         .onChange(of: refreshGen) { _, _ in refreshAll() }
         .onReceive(NotificationCenter.default.publisher(
             for: AVAudioSession.routeChangeNotification)) { _ in refreshAudio() }
-        .onChange(of: allOk) { _, ok in celebrated = ok }
+        .onChange(of: allOk) { _, ok in
+            readyAt = ok ? Date().timeIntervalSince(start) : nil
+        }
         .task(id: allOk) {
             guard allOk else { return }
             do {
@@ -317,112 +214,145 @@ struct GlassesSyncScreen: View {
         }
     }
 
-    private func header(width: CGFloat) -> some View {
-        HStack(spacing: 20) {
-            ZStack {
-                if celebrated { CelebrationGlow(size: 76) }
-                Image(systemName: "eyeglasses")
-                    .font(.system(size: 34))
-                    .foregroundStyle(.white)
-                    .frame(width: 76, height: 76)
-                    .background(.white.opacity(0.12), in: Circle())
-            }
+    /// `.sync`: 640 wide, gap 26; entrance delays follow the design's
+    /// prepare(): 14 candidates, 55ms apart from 70ms.
+    private func syncBlock(_ t: Double) -> some View {
+        let sinceReady = readyAt.map { t - $0 }
+        // .glasses scale .6s spring to 1.12; title bump .55s spring
+        let grow = sinceReady.map {
+            Keyframes.tween($0, duration: 0.6, curve: Keyframes.spring)
+        } ?? 0
+        let bump = sinceReady.map {
+            Keyframes.tween($0, duration: 0.55, curve: Keyframes.spring)
+        } ?? 1
+        return VStack(spacing: 26) {
+            GlassesIcon()
+                .stroke(.white, style: StrokeStyle(lineWidth: 4.8, lineCap: .round,
+                                                   lineJoin: .round))
+                .frame(width: 136, height: 60)
+                .scaleEffect(1 + 0.12 * grow)
+                .popIn(t, delay: 0.07)
             Text(allOk ? "Glasses ready" : "Connecting your glasses")
-                .font(.system(size: Theme.px(60, in: width), weight: .medium))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-        }
-        .padding(.bottom, 24)
-    }
-
-    private func row(title: String, row: SyncRows.Row, width: CGFloat,
-                     nudge: Bool = false,
-                     @ViewBuilder action: () -> some View) -> some View {
-        let style = Theme.syncStyle(for: row.state)
-        return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 18) {
-                syncIcon(style.icon, size: Theme.px(26, in: width))
-                Text(title)
-                    .font(.system(size: Theme.px(30, in: width),
-                                  weight: .light))
-                    .foregroundStyle(.white)
-                Spacer()
-                Text(row.value)
-                    .font(.system(size: Theme.px(24, in: width),
-                                  weight: .light))
-                    .foregroundStyle(.white.opacity(0.62))
-                    .lineLimit(1)
-                action()
-            }
-            .padding(.vertical, 18)
-            if let hint = row.hint, row.state != .ok {
-                Text(hint)
-                    .font(.system(size: Theme.px(20, in: width)))
-                    .foregroundStyle(Theme.chromeMut)
-                    .padding(.leading, Theme.px(44, in: width))
-                    .padding(.bottom, 10)
-            }
-            if nudge {
-                Text("Still waiting — approve in the Meta AI app, or Skip below.")
-                    .font(.system(size: Theme.px(20, in: width)))
-                    .foregroundStyle(Theme.chromeMut)
-                    .padding(.leading, Theme.px(44, in: width))
-                    .padding(.bottom, 10)
-            }
-        }
-        .opacity(style.rowOpacity == 1 ? 1 : 0.75)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(.white.opacity(0.1)).frame(height: 1)
-        }
-    }
-
-    private func syncIcon(_ icon: Theme.SyncStyle.SyncIcon,
-                          size: CGFloat) -> some View {
-        Group {
-            switch icon {
-            case .spin:
-                Circle()
-                    .trim(from: 0, to: 0.75)
-                    .stroke(.white, lineWidth: 2.5)
-                    .frame(width: size, height: size)
-                    .rotationEffect(.degrees(spin ? 360 : 0))
-                    .animation(.linear(duration: Theme.spin)
-                        .repeatForever(autoreverses: false), value: spin)
-                    .onAppear { spin = true }
-            case .tick:
-                ZStack {
-                    Circle().fill(.white).frame(width: size, height: size)
-                    Image(systemName: "checkmark")
-                        .font(.system(size: size * 0.55, weight: .bold))
-                        .foregroundStyle(Theme.blue)
+                .font(.system(size: Theme.t60Size, weight: .medium))
+                .tracking(Theme.t60Tracking)
+                .frame(height: Theme.t60Line)
+                .textShadow()
+                .scaleEffect(0.97 + 0.03 * bump)
+                .opacity(min(1, 0.55 + 0.45 * bump))
+                .textIn(t, delay: 0.125)
+            VStack(spacing: 0) {
+                ForEach(rows.indices, id: \.self) { i in
+                    row(i, t: t, delay: 0.18 + 0.165 * Double(i))
+                    if i < rows.count - 1 {
+                        Rectangle().fill(.white.opacity(0.1)).frame(height: 1)
+                    }
                 }
-            case .hollow:
-                Circle()
-                    .stroke(.white.opacity(0.35), lineWidth: 2)
-                    .frame(width: size, height: size)
+            }
+            .padding(.top, 18)
+        }
+        .foregroundStyle(.white)
+        .frame(width: 640)
+    }
+
+    private func row(_ i: Int, t: Double, delay: Double) -> some View {
+        let r = rows[i]
+        let style = Theme.syncStyle(for: r.state)
+        let value = i == 0 && registerNudge && isRegistering
+            ? "Approve in Meta AI" : r.value
+        return HStack(spacing: 18) {
+            syncIcon(style.icon, t: t)
+            Text(Self.titles[i])
+                .font(Theme.t30)
+                .tracking(Theme.t30Tracking)
+                .frame(height: Theme.t30Line)
+                .textShadow()
+                .textIn(t, delay: delay + 0.055)
+            Spacer(minLength: 18)
+            Text(value)
+                .font(Theme.t24)
+                .tracking(Theme.t24Tracking)
+                .foregroundStyle(.white.opacity(0.62))
+                .lineLimit(1)
+                .frame(height: Theme.t24Line)
+                .textShadow()
+                .textIn(t, delay: delay + 0.11)
+        }
+        .padding(.vertical, 18)
+        .padding(.horizontal, 4)
+        .opacity(style.rowOpacity)
+        .animation(Theme.ease(duration: 0.5), value: r.state)
+        .textIn(t, delay: delay)
+        .contentShape(Rectangle())
+        .onTapGesture { fix(i) }
+        .contextMenu {
+            if i == 0, let dat, dat.registrationState == .registered {
+                Button("Unregister", role: .destructive) { dat.unregister() }
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(r.state == .ok ? "" : (r.hint ?? ""))
+    }
+
+    /// Row tap = the old per-row button: register, or check/enable camera.
+    private func fix(_ i: Int) {
+        guard let dat else { return }
+        if i == 0, canRegister {
+            dat.register()
+        } else if i == 2, dat.cameraPermission != .granted {
+            if dat.cameraPermission == nil {
+                dat.checkCameraPermission()
+            } else {
+                dat.askCameraRedirect()
+            }
+        }
+    }
+
+    /// `.sico` 26px: hollow (pending), top-arc spin .8s (on), white disc
+    /// with a rotated blue L tick (ok).
+    private func syncIcon(_ icon: Theme.SyncStyle.SyncIcon, t: Double) -> some View {
+        ZStack {
+            switch icon {
+            case .hollow:
+                Circle().strokeBorder(.white.opacity(0.35), lineWidth: 2)
+            case .spin:
+                ZStack {
+                    Circle().strokeBorder(.white.opacity(0.22), lineWidth: 2)
+                    Circle().inset(by: 1)
+                        .trim(from: 0.625, to: 0.875)
+                        .stroke(.white, lineWidth: 2)
+                }
+                .rotationEffect(.degrees(360 * (t / Theme.spin)
+                    .truncatingRemainder(dividingBy: 1)))
+            case .tick:
+                Circle().fill(.white)
+                    .shadow(color: Color(hex: 0x002878).opacity(0.25), radius: 5, y: 2)
+                // ::after: left 8 top 4 (inside a 2px border), 6x12 box,
+                // right+bottom 2.5px borders, rotate 45deg
+                Path { p in
+                    p.move(to: CGPoint(x: 0, y: 13.25))
+                    p.addLine(to: CGPoint(x: 7.25, y: 13.25))
+                    p.addLine(to: CGPoint(x: 7.25, y: 0))
+                }
+                .stroke(Theme.polishBlue, style: StrokeStyle(lineWidth: 2.5,
+                                                             lineJoin: .miter))
+                .frame(width: 8.5, height: 14.5)
+                .rotationEffect(.degrees(45))
+                .position(x: 14.25, y: 13.25)
+            }
+        }
+        .frame(width: 26, height: 26)
     }
 
     private var footer: some View {
-        HStack(spacing: 16) {
-            if !allOk {
-                Button("Retry") { refreshAll() }
-                    .buttonStyle(.bordered).controlSize(.large)
-                    .tint(.white)
-                Button("Skip — use iPad mic") { onSkip() }
-                    .font(.title3)
-                    .foregroundStyle(Theme.chromeMut)
-            }
-            Spacer()
-            if let dat, dat.registrationState == .registered {
-                Button("Unregister") { dat.unregister() }
-                    .font(.callout)
-                    .foregroundStyle(Theme.chromeMut)
-            }
+        HStack(spacing: 48) {
+            Button("Retry") { refreshAll() }
+            Button("Skip") { onSkip() }
         }
-        .padding(.top, 24)
+        .buttonStyle(.plain)
+        .font(Theme.t24)
+        .tracking(Theme.t24Tracking)
+        .foregroundStyle(.white.opacity(0.62))
+        .textShadow()
     }
 
     #if DEBUG
@@ -458,19 +388,9 @@ struct GlassesSyncScreen: View {
     }
 }
 
-/// One-shot readyGlow (1.2s): ring blooms behind the header icon.
-private struct CelebrationGlow: View {
-    var size: CGFloat = 52
-    @State private var t = 0.0
-
-    var body: some View {
-        Circle()
-            .stroke(Theme.blue, lineWidth: 3)
-            .frame(width: size, height: size)
-            .scaleEffect(0.95 + 0.3 * t)
-            .opacity((1 - t) * 0.9)
-            .onAppear {
-                withAnimation(Theme.ease(duration: Theme.readyGlow)) { t = 1 }
-            }
+private extension View {
+    /// `.sync` text-shadow 0 4px 40px rgba(0,0,0,.25).
+    func textShadow() -> some View {
+        shadow(color: .black.opacity(0.25), radius: 20, y: 4)
     }
 }
