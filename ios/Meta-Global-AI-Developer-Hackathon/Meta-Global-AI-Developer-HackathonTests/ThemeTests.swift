@@ -118,47 +118,139 @@ struct SyncRowTests {
         let conn = SyncRows.glasses(status: .connected, name: "RB Meta",
                                     battery: 85, error: nil)
         #expect(conn.state == .ok)
-        #expect(conn.value == "Found · 85%")
+        #expect(conn.value == "RB Meta · 85%")
         let found = SyncRows.glasses(status: .found, name: "RB Meta",
                                      battery: nil, error: nil)
         #expect(found.state == .failed)
         #expect(found.hint != nil)
         #expect(SyncRows.glasses(status: .registered, name: nil, battery: nil,
                                  error: nil).state == .failed)
+        // waits on the Meta AI app row instead of failing on its own
         #expect(SyncRows.glasses(status: .unregistered, name: nil,
-                                 battery: nil, error: nil).state == .failed)
+                                 battery: nil, error: nil).state == .waiting)
     }
 
     @Test func audioRow() {
-        #expect(SyncRows.audio(hfpName: "Glasses").state == .ok)
-        let off = SyncRows.audio(hfpName: nil)
+        #expect(SyncRows.glassesAudio(mic: .allowed, glassesConnected: true,
+                                      hfpName: "Glasses").state == .ok)
+        let off = SyncRows.glassesAudio(mic: .allowed, glassesConnected: true, hfpName: nil)
         #expect(off.state == .failed)
         #expect(off.hint != nil)
     }
 
     @Test func cameraRow() {
         #expect(SyncRows.camera(.granted).state == .ok)
-        #expect(SyncRows.camera(.denied).state == .failed)
+        // DAT reports never-asked as denied: offer the grant flow
+        #expect(SyncRows.camera(.denied).state == .action)
         #expect(SyncRows.camera(nil).state == .failed)
     }
 }
 
 struct SyncGateTests {
-    private func rows(allOk: Bool) -> [SyncRows.Row] {
-        let bad = SyncRows.Row(state: .failed, value: "x", hint: nil)
-        let good = SyncRows.Row(state: .ok, value: "x", hint: nil)
-        return allOk ? [good, good, good, good] : [good, bad, good, good]
+    private let ok = SyncRows.Row(state: .ok, value: "x", hint: nil)
+    private let bad = SyncRows.Row(state: .failed, value: "x", hint: nil)
+
+    @Test func gateNeedsAllPermissionsAndReadyOrSkippedGlasses() {
+        let allowed = [AppPermission.State](repeating: .allowed, count: 4)
+        #expect(!SyncGate.needed(permissions: allowed, glasses: [ok, ok], skipped: false))
+        #expect(SyncGate.needed(permissions: allowed, glasses: [ok, bad], skipped: false))
+        // Skip covers the glasses rows only
+        #expect(!SyncGate.needed(permissions: allowed, glasses: [ok, bad], skipped: true))
+        var missing = allowed
+        missing[1] = .notAsked
+        #expect(SyncGate.needed(permissions: missing, glasses: [ok, ok], skipped: true))
+        missing[1] = .denied
+        #expect(SyncGate.needed(permissions: missing, glasses: [ok, ok], skipped: true))
     }
 
-    @Test func gateShowsUntilConnectedOrSkipped() {
-        #expect(SyncGate.needed(rows: rows(allOk: false), skipped: false)
-            == true)
-        #expect(SyncGate.needed(rows: rows(allOk: true), skipped: false)
-            == false)
-        #expect(SyncGate.needed(rows: rows(allOk: false), skipped: true)
-            == false)
-        #expect(SyncGate.needed(rows: rows(allOk: true), skipped: true)
-            == false)
+    @Test func rowsBeforeBluetoothWaitOnIt() {
+        let rows = SyncGate.rows(permission: { _ in .notAsked }, server: .idle,
+                                 dat: nil, hfpName: nil)
+        #expect(rows.count == SyncItem.allCases.count)
+        for item in [SyncItem.metaApp, .glasses, .camera] {
+            #expect(rows[item.rawValue] == SyncRows.needsBluetooth)
+        }
+        #expect(SyncRows.needsBluetooth.state == .waiting)
+        // audio needs no DAT, but asks mic + speech first
+        #expect(rows[SyncItem.audio.rawValue].value == "Tap to allow mic")
+        for item in [SyncItem.bluetooth, .localNetwork] {
+            #expect(rows[item.rawValue].value == "Tap to allow")
+            #expect(rows[item.rawValue].state == .action)
+        }
+    }
+
+    @Test func rowOrderMatchesDesignBrief() {
+        #expect(SyncItem.allCases.map(\.title) == [
+            "Bluetooth", "Local network", "Meta AI app", "Glasses",
+            "Glasses audio", "Camera"])
+    }
+}
+
+struct PermissionRowTests {
+    @Test func permissionStatesToRows() {
+        #expect(SyncRows.permission(.notAsked) == .init(state: .action, value: "Tap to allow", hint: nil))
+        let denied = SyncRows.permission(.denied)
+        #expect(denied.state == .failed && denied.value == "Denied · Open Settings")
+        #expect(SyncRows.permission(.allowed) == .init(state: .ok, value: "Allowed", hint: nil))
+    }
+
+    @Test func glassesAudioAsksMicThenFollowsGlasses() {
+        let ask = SyncRows.glassesAudio(mic: .notAsked, glassesConnected: true, hfpName: "RB")
+        #expect(ask.state == .action && ask.value == "Tap to allow mic")
+        let off = SyncRows.glassesAudio(mic: .denied, glassesConnected: true, hfpName: "RB")
+        #expect(off.state == .failed && !off.value.contains("Denied"))
+        #expect(SyncRows.glassesAudio(mic: .allowed, glassesConnected: true, hfpName: "RB").state == .ok)
+        #expect(SyncRows.glassesAudio(mic: .allowed, glassesConnected: true, hfpName: nil).state == .failed)
+        #expect(SyncRows.glassesAudio(mic: .allowed, glassesConnected: false, hfpName: nil).state == .waiting)
+    }
+
+    @Test func localNetworkShowsTheConnection() {
+        #expect(SyncRows.localNetwork(allowed: false, link: .idle).value == "Tap to allow")
+        #expect(SyncRows.localNetwork(allowed: true, link: .idle).state == .checking)
+        #expect(SyncRows.localNetwork(allowed: true, link: .connecting).state == .checking)
+        let up = SyncRows.localNetwork(allowed: true, link: .connected)
+        #expect(up.state == .ok && up.value == "Connected")
+        #expect(SyncRows.localNetwork(allowed: true, link: .failed).state == .failed)
+    }
+
+    @Test func tapRowsDoNotTriggerRetrySkip() {
+        let tap = SyncRows.permission(.notAsked)
+        #expect(!SyncGate.showsActions(rows: [tap, SyncRows.needsBluetooth], pendingFor: nil))
+        #expect(Theme.syncStyle(for: .action).rowOpacity == 1)
+        #expect(Theme.syncStyle(for: .waiting).rowOpacity == 0.38)
+    }
+}
+
+struct SyncLayoutTests {
+    @Test func sixRowsFitAtDesignSpacing() {
+        let fit = SyncLayout.spacing(rows: SyncItem.allCases.count)
+        #expect(fit.row == 18 && fit.top == 18)
+    }
+
+    @Test func tightHeightShrinksOnlySpacing() {
+        let roomy = SyncLayout.spacing(rows: 8, available: 2000)
+        #expect(roomy.row == 18)
+        let tight = SyncLayout.spacing(rows: 8, available: 600)
+        #expect(tight.row < 18 && tight.row > 0 && tight.row == tight.top)
+        #expect(SyncLayout.spacing(rows: 8, available: 100).row == 0)
+    }
+}
+
+struct TalkLineTests {
+    @Test func readyLineTellsWhatBlocksTalking() {
+        #expect(Theme.pipText(for: .ready, speakText: "", partialText: nil,
+                              wake: .undetermined).text == "Allow mic to talk to Pip")
+        #expect(Theme.pipText(for: .ready, speakText: "", partialText: nil,
+                              wake: .micDenied).text == "Allow mic to talk to Pip")
+        #expect(Theme.pipText(for: .ready, speakText: "", partialText: nil,
+                              wake: .noOnDevice).text == "Hold the mic to talk to Pip")
+        #expect(Theme.pipText(for: .ready, speakText: "", partialText: nil,
+                              wake: .ok, wakeOn: false).text == "Hold the mic to talk to Pip")
+        #expect(Theme.pipText(for: .ready, speakText: "", partialText: nil,
+                              wake: .ok).text == "Say “Hey Pip”")
+        // other states are unaffected
+        #expect(Theme.pipText(for: .listening, speakText: "", partialText: nil,
+                              wake: .micDenied).text == "Pip Listening")
     }
 }
 
@@ -196,9 +288,10 @@ struct SyncPendingTests {
         #expect(SyncRows.camera(nil, step: .checking).state == .checking)
         // a re-check keeps a known answer instead of flickering to pending
         #expect(SyncRows.camera(.granted, step: .checking).state == .ok)
-        #expect(SyncRows.camera(.denied, step: .checking).state == .failed)
+        #expect(SyncRows.camera(.denied, step: .checking).state == .action)
         // audio is checked synchronously: never pending
-        #expect(SyncRows.audio(hfpName: nil).state == .failed)
+        #expect(SyncRows.glassesAudio(mic: .allowed, glassesConnected: true,
+                                      hfpName: nil).state != .checking)
     }
 
     @Test func actionsOnFailureOrLongPending() {
@@ -209,8 +302,8 @@ struct SyncPendingTests {
         #expect(SyncGate.showsActions(rows: [ok, pending], pendingFor: 10.5))
         #expect(SyncGate.showsActions(rows: [ok, failed], pendingFor: nil))
         #expect(!SyncGate.showsActions(rows: [ok, ok], pendingFor: nil))
-        // pending does not change the gate decision
-        #expect(SyncGate.needed(rows: [ok, pending], skipped: false))
+        // pending glasses still need the gate
+        #expect(SyncGate.needed(permissions: [.allowed], glasses: [ok, pending], skipped: false))
     }
 }
 

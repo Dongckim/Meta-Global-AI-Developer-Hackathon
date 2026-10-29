@@ -80,24 +80,28 @@ struct Meta_Global_AI_Developer_HackathonApp: App {
 enum DesignPreview: String {
     case splash, connecting, ready
 
+    /// First `ok` rows done, then one pending row, the rest waiting.
+    private func rows(ok: Int, pending: String?) -> [SyncRows.Row] {
+        let done = ["Allowed", "Connected", "Linked", "Ray-Ban Meta · 82%",
+                    "Glasses mic", "Allowed"]
+        return SyncItem.allCases.map { item in
+            let i = item.rawValue
+            if i < ok { return .init(state: .ok, value: done[i], hint: nil) }
+            if i == ok, let pending { return .init(state: .checking, value: pending, hint: nil) }
+            return .init(state: .waiting, value: "", hint: nil)
+        }
+    }
+
     @ViewBuilder var view: some View {
         switch self {
         case .splash:
             SplashView {}
         case .connecting:
-            GlassesSyncScreen(dat: nil, onSkip: {}, onComplete: {}, previewRows: [
-                .init(state: .ok, value: "Linked", hint: nil),
-                .init(state: .checking, value: "Searching nearby…", hint: nil),
-                .init(state: .failed, value: "", hint: nil),
-                .init(state: .failed, value: "", hint: nil),
-            ])
+            GlassesSyncScreen(dat: nil, onSkip: {}, onComplete: {},
+                              previewRows: rows(ok: 3, pending: "Searching nearby…"))
         case .ready:
-            GlassesSyncScreen(dat: nil, onSkip: {}, onComplete: {}, previewRows: [
-                .init(state: .ok, value: "Linked", hint: nil),
-                .init(state: .ok, value: "Found · 82%", hint: nil),
-                .init(state: .ok, value: "Allowed", hint: nil),
-                .init(state: .ok, value: "Glasses mic", hint: nil),
-            ])
+            GlassesSyncScreen(dat: nil, onSkip: {}, onComplete: {},
+                              previewRows: rows(ok: 6, pending: nil))
         }
     }
 }

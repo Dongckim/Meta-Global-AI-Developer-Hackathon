@@ -677,7 +677,7 @@ func loadScreens() -> [ScreenDef] {
         ScreenDef(id: "robot_preview", commands: ["make the robot protocol", "back"]),
         ScreenDef(id: "protocol_review", commands: ["import a protocol", "start the run", "back"]),
         ScreenDef(id: "home", commands: ["import a protocol", "open the demo protocol", "show yesterday's run"]),
-        ScreenDef(id: "setup", commands: ["check the microphone", "back"]),
+        ScreenDef(id: "sync", commands: ["retry the glasses check", "skip the glasses check", "back"]),
         ScreenDef(id: "protocol_detail", commands: ["start a new run", "show the runs", "back"]),
         ScreenDef(id: "run_view", commands: ["show yesterday's run", "read the notes", "back to the run"]),
         ScreenDef(id: "protocol_source", commands: ["show me the original for this step", "back"]),

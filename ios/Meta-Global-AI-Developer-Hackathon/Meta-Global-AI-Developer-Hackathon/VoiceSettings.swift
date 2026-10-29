@@ -6,17 +6,15 @@ struct VoiceSettingsView: View {
         SpeechBus.shared.voice?.identifier ?? SpeechBus.enUSVoices().first?.identifier ?? ""
     @State private var rate: Double = SpeechBus.shared.rate
     @State private var wakeEnabled = VoiceSession.wakeEnabled
-    @AppStorage("pip.setupDone") private var setupDone = true
+    /// Opens the glasses & permissions (sync) screen.
+    var onOpenSync: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
     private let voices = SpeechBus.enUSVoices()
 
     var body: some View {
         NavigationStack {
             Form {
-                Button("Open Setup") {
-                    setupDone = false
-                    dismiss()
-                }
+                Button("Glasses & permissions") { onOpenSync() }
                 Picker("Pip voice", selection: $voiceID) {
                     ForEach(voices, id: \.identifier) { v in
                         Text("\(v.name) (\(SpeechBus.qualityName(v.quality)))").tag(v.identifier)

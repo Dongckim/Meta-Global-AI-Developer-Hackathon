@@ -75,7 +75,6 @@ struct ContentView: View {
     @State private var showImporter = false
     @State private var ttsOn = SpeechBus.shared.enabled
     @State private var routeLine = ""
-    @AppStorage("pip.setupDone") private var setupDone = false
     @State private var showHome = false
     @State private var selectedProtocol: String?
     @State private var viewingRun: String?
@@ -89,24 +88,26 @@ struct ContentView: View {
     @State private var apiMismatch: String?
     private let screens = loadScreens()
     var dat: GlassesDAT? = nil
-    /// Configures DAT from Setup's Bluetooth Allow (the Bluetooth prompt).
+    /// Configures DAT from the sync screen's Bluetooth tap (the Bluetooth prompt).
     var enableDAT: () -> Void = {}
     /// Local network prompt fires on the first server request, so the app
-    /// reaches the server only after Setup's Local network Allow (or Server
-    /// check) made that request.
+    /// reaches the server only after the sync screen's Local network tap
+    /// made that request.
     @AppStorage("pip.serverAllowed") private var serverAllowed = false
     private var canReachServer: Bool { serverAllowed }
+    @State private var serverLink: ServerLink = .idle
+    /// connect() owns the one SSE loop; later taps only re-fetch the record.
+    @State private var connectStarted = false
     /// Top-level screens; every switch goes through `top.show`.
     enum TopScreen: Hashable { case splash, sync, main }
     @State private var top = ScreenStack(TopScreen.splash)
-    /// Sync opened by the launch gate (Skip remembers) vs from Setup/voice.
+    /// Sync opened by the launch gate (Skip remembers) vs from settings/voice.
     @State private var syncFromGate = false
     @State private var syncRefreshGen = 0
     @AppStorage("pip.syncSkipped") private var syncSkipped = false
 
-    /// Screen for hints: the server-owned view (setup boots app-local).
+    /// Screen for hints: the server-owned view.
     private var currentScreen: String {
-        if !setupDone { return "setup" }
         let s = lab.view.current.screen
         return s.isEmpty ? ((showHome || lab.run == nil) ? "home" : "main") : s
     }
@@ -139,11 +140,9 @@ struct ContentView: View {
             if lab.draft != nil, case .idle = draftState { draftState = .reviewing }
         }
         showHome = cur == "home"
-        if cur == "setup", setupDone, lastViewScreen != "setup" {
-            setupDone = false
-            if top.front == .sync, !syncFromGate { top.show(.main) }
-        }
-        if cur == "sync", top.front != .sync, lastViewScreen != "sync" {
+        // "setup" is the old id for the same screen (records saved before)
+        if cur == "sync" || cur == "setup", top.front != .sync,
+           lastViewScreen != cur {
             openSync()
         }
         if let i = ["liquids", "steps", "layout"].firstIndex(of: v.tab) { reviewTab = i }
@@ -151,15 +150,18 @@ struct ContentView: View {
         lastViewScreen = cur
     }
 
-    /// Launch flow: splash, then the sync gate unless glasses are
-    /// already connected or the user skipped (Setup comes after).
+    /// Launch flow: splash, then the sync screen while a permission is
+    /// missing or the glasses aren't ready (unless skipped), then main.
     private func dismissSplash() {
         guard top.front == .splash else { return }
-        // Setup comes first while DAT is off or a permission is unasked
-        if dat != nil, !AppPermission.anyNotAsked(serverAllowed: serverAllowed),
-           SyncGate.needed(
-            rows: SyncGate.rows(dat: dat, hfpName: SyncGate.liveHFPName),
-            skipped: syncSkipped) {
+        let rows = SyncGate.rows(permission: { $0.state(serverAllowed: serverAllowed) },
+                                 server: serverLink, dat: dat,
+                                 hfpName: SyncGate.liveHFPName)
+        let glasses = SyncItem.allCases.filter { $0.permission == nil }.map { rows[$0.rawValue] }
+        if SyncGate.needed(
+            permissions: [AppPermission.bluetooth, .localNetwork, .microphone]
+                .map { $0.state(serverAllowed: serverAllowed) },
+            glasses: glasses, skipped: syncSkipped) {
             syncFromGate = true
             top.show(.sync)
         } else {
@@ -169,37 +171,49 @@ struct ContentView: View {
 
     private func skipSyncGate() {
         syncSkipped = true
-        top.show(.main)
+        closeSync()
     }
 
-    /// Sync from Setup or voice (not the launch gate).
+    /// Sync from settings or voice (not the launch gate).
     private func openSync() {
-        // no DAT = Bluetooth not allowed yet; Setup's Allow comes first
-        guard dat != nil else { return }
         syncFromGate = false
         top.show(.sync)
     }
 
     private func leaveSync() {
-        if syncFromGate { skipSyncGate() } else { top.show(.main) }
+        if syncFromGate { skipSyncGate() } else { closeSync() }
     }
 
-    /// Voice "skip the glasses check": leave the sync UI when it is up,
-    /// else finish Setup (tap Skip behaves the same per surface).
+    /// Back to main; the server view drops its sync entry if it has one.
+    private func closeSync() {
+        top.show(.main)
+        let cur = lab.view.current.screen
+        if cur == "sync" || cur == "setup" { sendAction("back") }
+    }
+
+    /// Voice "skip the glasses check": Skip on the sync screen, or just
+    /// remember the skip when it isn't up.
     private func dismissSyncOrSetup() {
         if top.front == .sync {
             leaveSync()
         } else {
-            setupDone = true
+            syncSkipped = true
         }
     }
 
-    /// Voice "retry the glasses check": re-run the sync re-check, opening
-    /// the screen when in setup-phase without it.
+    /// Voice "retry the glasses check": re-run the checks on the sync screen.
     private func retrySync() {
         syncRefreshGen += 1
-        if top.front != .sync, !setupDone {
-            openSync()
+        if top.front != .sync { openSync() }
+    }
+
+    /// Local network row tap: the first tap allows reaching the server
+    /// (its request shows the prompt); later taps re-fetch the record.
+    private func connectServer() {
+        if connectStarted {
+            Task { @MainActor in await loadRecord() }
+        } else {
+            serverAllowed = true
         }
     }
 
@@ -211,9 +225,13 @@ struct ContentView: View {
             case .splash:
                 SplashView { dismissSplash() }
             case .sync:
-                GlassesSyncScreen(dat: dat, refreshGen: syncRefreshGen,
+                GlassesSyncScreen(dat: dat, voice: voice,
+                                  serverAllowed: serverAllowed, server: serverLink,
+                                  onAllowBluetooth: enableDAT,
+                                  onConnectServer: connectServer,
+                                  refreshGen: syncRefreshGen,
                                   onSkip: leaveSync,
-                                  onComplete: { top.show(.main) })
+                                  onComplete: closeSync)
             case .main:
                 mainBody
             }
@@ -225,13 +243,13 @@ struct ContentView: View {
         }) { sel in WellSheet(well: sel.id, lab: lab) { say($0) } }
         .sheet(isPresented: robotSheet) { robotPanel }
         .sheet(isPresented: draftSheet) { draftPanel }
-        .sheet(isPresented: $showSettings) { VoiceSettingsView() }
+        .sheet(isPresented: $showSettings) {
+            VoiceSettingsView(onOpenSync: { showSettings = false; openSync() })
+        }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .plainText]) { res in
             importPicked(res)
         }
         .onAppear {
-            // a permission nobody was asked for yet: start in Setup
-            if AppPermission.anyNotAsked(serverAllowed: serverAllowed) { setupDone = false }
             if canReachServer { connect(); loadLists() }
             refreshRoute()
             voice.activate()
@@ -270,18 +288,9 @@ struct ContentView: View {
     private var mainBody: some View {
         VStack(spacing: 0) {
             contractBanners
-            VoiceOrb(voice: voice, speakText: lastReply)
+            VoiceOrb(voice: voice, speakText: lastReply, onBlockedTap: openSync)
             Group {
-                if !setupDone {
-                SetupView(dat: dat, voice: voice,
-                          onOpenSync: { openSync() },
-                          onServerChecked: { serverAllowed = true },
-                          serverAllowed: serverAllowed,
-                          onAllowBluetooth: enableDAT) {
-                    setupDone = true
-                    if lab.view.current.screen == "setup" { sendAction("back") }
-                }
-            } else if let src = viewingSource {
+                if let src = viewingSource {
                 VStack(spacing: 8) {
                     HStack {
                         Button { sendAction("back") } label: {
@@ -324,7 +333,7 @@ struct ContentView: View {
                         onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
                         onRun: { sendAction("open", ["target": "run:\($0)"]) },
                         onAnswer: answer(id:ok:), onAnswerAll: answerAll,
-                        onSetup: { sendAction("navigate", ["screen": "setup"]) },
+                        onSetup: { openSync() },
                         onRefresh: loadLists)
                     hintsBar.padding(.horizontal)
                     inputBar.padding(.horizontal).padding(.bottom)
@@ -336,15 +345,15 @@ struct ContentView: View {
         }
     }
 
-    /// Contract banners (hidden on setup: it has its own server check).
+    /// Contract banners.
     private var contractBanners: some View {
         VStack(spacing: 0) {
-            if setupDone, let err = syncError {
+            if let err = syncError {
                 Text("Out of sync: \(err)")
                     .font(.callout.bold()).foregroundStyle(.white)
                     .frame(maxWidth: .infinity).padding(6).background(.red)
             }
-            if setupDone, let mm = apiMismatch {
+            if let mm = apiMismatch {
                 Text(mm)
                     .font(.callout.bold()).foregroundStyle(.white)
                     .frame(maxWidth: .infinity).padding(6).background(.orange)
@@ -836,16 +845,26 @@ struct ContentView: View {
 
     // MARK: - Logic
 
+    /// Initial `/record` fetch; its outcome is the Local network row.
+    private func loadRecord() async {
+        serverLink = .connecting
+        do {
+            lab.sync(try await PipClient.record())
+            renderView()
+            syncError = nil
+            serverLink = .connected
+        } catch {
+            syncError = syncReason(error)
+            serverLink = .failed
+            say("Record unavailable: \(error.localizedDescription)")
+        }
+    }
+
     private func connect() {
+        guard !connectStarted else { return }
+        connectStarted = true
         Task { @MainActor in
-            do {
-                lab.sync(try await PipClient.record())
-                renderView()
-                syncError = nil
-            } catch {
-                syncError = syncReason(error)
-                say("Record unavailable: \(error.localizedDescription)")
-            }
+            await loadRecord()
             do {
                 let h = try await PipClient.health()
                 if let v = h.apiVersion, v != PipClient.EXPECTED_API_VERSION {
@@ -859,6 +878,7 @@ struct ContentView: View {
             while !Task.isCancelled {
                 do {
                     for try await ev in PipClient.events() {
+                        serverLink = .connected
                         handleEvent(ev)
                     }
                 } catch {

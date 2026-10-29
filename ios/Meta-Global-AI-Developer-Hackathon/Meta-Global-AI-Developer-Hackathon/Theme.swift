@@ -241,10 +241,27 @@ enum Theme {
         var dots: Bool
     }
 
+    /// Ready line when "Hey Pip" can't run: nil = it can. Permission
+    /// problems point at the sync screen (the line opens it).
+    static func talkBlocker(wake: WakeListener.Support, wakeOn: Bool) -> String? {
+        switch wake {
+        case .undetermined, .micDenied, .speechDenied, .speechRestricted:
+            return "Allow mic to talk to Pip"
+        case .noRecognizer, .noOnDevice:
+            return "Hold the mic to talk to Pip"
+        case .ok:
+            return wakeOn ? nil : "Hold the mic to talk to Pip"
+        }
+    }
+
     static func pipText(for state: VoiceSession.State, speakText: String,
-                        partialText: String?) -> PipLine {
+                        partialText: String?, wake: WakeListener.Support = .ok,
+                        wakeOn: Bool = true) -> PipLine {
         switch state {
         case .ready:
+            if let blocked = talkBlocker(wake: wake, wakeOn: wakeOn) {
+                return PipLine(text: blocked, dots: false)
+            }
             // diff: design says "Say Pip" but the trigger is "Hey Pip".
             return PipLine(text: "Say “Hey Pip”", dots: false)
         case .listening:
@@ -272,6 +289,10 @@ enum Theme {
         case checking
         case ok
         case failed
+        /// Blocked on another row (design pending look).
+        case waiting
+        /// Needs the user's tap (e.g. "Tap to allow"): hollow, full opacity.
+        case action
     }
 
     /// (row opacity, icon style). `.srow` rests at opacity .38 and lights
@@ -293,10 +314,14 @@ enum Theme {
             return SyncStyle(rowOpacity: 1, icon: .spin)
         case .ok:
             return SyncStyle(rowOpacity: 1, icon: .tick)
-        case .failed:
+        case .failed, .waiting:
             // diff: the design has no failure; failed rows use the
             // pending look (dim, hollow) with a short reason as the value.
             return SyncStyle(rowOpacity: 0.38, icon: .hollow)
+        case .action:
+            // diff: the design has no tap-to-ask row; lit like .on so the
+            // next step reads, hollow because nothing is running.
+            return SyncStyle(rowOpacity: 1, icon: .hollow)
         }
     }
 }

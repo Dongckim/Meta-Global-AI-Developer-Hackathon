@@ -71,6 +71,8 @@ final class VoiceSession {
     private(set) var listeningSince: Date?
     private(set) var lastHeld: Double = 0
     private(set) var wakeStatus = "Not checked"
+    /// Last read wake support (permissions, recognizer); drives the top line.
+    private(set) var wakeSupport: WakeListener.Support = .ok
     /// Capture output for the owner to send; cleared when it responds.
     private(set) var pendingAudio: URL?
     private(set) var notice = ""
@@ -174,6 +176,7 @@ final class VoiceSession {
 
     func refreshWakeStatus() {
         let s = support()
+        wakeSupport = s
         var text = WakeListener.describe(s)
         if s == .ok, !Self.wakeEnabled {
             text = "Off — enable “Hey Pip” in Settings"
@@ -436,11 +439,16 @@ struct VoiceOrb: View {
     var voice: VoiceSession
     var speakText: String = ""
     var partialText: String? = nil
+    /// Tap while talking is blocked by a permission: opens the sync screen.
+    var onBlockedTap: () -> Void = {}
 
     var body: some View {
         let style = Theme.orbStyle(for: voice.state)
         let line = Theme.pipText(for: voice.state, speakText: speakText,
-                                 partialText: partialText)
+                                 partialText: partialText, wake: voice.wakeSupport,
+                                 wakeOn: VoiceSession.wakeEnabled)
+        let blocked = voice.state == .ready
+            && Theme.talkBlocker(wake: voice.wakeSupport, wakeOn: true) != nil
         HStack(spacing: 10) {
             OrbDisc(style: style)
             WordReveal(text: line.text, dots: line.dots)
@@ -448,6 +456,9 @@ struct VoiceOrb: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture { if blocked { onBlockedTap() } }
+        .accessibilityAddTraits(blocked ? .isButton : [])
     }
 }
 

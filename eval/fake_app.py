@@ -183,7 +183,7 @@ def check_screen_matches_record(text: str, record: dict) -> list[str]:
     want_screen = f"[{cur.get('screen', '?')}:{cur.get('target') or '-'}]"
     if want_screen not in head:
         errs.append(f"screen mismatch in {head[:60]!r}")
-    if not record.get("run") and cur.get("screen") not in ("home", "setup", ""):
+    if not record.get("run") and cur.get("screen") not in ("home", "sync", ""):
         errs.append(f"no run but screen {cur.get('screen')!r}")
     sh = (record.get("view") or {}).get("sheet") or {}
     want_sheet = f"{sh.get('name') or '-'}:{sh.get('target') or '-'}" if sh.get("name") else "-"

@@ -1,5 +1,4 @@
 import AVFoundation
-import Speech
 import SwiftUI
 
 func fmtDate(_ ts: Double?) -> String {
@@ -479,43 +478,23 @@ struct LevelBar: View {
     }
 }
 
-// MARK: - Setup
+// MARK: - Diagnostics (DEBUG: long-press the glasses icon on Glasses sync)
 
-struct SetupView: View {
-    var dat: GlassesDAT? = nil
+#if DEBUG
+/// Developer checks that used to live under Setup's Diagnostics.
+struct DiagnosticsView: View {
     var voice: VoiceSession? = nil
-    var onOpenSync: () -> Void = {}
-    /// The Server check ran (its request is what shows the local network prompt).
-    var onServerChecked: () -> Void = {}
-    var serverAllowed = false
-    /// Bluetooth Allow: configures DAT, which shows the Bluetooth prompt.
-    var onAllowBluetooth: () -> Void = {}
-    var onDone: () -> Void
-    /// Re-read permission states after a prompt (the app goes inactive
-    /// while it shows, so the phase change re-renders too).
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var permissionGen = 0
+    @Environment(\.dismiss) private var dismiss
     @State private var mic = "Not checked"
     @State private var server = "Not checked"
     @State private var heard = ""
     @State private var recorder = Recorder()
     @State private var recording = false
     @State private var busy = false
-    @State private var showDiagnostics = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Setup").font(.title.bold())
-            Text("Permissions").font(.headline)
-            let _ = (scenePhase, permissionGen)
-            ForEach(AppPermission.allCases, id: \.self) { p in
-                permissionRow(p)
-            }
-            row("Glasses sync", status: syncStatus) {
-                Button("Open") { onOpenSync() }.buttonStyle(.bordered).controlSize(.small)
-                    .disabled(dat == nil)
-            }
-            DisclosureGroup("Diagnostics", isExpanded: $showDiagnostics) {
+        NavigationStack {
+            ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     row("Microphone", status: mic) {
                         Button("Check") { checkMic() }.buttonStyle(.bordered).controlSize(.small)
@@ -544,88 +523,10 @@ struct SetupView: View {
                         }
                     }
                 }
-                .padding(.top, 8)
+                .padding()
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Mode").font(.headline)
-                HStack {
-                    Text("Full").font(.callout.bold())
-                        .padding(6).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
-                    Text("Private — coming soon").font(.callout).foregroundStyle(.secondary)
-                        .padding(6).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
-                }
-            }
-            Spacer()
-            Button("Done") { onDone() }
-                .buttonStyle(.borderedProminent)
-        }
-        .padding()
-    }
-
-    private var syncStatus: String {
-        guard let dat else { return "Allow Bluetooth first" }
-        switch dat.status {
-        case .connected:
-            if let level = dat.batteryLevel {
-                return "Connected: \(dat.deviceName ?? "glasses") · \(level)%"
-            }
-            return "Connected: \(dat.deviceName ?? "glasses")"
-        case .found:
-            return "Found — not linked"
-        case .registered:
-            return "Registered — no glasses yet"
-        case .unregistered:
-            return dat.busy ? "Registering…" : "Not set up"
-        case .error:
-            return "Error: \(dat.lastError ?? "unknown")"
-        }
-    }
-
-    private func permissionRow(_ p: AppPermission) -> some View {
-        let state = p.state(serverAllowed: serverAllowed)
-        let status = switch state {
-        case .notAsked: "Not allowed yet"
-        case .allowed: "Allowed"
-        case .denied: "Denied — enable in Settings"
-        }
-        return row(p.title, status: status) {
-            switch state {
-            case .notAsked:
-                Button("Allow") { allow(p) }.buttonStyle(.bordered).controlSize(.small)
-            case .denied:
-                Button("Settings") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url)
-                    }
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-            case .allowed:
-                EmptyView()
-            }
-        }
-    }
-
-    /// One tap, one system prompt.
-    private func allow(_ p: AppPermission) {
-        switch p {
-        case .bluetooth:
-            onAllowBluetooth()
-        case .microphone:
-            Task { @MainActor in
-                _ = await Recorder.requestPermission()
-                voice?.refresh()
-                permissionGen += 1
-            }
-        case .speech:
-            Task { @MainActor in
-                _ = await withCheckedContinuation { cont in
-                    SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0) }
-                }
-                voice?.refresh()
-                permissionGen += 1
-            }
-        case .localNetwork:
-            checkServer()
+            .navigationTitle("Diagnostics")
+            .toolbar { Button("Done") { dismiss() } }
         }
     }
 
@@ -655,7 +556,6 @@ struct SetupView: View {
             } catch {
                 server = "Unreachable: \(error.localizedDescription)"
             }
-            onServerChecked()
         }
     }
 
@@ -710,3 +610,4 @@ struct SetupView: View {
         }
     }
 }
+#endif

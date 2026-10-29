@@ -217,13 +217,26 @@ smoke + iPad check.
   speech (replies, timers, import) flows through speak() so the orb
   never lies. Orb + reply line only, no overlay (orb styling is a
   placeholder until Eunbi's design lands).
-- Permissions are asked only from Setup's per-permission Allow taps
-  (Bluetooth, Microphone, Speech recognition, Local network; plus
-  hold-to-talk for the mic). Launch reads status only and starts in
-  Setup while any is not yet asked. DAT is configured at launch only
-  when Bluetooth is already allowed (configure starts Bluetooth); the
-  server is reached only after the Local network Allow made its first
-  request (no status API, so `pip.serverAllowed` records it).
+- No Setup page: Splash -> Glasses sync (while a permission is missing,
+  or the glasses aren't ready and weren't skipped) -> main. Voice
+  "open setup" / "glasses sync" open the same screen (`setup` is now an
+  alias of `sync` in screens.json; API 4).
+- Glasses sync rows: Bluetooth, Local network, Meta AI app, Glasses,
+  Glasses audio, Camera. A row tap is its one action; permissions are
+  asked only there (denied opens Settings). Glasses shows the device name
+  and battery when connected. Glasses audio asks the mic (iOS needs it for
+  the glasses' HFP mic too; speech recognition for "Hey Pip" is asked in
+  the same tap) and then follows the glasses route. Camera: DAT reports a
+  never-requested permission as denied, so denied means "Tap to allow"
+  (the Meta AI grant flow). DAT is configured only when Bluetooth is
+  allowed (configure starts Bluetooth); before that its rows wait on
+  Bluetooth. The server is reached only after the Local network tap made
+  its first request (no status API: `pip.serverAllowed`), and that row
+  shows the connection. Gate permissions: Bluetooth, local network, mic.
+  Skip covers the glasses rows only. Developer diagnostics are a DEBUG
+  sheet on long-press of the glasses icon.
+- The top voice line says what blocks talking ("Allow mic to talk to
+  Pip") and opens Glasses sync on tap.
 - iPad incident fixes: concurrent permission requests join one prompt; restart backoff (5/10s) + failure
   latch instead of churning; press/release pairing (pressGen) so a
   release before spin-up aborts instead of stranding listening; mic
