@@ -167,6 +167,8 @@ final class LiveLink: LiveControlling {
     private var task: URLSessionWebSocketTask?
     private let mic = LiveMic()
     private var finished = false
+    /// Last message from the server (pings included).
+    private var lastHeard = Date()
 
     var muted: Bool {
         get { mic.muted.value }
@@ -196,12 +198,36 @@ final class LiveLink: LiveControlling {
         }
         Log.voice.info("[voice] live ready session=\(obj["session_id"] as? String ?? "-", privacy: .public)")
         do {
-            try await mic.start { data in t.send(.data(data)) { _ in } }
+            try await mic.start { [weak self] data in
+                t.send(.data(data)) { err in
+                    guard let err else { return }
+                    // a frame that can't go out means the socket is gone
+                    Task { @MainActor in
+                        guard let self, !self.finished else { return }
+                        Log.voice.error("[voice] live send failed: \(err.localizedDescription, privacy: .public)")
+                        self.finish("error")
+                    }
+                }
+            }
         } catch {
             t.cancel(with: .goingAway, reason: nil)
             throw error
         }
+        lastHeard = Date()
         Task { await receiveLoop(t) }
+        Task { await idleWatch() }
+    }
+
+    /// A session silent past the idle timeout (no ping either) is a dead
+    /// socket, closed as a broken stream.
+    private func idleWatch() async {
+        while !finished {
+            try? await Task.sleep(for: .seconds(5))
+            if !finished, Date().timeIntervalSince(lastHeard) > PipClient.idleTimeout {
+                Log.voice.error("[voice] live silent \(Int(PipClient.idleTimeout), privacy: .public)s: closing")
+                finish("error")
+            }
+        }
     }
 
     func end() {
@@ -217,6 +243,7 @@ final class LiveLink: LiveControlling {
         while !finished {
             do {
                 let m = try await t.receive()
+                lastHeard = Date()
                 handle(m)
             } catch {
                 Log.voice.error("[voice] live socket: \(error.localizedDescription, privacy: .public)")
@@ -228,6 +255,8 @@ final class LiveLink: LiveControlling {
     private func handle(_ m: URLSessionWebSocketTask.Message) {
         let obj = Self.object(m)
         switch obj["type"] as? String {
+        case "ping":
+            break  // keepalive: only refreshes lastHeard
         case "partial":
             onEvent?(.partial(obj["text"] as? String ?? ""))
         case "ignored":

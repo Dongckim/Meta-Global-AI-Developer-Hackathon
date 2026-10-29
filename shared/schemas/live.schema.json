@@ -13,8 +13,9 @@
              "description": "The /voice response shape plus type and end_session.",
              "properties": {"type": {"const": "turn"}, "transcript": {"type": "string"}, "reply": {"type": "string"}, "speak": {"type": "string"},
                             "end_session": {"type": "boolean"}, "tool_calls": {"type": "array"}, "messages": {"type": "array"}, "cards": {"type": "array"}, "record_version": {"type": "integer"}}},
+    "ping": {"type": "object", "required": ["type"], "description": "Keepalive every HEARTBEAT_S (15 s); the app closes a link silent for 45 s.", "properties": {"type": {"const": "ping"}}},
     "error": {"type": "object", "required": ["type", "message"], "properties": {"type": {"const": "error"}, "message": {"type": "string"}}},
     "closed": {"type": "object", "required": ["type", "code", "reason", "why"], "properties": {"type": {"const": "closed"}, "code": {"type": ["integer", "null"]}, "reason": {"type": "string"}, "why": {"enum": ["window", "max_duration", "end_session", "client", "server", "error"]}}}
   },
-  "oneOf": [{"$ref": "#/$defs/ready"}, {"$ref": "#/$defs/partial"}, {"$ref": "#/$defs/ignored"}, {"$ref": "#/$defs/turn"}, {"$ref": "#/$defs/error"}, {"$ref": "#/$defs/closed"}]
+  "oneOf": [{"$ref": "#/$defs/ready"}, {"$ref": "#/$defs/partial"}, {"$ref": "#/$defs/ignored"}, {"$ref": "#/$defs/turn"}, {"$ref": "#/$defs/ping"}, {"$ref": "#/$defs/error"}, {"$ref": "#/$defs/closed"}]
 }

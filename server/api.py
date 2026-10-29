@@ -81,7 +81,10 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 8
+API_VERSION = 9
+#: Seconds between keepalives on /events and /voice/live. The app drops a
+#: link that stays silent for three of these and reconnects.
+HEARTBEAT_S = 15.0
 
 BASE_URL = "https://api.meta.ai/v1"
 SPARK_MODEL = "muse-spark-1.3"
@@ -1411,6 +1414,13 @@ async def voice_live(ws: WebSocket):
             if end is not None:
                 await end_stream("end_session")
 
+    async def heartbeat():
+        """A ping while nothing else flows, so the app can tell a quiet
+        session from a dead socket."""
+        while not ended:
+            await asyncio.sleep(HEARTBEAT_S)
+            await ws.send_json({"type": "ping"})
+
     async def watchdog():
         while not ended:
             await asyncio.sleep(1)
@@ -1418,7 +1428,7 @@ async def voice_live(ws: WebSocket):
             if reason:
                 await end_stream(reason)
 
-    tasks = [asyncio.create_task(c()) for c in (uplink, worker, watchdog)]
+    tasks = [asyncio.create_task(c()) for c in (uplink, worker, watchdog, heartbeat)]
     try:
         await downlink()  # ends when Meta closes (1000 after endStream, or an error)
     finally:
@@ -1724,7 +1734,11 @@ async def events():
         try:
             yield f"data: {json.dumps({'kind': 'snapshot', **store.snapshot()}, ensure_ascii=False)}\n\n"
             while True:
-                msg = await queue.get()
+                try:
+                    msg = await asyncio.wait_for(queue.get(), HEARTBEAT_S)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"  # SSE comment: proves the stream is alive, carries nothing
+                    continue
                 yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
         finally:
             try:

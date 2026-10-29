@@ -211,7 +211,10 @@ enum PipError: Error, LocalizedError {
 
 enum PipClient {
     /// Must match server API_VERSION (test_snapshot_schema pins both sides).
-    static let EXPECTED_API_VERSION = 8
+    static let EXPECTED_API_VERSION = 9
+    /// A server link silent this long is dead: three missed keepalives
+    /// (server HEARTBEAT_S = 15) on /events and /voice/live.
+    static let idleTimeout: TimeInterval = 45
 
     /// /voice/live on the same server (http -> ws, https -> wss).
     static var liveURL: URL {
@@ -382,7 +385,7 @@ enum PipClient {
         AsyncThrowingStream { cont in
             let task = Task {
                 var req = URLRequest(url: Config.baseURL.appending(path: "events"))
-                req.timeoutInterval = 3600
+                req.timeoutInterval = idleTimeout  // idle gap between bytes, not total time
                 let (bytes, resp) = try await URLSession.shared.bytes(for: req)
                 guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
                     throw PipError.server((resp as? HTTPURLResponse)?.statusCode ?? -1, "")

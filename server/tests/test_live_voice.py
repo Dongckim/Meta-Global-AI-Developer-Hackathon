@@ -188,6 +188,36 @@ assert turn["end_session"] is True and turn["reply"] in ("Anytime.", "Happy to h
 assert got[-1]["why"] == "end_session", got[-1]
 print("LV5 ok: explicit end")
 
+# A quiet session still pings (schema-valid), so the app can tell quiet from dead.
+FakeMeta.script = []
+api.HEARTBEAT_S, beat = 0.05, api.HEARTBEAT_S
+with c.websocket_connect("/voice/live") as ws:
+    ws.send_json({"type": "start", "session": "live-ping"})
+    assert check(ws.receive_json())["type"] == "ready"
+    assert check(ws.receive_json()) == {"type": "ping"}
+    ws.send_json({"type": "end"})
+    while check(ws.receive_json())["type"] != "closed":
+        pass
+api.HEARTBEAT_S = beat
+print("LV5b ok: quiet live session pings")
+
+# /events: the first message is a full snapshot (a reconnect restores what it
+# missed), then a keepalive comment while nothing changes.
+async def _first_two():
+    api.HEARTBEAT_S = 0.05
+    try:
+        it = (await api.events()).body_iterator
+        first, second = await it.__anext__(), await it.__anext__()
+        await it.aclose()
+        return first, second
+    finally:
+        api.HEARTBEAT_S = beat
+first, second = asyncio.run(_first_two())
+snap = json.loads(first[len("data: "):])
+assert snap["kind"] == "snapshot" and snap["version"] == api.store.r["version"], snap.keys()
+assert second == ": ping\n\n", second
+print("LV5c ok: /events opens with a snapshot and keeps alive")
+
 # A failing turn keeps the session: sorry, then the next turn still runs; a
 # wake-only turn answers "here" with no model call.
 real_handle = api._handle_text

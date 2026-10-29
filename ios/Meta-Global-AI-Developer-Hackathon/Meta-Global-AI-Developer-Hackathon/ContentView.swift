@@ -65,6 +65,7 @@ struct ContentView: View {
     @State private var busy = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedWell: WellSelect?
+    @State private var eventsTask: Task<Void, Never>?
     @State private var peekGen = 0
     @State private var peekTarget: String?
     @State private var lastViewScreen = ""
@@ -275,6 +276,8 @@ struct ContentView: View {
             // inactive (Control Center, alerts) keeps a live session; background ends it
             if phase == .active {
                 voice.activate()
+                // a stream that slept in the background may be dead: open a fresh one
+                if connectStarted { openEvents() }
             } else if phase == .background || !voice.inSession {
                 voice.deactivate()
             }
@@ -851,6 +854,16 @@ struct ContentView: View {
             } catch {
                 apiMismatch = nil // unreachable server already shows as out of sync
             }
+            openEvents()
+        }
+    }
+
+    /// (Re)opens the server event stream. Each connection starts with a full
+    /// snapshot, so a reconnect also restores any changes missed meanwhile.
+    /// A silent stream times out (PipClient.idleTimeout) and retries.
+    private func openEvents() {
+        eventsTask?.cancel()
+        eventsTask = Task { @MainActor in
             while !Task.isCancelled {
                 do {
                     for try await ev in PipClient.events() {
@@ -858,8 +871,9 @@ struct ContentView: View {
                         handleEvent(ev)
                     }
                 } catch {
-                    try? await Task.sleep(for: .seconds(2))
+                    Log.view.info("[view] events stream: \(error.localizedDescription, privacy: .public)")
                 }
+                try? await Task.sleep(for: .seconds(2))
             }
         }
     }
