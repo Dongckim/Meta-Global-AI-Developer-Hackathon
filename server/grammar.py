@@ -312,7 +312,9 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
     """
     text = normalize_text(text)
     low = re.sub(r"[,.:]", " ", text.lower())
-    m = re.fullmatch(r"\s*([a-h]\d{1,2})(?:\s+(?:to|through)\s+([a-h]\d{1,2}))?\s+done[?!]?\s*", low)
+    # "C2 done", "log C2 to C4 done": a completion is a mark, never a note body
+    m = re.fullmatch(rf"\s*(?:{_verb('mark_done')}\s+)?([a-h]\d{{1,2}})(?:\s+(?:to|through)\s+([a-h]\d{{1,2}}))?"
+                     rf"\s+{_verb('mark_done')}[?!]?\s*", low)
     if m:
         wells = expand_range(m.group(1).upper(), m.group(2).upper() if m.group(2) else None)
         if wells is None:

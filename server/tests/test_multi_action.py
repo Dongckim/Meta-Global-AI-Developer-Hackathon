@@ -97,6 +97,21 @@ parts = request_parts("add a note on C8 and exclude C6", api.WRITE_ACTIONS)
 assert [p["actions"] for p in parts] == [{"add_note"}, {"exclude_well"}], parts
 print("MA0 ok: registry verbs drive grammar and the coverage check")
 
+# MA0b. A phrase means one action: no verb is listed under two actions, so a
+# completion ("log C2 done") can never be heard as a note body.
+seen: dict = {}
+for a, spec in ACTIONS.items():
+    for v in spec.get("verbs", []):
+        assert v.lower() not in seen, (v, seen.get(v.lower()), a)
+        seen[v.lower()] = a
+fresh()
+for said, wells in (("log C2 done", ["C2"]), ("log C2 to C4 done", ["C2", "C3", "C4"])):
+    j, _ = turn(said)
+    assert j["route"] == "grammar" and [t["name"] for t in j["tool_calls"]] == ["mark_done"], (said, j)
+    assert j["tool_calls"][0]["args"]["wells"] == wells, (said, j)
+    assert not api.store.r["notes"], (said, api.store.r["notes"])
+print("MA0b ok: verbs are disjoint; 'log C2 done' marks, never notes")
+
 # MA1. Grammar claims a whole turn or nothing: a second request goes to the
 # model instead of riding along as the exclude reason.
 fresh()
