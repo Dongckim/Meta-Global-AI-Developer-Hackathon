@@ -504,6 +504,10 @@ struct DiagnosticsView: View {
                     }
                     row(Persona.current.wakePhrase, status: voice?.wakeStatus ?? "Not checked") {
                         Button("Check") { checkWake() }.buttonStyle(.bordered).controlSize(.small)
+                        #if DEBUG
+                        Button("Measure ×10") { voice?.measureWake(count: 10) }
+                            .buttonStyle(.bordered).controlSize(.small)
+                        #endif
                     }
                     row("TTS voice", status: SpeechBus.shared.voiceInfo) { EmptyView() }
                     GlassesAudioSection()

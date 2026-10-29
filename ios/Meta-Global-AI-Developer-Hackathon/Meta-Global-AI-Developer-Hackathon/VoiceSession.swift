@@ -228,6 +228,15 @@ final class VoiceSession {
         if state == .ready { resumeWake() } else { wake.stop() }
     }
 
+    #if DEBUG
+    /// Scores the next `count` wake utterances ([wake] log) instead of
+    /// opening sessions; starts the listener if it is idle.
+    func measureWake(count: Int) {
+        (wake as? WakeListener)?.measure(count: count)
+        refresh()
+    }
+    #endif
+
     func refreshWakeStatus() {
         let s = support()
         wakeSupport = s

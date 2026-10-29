@@ -275,6 +275,17 @@ smoke + iPad check.
   REQUIRED_ARGS entry becomes ask() ("Which screen?") instead of a failure
   line. navigate.screen is an enum of the screen registry ids.
 
+- Persona (one place): `shared/pip_voice.json` `persona` = agent_name
+  "Milo", wake_phrase "Hey Milo", voice "Jamie" premium (+ language, rate,
+  pitch). Server prompt and app UI/TTS read only this (code identifiers
+  keep "Pip"). The app bundles the same file. No voice/rate picker.
+  TTS voice: name+quality -> same name enhanced -> same-language premium
+  -> system default, logged as `[voice] tts voice` and shown in DEBUG
+  diagnostics. Wake: `WakeMatcher` compares by sound (caller word + 1-2
+  words whose sound key is within one edit of the name); the on-device
+  recognizer gets a custom language model for the phrase when supported.
+  DEBUG "Measure ×10" logs the hit rate and every heard sentence.
+
 ## Standing rules (carried over)
 
 - Bug-judged behavior changes need a question first (AGENTS.md).

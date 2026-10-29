@@ -4,19 +4,27 @@ import Testing
 @testable import Meta_Global_AI_Developer_Hackathon
 
 struct WakeMatcherTests {
+    private let phrase = "Hey Milo"
+
     @Test func positives() {
-        for t in ["hey pip", "Hey Pip", "HEY PIP!", "hey, pip", "say hey pip now",
-                  "hey pep", "hey peep", "um hey pip please", "hay pip"] {
-            #expect(WakeMatcher.matches(t), Comment(rawValue: t))
+        for t in ["hey milo", "Hey Milo", "HEY MILO!", "hey, milo", "say hey milo now",
+                  "hey mylo", "hey my low", "a milo", "hey mila", "hay milo", "um hey milo please"] {
+            #expect(WakeMatcher.matches(t, phrase: phrase), Comment(rawValue: t))
         }
     }
 
     @Test func negatives() {
-        for t in ["", "hey", "pip", "happy", "pipette the sample", "pass the pipe",
-                  "hey pipe it", "hey pick C2", "keep it", "hey pit crew",
-                  "hey papa", "this is a test", "peptalk"] {
-            #expect(!WakeMatcher.matches(t), Comment(rawValue: t))
+        for t in ["", "hey", "milo", "milliliter", "mL", "mylar", "my lab", "hello",
+                  "hey milliliter", "hey mylar", "hey my lab", "hello milo", "hey kilo",
+                  "add 10 mL to C2", "this is a test"] {
+            #expect(!WakeMatcher.matches(t, phrase: phrase), Comment(rawValue: t))
         }
+    }
+
+    @Test func soundKey() {
+        #expect(WakeMatcher.key("my low") == "milo")
+        #expect(WakeMatcher.key("Mylo") == "milo")
+        #expect(WakeMatcher.key("milliliter") == "mililiter")
     }
 }
 
@@ -421,16 +429,27 @@ struct VoiceSessionTests {
     }
 
     @Test func wakeLatchConsumesOnlyAccepted() {
+        let wake = Persona.current.wakePhrase.lowercased() // latch uses the configured phrase
         var latch = WakeLatch()
-        #expect(latch.hear("hey pip"))
-        // rejected: fresh task, nothing carried -> the next "Hey Pip" offers again
+        #expect(latch.hear(wake))
+        // rejected: fresh task, nothing carried -> the next wake phrase offers again
         latch.newTask(carry: nil)
         #expect(!latch.hear("show c5")) // stale phrase gone
-        #expect(latch.hear("hey pip"))
+        #expect(latch.hear(wake))
         latch.accept()
-        #expect(!latch.hear("hey pip hey pip")) // accepted: held until a new task
-        latch.newTask(carry: "um hey")
-        #expect(latch.hear("pip")) // split across the boundary still matches
+        #expect(!latch.hear("\(wake) \(wake)")) // accepted: held until a new task
+        let words = wake.split(separator: " ")
+        latch.newTask(carry: "um " + words[0])
+        #expect(latch.hear(words.dropFirst().joined(separator: " "))) // split across the boundary
+    }
+
+    @Test func wakeProbeReportsRate() {
+        var p = WakeProbe(target: 3)
+        #expect(p.note("hey milo", hit: true) == nil)
+        #expect(p.note("hey my lab", hit: false) == nil)
+        let s = p.note("hey mylo", hit: true)
+        #expect(s?.hasPrefix("measure done: 2/3 (66%)") == true)
+        #expect(s?.contains("✗ \"hey my lab\"") == true)
     }
 
     @Test func stuckStateReturnsToReady() async {

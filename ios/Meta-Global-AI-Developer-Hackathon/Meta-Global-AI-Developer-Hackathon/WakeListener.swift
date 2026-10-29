@@ -117,9 +117,42 @@ final class WakeListener {
     private var restarts = RestartGate(limit: 5, window: 10)
     private(set) var running = false
 
+    /// Wake phrase taught to the on-device recognizer (custom language
+    /// model). nil until prepared, or when unsupported: the matcher alone.
+    private static var phraseModel: SFSpeechLanguageModel.Configuration?
+    private static var preparingModel = false
+
+    /// Builds the custom language model once per launch in the background;
+    /// tasks begun after it is ready use it.
+    private static func prepareModel() {
+        guard phraseModel == nil, !preparingModel else { return }
+        preparingModel = true
+        let phrase = Persona.current.wakePhrase
+        Task {
+            let dir = FileManager.default.temporaryDirectory
+            let asset = dir.appending(path: "wake-lm.bin")
+            let config = SFSpeechLanguageModel.Configuration(languageModel: dir.appending(path: "wake-lm"))
+            do {
+                let data = SFCustomLanguageModelData(locale: Locale(identifier: "en_US"),
+                                                     identifier: "wake.phrase", version: "1") {
+                    SFCustomLanguageModelData.PhraseCount(phrase: phrase, count: 200)
+                }
+                try await data.export(to: asset)
+                try await SFSpeechLanguageModel.prepareCustomLanguageModel(
+                    for: asset, clientIdentifier: "wake.phrase", configuration: config)
+                phraseModel = config
+                Log.wake.info("[wake] custom language model ready for \"\(phrase, privacy: .public)\"")
+            } catch {
+                Log.wake.error("[wake] custom language model unavailable (matcher only): \(error.localizedDescription, privacy: .public)")
+            }
+            preparingModel = false
+        }
+    }
+
     func start() async throws {
         guard !running else { return }
         guard recognizer != nil else { throw WakeError.noRecognizer }
+        Self.prepareModel()
         Log.wake.info("[wake] start: preparing engine")
         let rate = try await MicEngine.shared.prepare()
         guard let input = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate,
@@ -179,7 +212,8 @@ final class WakeListener {
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.requiresOnDeviceRecognition = true
         req.shouldReportPartialResults = true
-        req.contextualStrings = ["Hey Pip"]
+        req.contextualStrings = [Persona.current.wakePhrase]
+        if let lm = Self.phraseModel { req.customizedLanguageModel = lm }
         live.current = req
         Log.wake.info("[wake] recognition task begin task=\(gen) bufs=\(self.counter.value)")
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
@@ -196,6 +230,12 @@ final class WakeListener {
         if let result {
             lastText = result.bestTranscription.formattedString
             Log.wake.info("[wake] heard final=\(result.isFinal) \"\(self.lastText, privacy: .public)\"")
+            #if DEBUG
+            if probe != nil {
+                measure(text: lastText, isFinal: result.isFinal)
+                return
+            }
+            #endif
             if latch.hear(lastText) {
                 let accepted = onWake?() ?? false
                 Log.wake.info("[wake] fired accepted=\(accepted)")
@@ -236,6 +276,28 @@ final class WakeListener {
     private func rearm() {
         newTask(carry: nil)
     }
+
+    #if DEBUG
+    /// Measurement mode: the next `count` utterances are scored (hit = the
+    /// matcher fires) instead of opening sessions; the summary is logged.
+    private var probe: WakeProbe?
+
+    func measure(count: Int) {
+        probe = WakeProbe(target: count)
+        Log.wake.info("[wake] measure: say \"\(Persona.current.wakePhrase, privacy: .public)\" \(count) times")
+    }
+
+    private func measure(text: String, isFinal: Bool) {
+        guard var p = probe else { return }
+        let hit = latch.hear(text)
+        guard hit || (isFinal && !text.isEmpty) else { return }
+        let summary = p.note(text, hit: hit)
+        probe = summary == nil ? p : nil
+        Log.wake.info("[wake] measure \(p.heard.count)/\(p.target) \(hit ? "hit" : "miss", privacy: .public) \"\(text, privacy: .public)\"")
+        if let summary { Log.wake.info("[wake] \(summary, privacy: .public)") }
+        if hit { rearm() } else { restart() }
+    }
+    #endif
 
     private func newTask(carry: String?) {
         task?.cancel()
@@ -315,5 +377,22 @@ enum WakeError: Error, LocalizedError {
         case .noRecognizer: "No en-US speech recognizer"
         case .cannotConvert: "Couldn't prepare wake-word audio conversion"
         }
+    }
+}
+
+/// DEBUG wake measurement: scores utterances until `target`, then reports.
+struct WakeProbe {
+    let target: Int
+    private(set) var heard: [(text: String, hit: Bool)] = []
+
+    init(target: Int) { self.target = target }
+
+    /// Records one utterance; returns the summary line once `target` is reached.
+    mutating func note(_ text: String, hit: Bool) -> String? {
+        heard.append((text, hit))
+        guard heard.count >= target else { return nil }
+        let hits = heard.filter(\.hit).count
+        let list = heard.map { "\($0.hit ? "✓" : "✗") \"\($0.text)\"" }.joined(separator: " | ")
+        return "measure done: \(hits)/\(heard.count) (\(hits * 100 / max(heard.count, 1))%) — \(list)"
     }
 }
