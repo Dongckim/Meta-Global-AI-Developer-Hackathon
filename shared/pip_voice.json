@@ -1,5 +1,14 @@
 {
-  "_note": "Pip's voice. Eunbi-editable: change sentences freely, keep {placeholders} as-is. Server picks a different variant from last time.",
+  "_note": "The agent's voice. Eunbi-editable: change sentences freely, keep {placeholders} as-is. Server picks a different variant from last time. persona is the one place for the shown/spoken name, wake phrase and TTS voice (server prompt + app).",
+  "persona": {
+    "agent_name": "Milo",
+    "wake_phrase": "Hey Milo",
+    "voice": "Jamie",
+    "quality": "premium",
+    "language": "en-GB",
+    "rate": 0.4,
+    "pitch": 0.92
+  },
   "mark_done": [
     "Nice, {wells_spoken} are in.",
     "Got it — {wells_spoken} done.",

@@ -114,6 +114,12 @@ with patch("httpx.AsyncClient", FakeClient):
     assert "run_view(+target)" in perf["description"], perf["description"][:200]
     assert "Backup well: read free_wells first" in perf["description"]
     assert "REPORTED finished only" in perf["description"]
+    # Persona: the prompt's name comes only from pip_voice.json; it is not a template.
+    from server import tone
+    assert tone.agent_name() == tone.persona()["agent_name"] and tone.agent_name()
+    assert api.SYSTEM.startswith(f"You're {tone.agent_name()},"), api.SYSTEM[:40]
+    assert "Pip" not in api.SYSTEM, "no hardcoded persona name"
+    assert "persona" not in tone.keys()
     screen = perf["parameters"]["properties"]["screen"]
     assert screen["enum"] == [*api.SCREEN_IDS, None], screen  # registry ids only
     # Blank required args ask instead of failing, for every action (one gate).
@@ -140,7 +146,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert body["prompt_cache_retention"] == "24h", body
     assert "store" not in body, "chain mode stores responses"
     assert "previous_response_id" not in body, body
-    assert body["instructions"].startswith("You're Pip"), body["instructions"][:40]
+    assert body["instructions"].startswith(api.SYSTEM[:40]), body["instructions"][:40]
     assert "Record only reported facts" in body["instructions"] and "ask(question)" in body["instructions"]
     assert "one short sentence" in body["instructions"] and "Text beside tool calls" in body["instructions"]
     assert "asked:" in body["instructions"] and '"recent"' in body["instructions"]

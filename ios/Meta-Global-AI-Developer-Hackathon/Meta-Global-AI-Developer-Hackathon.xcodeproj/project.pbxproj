@@ -13,6 +13,7 @@
 		88B6F86430927CE9009723F2 /* MWDATCore in Frameworks */ = {isa = PBXBuildFile; productRef = 9A1EC0DE0000000000000014 /* MWDATCore */; };
 		9A1EC0DE0000000000000004 /* plan_demo.json in Resources */ = {isa = PBXBuildFile; fileRef = 9A1EC0DE0000000000000003 /* plan_demo.json */; };
 		9A1EC0DE0000000000000006 /* screens.json in Resources */ = {isa = PBXBuildFile; fileRef = 9A1EC0DE0000000000000005 /* screens.json */; };
+		9A1EC0DE0000000000000008 /* pip_voice.json in Resources */ = {isa = PBXBuildFile; fileRef = 9A1EC0DE0000000000000007 /* pip_voice.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -40,6 +41,7 @@
 		9A1EC0DE0000000000000002 /* Secrets.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.example.xcconfig; sourceTree = "<group>"; };
 		9A1EC0DE0000000000000003 /* plan_demo.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = plan_demo.json; path = ../../samples/plan_demo.json; sourceTree = "<group>"; };
 		9A1EC0DE0000000000000005 /* screens.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = screens.json; path = ../../shared/schemas/screens.json; sourceTree = "<group>"; };
+		9A1EC0DE0000000000000007 /* pip_voice.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = pip_voice.json; path = ../../shared/pip_voice.json; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -112,6 +114,7 @@
 				9A1EC0DE0000000000000002 /* Secrets.example.xcconfig */,
 				9A1EC0DE0000000000000003 /* plan_demo.json */,
 				9A1EC0DE0000000000000005 /* screens.json */,
+				9A1EC0DE0000000000000007 /* pip_voice.json */,
 				88B6F73930902E5C009723F2 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -255,6 +258,7 @@
 			files = (
 				9A1EC0DE0000000000000004 /* plan_demo.json in Resources */,
 				9A1EC0DE0000000000000006 /* screens.json in Resources */,
+				9A1EC0DE0000000000000008 /* pip_voice.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

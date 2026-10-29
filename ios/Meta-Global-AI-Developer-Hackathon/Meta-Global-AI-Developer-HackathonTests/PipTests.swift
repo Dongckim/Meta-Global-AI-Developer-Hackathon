@@ -99,12 +99,24 @@ struct PipTests {
         #expect(lab.visibleTimers(now: Date(timeIntervalSince1970: 100000)).isEmpty)
     }
 
-    @Test func voiceRankPrefersAvaPremium() {
-        #expect(SpeechBus.rank(name: "Ava", quality: .premium) == 0)
-        #expect(SpeechBus.rank(name: "Ava", quality: .enhanced) == 1)
-        #expect(SpeechBus.rank(name: "Samantha", quality: .premium) == 2)
-        #expect(SpeechBus.rank(name: "Samantha", quality: .enhanced) == 3)
-        #expect(SpeechBus.rank(name: "Samantha", quality: .default) == 4)
+    @Test func voiceChoiceFollowsPersona() {
+        let p = Persona(agentName: "Milo", wakePhrase: "Hey Milo", voice: "Jamie", quality: "premium",
+                        language: "en-GB", rate: 0.52, pitch: 0.92)
+        let jp = VoiceCandidate(id: "j1", name: "Jamie", language: "en-GB", quality: .premium)
+        let je = VoiceCandidate(id: "j2", name: "Jamie", language: "en-GB", quality: .enhanced)
+        let zp = VoiceCandidate(id: "z", name: "Zoe", language: "en-GB", quality: .premium)
+        let ap = VoiceCandidate(id: "a", name: "Ava", language: "en-US", quality: .premium)
+        #expect(SpeechBus.choose([ap, zp, je, jp], persona: p)?.id == "j1") // name + quality
+        #expect(SpeechBus.choose([ap, zp, je], persona: p)?.id == "j2")     // same name enhanced
+        #expect(SpeechBus.choose([ap, zp], persona: p)?.id == "z")          // same-language premium
+        #expect(SpeechBus.choose([ap], persona: p) == nil)                  // system default
+    }
+
+    @Test func personaLoadsFromBundledConfig() {
+        let p = Persona.current
+        #expect(p != Persona.fallback) // pip_voice.json is in the app bundle
+        #expect(!p.agentName.isEmpty && !p.wakePhrase.isEmpty && !p.voice.isEmpty)
+        #expect(Persona.load(from: nil) == Persona.fallback)
     }
 
     @Test @MainActor func showAndRangeHelpers() {

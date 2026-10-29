@@ -61,13 +61,13 @@ struct OrbStyleTests {
 struct PipLineTests {
     @Test func copyPerState() {
         #expect(Theme.pipText(for: .ready, speakText: "", partialText: nil)
-            == Theme.PipLine(text: "Say “Hey Pip”", dots: false))
+            == Theme.PipLine(text: "Say “\(Persona.current.wakePhrase)”", dots: false))
         #expect(Theme.pipText(for: .listening, speakText: "", partialText: nil)
-            == Theme.PipLine(text: "Pip Listening", dots: false))
+            == Theme.PipLine(text: "\(Persona.current.agentName) Listening", dots: false))
         #expect(Theme.pipText(for: .thinking, speakText: "", partialText: nil)
-            == Theme.PipLine(text: "Pip Thinking", dots: true))
+            == Theme.PipLine(text: "\(Persona.current.agentName) Thinking", dots: true))
         #expect(Theme.pipText(for: .searching, speakText: "", partialText: nil)
-            == Theme.PipLine(text: "Pip Searching", dots: true))
+            == Theme.PipLine(text: "\(Persona.current.agentName) Searching", dots: true))
     }
 
     @Test func transcribingShowsPartialSlot() {
@@ -239,18 +239,18 @@ struct SyncLayoutTests {
 struct TalkLineTests {
     @Test func readyLineTellsWhatBlocksTalking() {
         #expect(Theme.pipText(for: .ready, speakText: "", partialText: nil,
-                              wake: .undetermined).text == "Allow mic to talk to Pip")
+                              wake: .undetermined).text == "Allow mic to talk to \(Persona.current.agentName)")
         #expect(Theme.pipText(for: .ready, speakText: "", partialText: nil,
-                              wake: .micDenied).text == "Allow mic to talk to Pip")
+                              wake: .micDenied).text == "Allow mic to talk to \(Persona.current.agentName)")
         #expect(Theme.pipText(for: .ready, speakText: "", partialText: nil,
-                              wake: .noOnDevice).text == "Hold the mic to talk to Pip")
+                              wake: .noOnDevice).text == "Hold the mic to talk to \(Persona.current.agentName)")
         #expect(Theme.pipText(for: .ready, speakText: "", partialText: nil,
-                              wake: .ok, wakeOn: false).text == "Hold the mic to talk to Pip")
+                              wake: .ok, wakeOn: false).text == "Hold the mic to talk to \(Persona.current.agentName)")
         #expect(Theme.pipText(for: .ready, speakText: "", partialText: nil,
-                              wake: .ok).text == "Say “Hey Pip”")
+                              wake: .ok).text == "Say “\(Persona.current.wakePhrase)”")
         // other states are unaffected
         #expect(Theme.pipText(for: .listening, speakText: "", partialText: nil,
-                              wake: .micDenied).text == "Pip Listening")
+                              wake: .micDenied).text == "\(Persona.current.agentName) Listening")
     }
 }
 

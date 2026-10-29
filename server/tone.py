@@ -19,7 +19,18 @@ def _data() -> dict:
 
 
 def keys() -> list[str]:
-    return [k for k in _data() if not k.startswith("_")]
+    """Template keys (variant lists); persona and _notes are not templates."""
+    return [k for k, v in _data().items() if not k.startswith("_") and isinstance(v, list)]
+
+
+def persona() -> dict:
+    """Shown/spoken identity: agent_name, wake_phrase, voice, quality, ..."""
+    p = _data().get("persona")
+    return p if isinstance(p, dict) else {}
+
+
+def agent_name() -> str:
+    return persona().get("agent_name") or "the assistant"
 
 
 def variants(key: str) -> list[str]:
@@ -44,6 +55,7 @@ def pick(key: str, session: dict | None = None) -> str:
 def say(key: str, session: dict | None = None, **slots) -> str:
     """Fill a template. wells_spoken defaults to the display label; speech
     spelling happens downstream in speak_text, so one rendering serves both."""
+    slots.setdefault("agent", agent_name())
     slots.setdefault("wells", "")
     slots.setdefault("wells_spoken", slots["wells"])
     out = pick(key, session).format_map(defaultdict(str, slots))

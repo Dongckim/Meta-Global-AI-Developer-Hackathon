@@ -58,7 +58,7 @@ struct ViewingSource: Equatable {
 struct ContentView: View {
     @State private var lab = LabState()
     @State private var input = ""
-    @State private var log: [String] = ["Pip ready — speak or type"]
+    @State private var log: [String] = ["\(Persona.current.agentName) ready — speak or type"]
     @State private var debug: DebugRun?
     @State private var showDebug = false
     @State private var showSettings = false
@@ -440,7 +440,7 @@ struct ContentView: View {
                 CardPanel(cards: lab.cards, onAnswer: answer(id:ok:), onAnswerAll: answerAll)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Pip").font(.caption.bold()).foregroundStyle(.secondary)
+                    Text(Persona.current.agentName).font(.caption.bold()).foregroundStyle(.secondary)
                     Text(lastReply.isEmpty ? "Speak or type a command" : lastReply)
                         .font(.body)
                         .foregroundStyle(lastReply.isEmpty ? .secondary : .primary)
@@ -913,7 +913,7 @@ struct ContentView: View {
             sayAloud(speak)
         case .timerDone(let message, let speak):
             lastReply = message
-            say("Pip: \(message)")
+            say("\(Persona.current.agentName): \(message)")
             sayAloud(speak)
         case .ui(let act):
             _ = applyUI(act)
@@ -1210,7 +1210,7 @@ struct ContentView: View {
                     for msg in r.messages { say(msg) }
                     if !r.reply.isEmpty {
                         lastReply = r.reply
-                        say("Pip: \(r.reply)")
+                        say("\(Persona.current.agentName): \(r.reply)")
                     }
                     _ = (r.ui ?? []).allSatisfy { applyUI($0) }
                     sayAloud(r.speak)
@@ -1311,7 +1311,7 @@ struct ContentView: View {
         for msg in messages { say(msg) }
         if !reply.isEmpty {
             lastReply = reply
-            say("Pip: \(reply)")
+            say("\(Persona.current.agentName): \(reply)")
         }
         let uiOk = (ui ?? []).allSatisfy { applyUI($0) }
         if uiOk { sayAloud(speak) }

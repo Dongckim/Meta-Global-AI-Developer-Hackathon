@@ -233,7 +233,7 @@ final class VoiceSession {
         wakeSupport = s
         var text = WakeListener.describe(s)
         if s == .ok, !Self.wakeEnabled {
-            text = "Off — enable “Hey Pip” in Settings"
+            text = "Off — enable “\(Persona.current.wakePhrase)” in Settings"
         } else if s == .ok, wake.running {
             text += " · listening (\(wake.debugDetail))"
         }

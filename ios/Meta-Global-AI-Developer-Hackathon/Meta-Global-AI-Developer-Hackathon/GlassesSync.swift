@@ -65,7 +65,7 @@ enum SyncRows {
         case .connected: Row(state: .ok, value: "Connected", hint: nil)
         case .connecting: Row(state: .checking, value: "Connecting…", hint: nil)
         case .failed: Row(state: .failed, value: "Unreachable · Tap to retry",
-                          hint: "Check the Pip server and the local network permission.")
+                          hint: "Check the \(Persona.current.agentName) server and the local network permission.")
         case .idle: allowed
             ? Row(state: .checking, value: "Connecting…", hint: nil)
             : Row(state: .action, value: "Tap to allow", hint: nil)

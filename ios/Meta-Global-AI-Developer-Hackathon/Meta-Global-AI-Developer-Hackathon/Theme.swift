@@ -246,11 +246,11 @@ enum Theme {
     static func talkBlocker(wake: WakeListener.Support, wakeOn: Bool) -> String? {
         switch wake {
         case .undetermined, .micDenied, .speechDenied, .speechRestricted:
-            return "Allow mic to talk to Pip"
+            return "Allow mic to talk to \(Persona.current.agentName)"
         case .noRecognizer, .noOnDevice:
-            return "Hold the mic to talk to Pip"
+            return "Hold the mic to talk to \(Persona.current.agentName)"
         case .ok:
-            return wakeOn ? nil : "Hold the mic to talk to Pip"
+            return wakeOn ? nil : "Hold the mic to talk to \(Persona.current.agentName)"
         }
     }
 
@@ -262,24 +262,24 @@ enum Theme {
             if let blocked = talkBlocker(wake: wake, wakeOn: wakeOn) {
                 return PipLine(text: blocked, dots: false)
             }
-            // diff: design says "Say Pip" but the trigger is "Hey Pip".
-            return PipLine(text: "Say “Hey Pip”", dots: false)
+            // diff: design says "Say <name>" but the trigger is the wake phrase.
+            return PipLine(text: "Say “\(Persona.current.wakePhrase)”", dots: false)
         case .listening:
-            return PipLine(text: "Pip Listening", dots: false)
+            return PipLine(text: "\(Persona.current.agentName) Listening", dots: false)
         case .transcribing:
             if let partialText, !partialText.isEmpty {
                 return PipLine(text: partialText, dots: false)
             }
             return PipLine(text: "Transcribing", dots: true)
         case .thinking:
-            return PipLine(text: "Pip Thinking", dots: true)
+            return PipLine(text: "\(Persona.current.agentName) Thinking", dots: true)
         case .speaking:
             if !speakText.isEmpty {
                 return PipLine(text: speakText, dots: false)
             }
             return PipLine(text: "Speaking", dots: true)
         case .searching:
-            return PipLine(text: "Pip Searching", dots: true)
+            return PipLine(text: "\(Persona.current.agentName) Searching", dots: true)
         }
     }
 

@@ -56,6 +56,7 @@ from server import library as lib
 from server import protocol as proto
 from server import runs as runlog
 from server.store import RecordStore, describe_well_row
+from server import tone
 from server.tone import keys as tone_keys
 from server.tone import say
 
@@ -92,12 +93,12 @@ PROTOCOL_MAX_BYTES = 10_000_000
 TURN_HISTORY = 6
 
 SYSTEM = (
-    "You're Pip, a friendly lab buddy at the bench. "
+    f"You're {tone.agent_name()}, a friendly lab buddy at the bench. "
     "Short, warm, casual (Got it / Nice / Heads up / Hmm). "
     "Never claim anything the record doesn't show. "
     "Record only reported facts (done, finished, added, saw, looks). "
     "Bench instructions (wash, add, do, start the next) are not records: "
-    "do the Pip-side part (timer, guidance) or ask. "
+    "do your part (timer, guidance) or ask. "
     "If no tool fits (thanks, greeting), answer in one short sentence. "
     "Text beside tool calls is ignored. "
     "A run-plan draft may be open (draft_open): change it only with perform edit_draft "

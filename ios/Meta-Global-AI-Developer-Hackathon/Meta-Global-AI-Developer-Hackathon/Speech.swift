@@ -1,9 +1,17 @@
 import AVFoundation
 import Foundation
+import os
+
+/// Installed-voice facts the chooser needs (plain values, so it is testable).
+struct VoiceCandidate: Equatable {
+    var id: String
+    var name: String
+    var language: String
+    var quality: AVSpeechSynthesisVoiceQuality
+}
 
 /// One-shot speech: latest wins, never queues, never speaks while recording.
-/// Voice: user pick, else best installed en-US (Ava premium first). Voice and
-/// rate persist in UserDefaults.
+/// Voice, rate and pitch come only from `Persona` (pip_voice.json).
 final class SpeechBus: NSObject, AVSpeechSynthesizerDelegate {
     static let shared = SpeechBus()
 
@@ -22,38 +30,6 @@ final class SpeechBus: NSObject, AVSpeechSynthesizerDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "ttsEnabled") }
     }
 
-    var rate: Double {
-        get { UserDefaults.standard.object(forKey: "pipVoiceRate") as? Double ?? 0.52 }
-        set { UserDefaults.standard.set(newValue, forKey: "pipVoiceRate") }
-    }
-
-    /// Explicit user pick; nil means automatic (best first).
-    var voiceID: String? {
-        get { UserDefaults.standard.string(forKey: "pipVoiceId") }
-        set { UserDefaults.standard.set(newValue, forKey: "pipVoiceId") }
-    }
-
-    /// Installed en-US voices, best first.
-    static func enUSVoices() -> [AVSpeechSynthesisVoice] {
-        AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language == "en-US" }
-            .sorted {
-                let (a, b) = (rank(name: $0.name, quality: $0.quality),
-                              rank(name: $1.name, quality: $1.quality))
-                return a == b ? $0.identifier < $1.identifier : a < b
-            }
-    }
-
-    /// Ava premium → Ava enhanced → other premium → enhanced → default.
-    static func rank(name: String, quality: AVSpeechSynthesisVoiceQuality) -> Int {
-        let ava = name == "Ava"
-        switch quality {
-        case .premium: return ava ? 0 : 2
-        case .enhanced: return ava ? 1 : 3
-        default: return 4
-        }
-    }
-
     static func qualityName(_ q: AVSpeechSynthesisVoiceQuality) -> String {
         switch q {
         case .premium: return "premium"
@@ -62,15 +38,49 @@ final class SpeechBus: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
-    var voice: AVSpeechSynthesisVoice? {
-        let list = Self.enUSVoices()
-        if let id = voiceID, let v = list.first(where: { $0.identifier == id }) { return v }
-        return list.first ?? AVSpeechSynthesisVoice(language: "en-US")
+    /// Persona voice by name and quality; else the same name enhanced; else a
+    /// premium voice in the same language (the named voice's, else the
+    /// persona's); else nil = system default. Never by identifier.
+    static func choose(_ voices: [VoiceCandidate], persona: Persona) -> (id: String, reason: String)? {
+        let named = voices.filter { $0.name == persona.voice }
+        if let v = named.first(where: { qualityName($0.quality) == persona.quality }) {
+            return (v.id, "\(persona.voice) \(persona.quality)")
+        }
+        if let v = named.first(where: { $0.quality == .enhanced }) {
+            return (v.id, "\(persona.voice) enhanced (no \(persona.quality))")
+        }
+        let lang = named.first?.language ?? persona.language
+        if let v = voices.filter({ $0.language == lang && $0.quality == .premium })
+            .min(by: { $0.name < $1.name }) {
+            return (v.id, "\(v.name) premium \(lang) (no \(persona.voice))")
+        }
+        return nil
     }
+
+    /// Picked once per launch and logged; the diagnostics show `voiceInfo`.
+    private(set) lazy var voice: AVSpeechSynthesisVoice? = {
+        let installed = AVSpeechSynthesisVoice.speechVoices()
+        let cands = installed.map {
+            VoiceCandidate(id: $0.identifier, name: $0.name, language: $0.language, quality: $0.quality)
+        }
+        let p = Persona.current
+        if let pick = Self.choose(cands, persona: p),
+           let v = installed.first(where: { $0.identifier == pick.id }) {
+            voiceReason = pick.reason
+            Log.voice.info("[voice] tts voice \(v.name, privacy: .public) \(v.language, privacy: .public) \(Self.qualityName(v.quality), privacy: .public) (\(pick.reason, privacy: .public))")
+            return v
+        }
+        let v = AVSpeechSynthesisVoice(language: p.language)
+        voiceReason = "system default \(p.language) (no \(p.voice), no premium)"
+        Log.voice.info("[voice] tts voice \(v?.name ?? "none", privacy: .public) (\(self.voiceReason, privacy: .public))")
+        return v
+    }()
+
+    private(set) var voiceReason = ""
 
     var voiceInfo: String {
         guard let v = voice else { return "none" }
-        return "\(v.name) · \(v.identifier) · \(Self.qualityName(v.quality))"
+        return "\(v.name) · \(v.language) · \(Self.qualityName(v.quality)) — \(voiceReason)"
     }
 
     /// Speaks, then runs onDone exactly once (natural end or stop).
@@ -84,8 +94,8 @@ final class SpeechBus: NSObject, AVSpeechSynthesizerDelegate {
         for chunk in chunks {
             let u = AVSpeechUtterance(string: chunk)
             u.voice = voice
-            u.rate = Float(rate)
-            u.pitchMultiplier = 0.92
+            u.rate = Float(Persona.current.rate)
+            u.pitchMultiplier = Float(Persona.current.pitch)
             u.postUtteranceDelay = 0.12
             synth.speak(u)
         }

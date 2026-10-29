@@ -15,7 +15,7 @@ struct CardPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Pip").font(.caption.bold()).foregroundStyle(.secondary)
+            Text(Persona.current.agentName).font(.caption.bold()).foregroundStyle(.secondary)
             if cards.count >= 2 {
                 HStack {
                     Text("Checklist (\(cards.count))").font(.headline)
@@ -84,7 +84,7 @@ struct HomeView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Pip").font(.title.bold())
+                Text(Persona.current.agentName).font(.title.bold())
                 Spacer()
                 Button { onSetup() } label: { Image(systemName: "gearshape") }
                     .buttonStyle(.bordered).controlSize(.small)
@@ -386,8 +386,8 @@ struct GlassesAudioSection: View {
                 Button(testing ? "Testing…" : "3s record → play") { loopbackTest() }
                     .buttonStyle(.bordered).controlSize(.small)
                     .disabled(testing)
-                Button("Hear Pip") {
-                    SpeechBus.shared.speak("Glasses audio check. Can you hear Pip?")
+                Button("Hear \(Persona.current.agentName)") {
+                    SpeechBus.shared.speak("Glasses audio check. Can you hear \(Persona.current.agentName)?")
                 }
                 .buttonStyle(.bordered).controlSize(.small)
             }
@@ -502,13 +502,14 @@ struct DiagnosticsView: View {
                     row("Server", status: server) {
                         Button("Check") { checkServer() }.buttonStyle(.bordered).controlSize(.small)
                     }
-                    row("Hey Pip", status: voice?.wakeStatus ?? "Not checked") {
+                    row(Persona.current.wakePhrase, status: voice?.wakeStatus ?? "Not checked") {
                         Button("Check") { checkWake() }.buttonStyle(.bordered).controlSize(.small)
                     }
+                    row("TTS voice", status: SpeechBus.shared.voiceInfo) { EmptyView() }
                     GlassesAudioSection()
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Voice check").font(.headline)
-                        Text("Hold the mic and say “Hey Pip”.").font(.callout)
+                        Text("Hold the mic and say “\(Persona.current.wakePhrase)”.").font(.callout)
                         HStack {
                             Button(action: {}) {
                                 Image(systemName: recording ? "mic.fill" : "mic")
