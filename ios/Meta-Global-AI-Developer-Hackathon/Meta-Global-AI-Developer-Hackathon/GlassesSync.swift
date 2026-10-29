@@ -8,15 +8,16 @@ import SwiftUI
 /// glasses' HFP mic too) is asked from the Glasses audio row, along with
 /// speech recognition for "Hey Pip".
 enum SyncItem: Int, CaseIterable {
-    case bluetooth, localNetwork, metaApp, glasses, audio, camera
+    /// metaApp is the "Connect Glasses" row: linking in the Meta AI app,
+    /// then the glasses themselves (model and battery once connected).
+    case bluetooth, localNetwork, metaApp, audio, camera
 
     var title: String {
         switch self {
         case .bluetooth: "Bluetooth"
         case .localNetwork: "Local network"
-        case .metaApp: "Meta AI app"
-        case .glasses: "Glasses"
-        case .audio: "Glasses audio"
+        case .metaApp: "Connect Glasses"
+        case .audio: "Audio"
         case .camera: "Camera"
         }
     }
@@ -94,6 +95,17 @@ enum SyncRows {
         @unknown default:
             return Row(state: .failed, value: "Unknown", hint: nil)
         }
+    }
+
+    /// Connect Glasses: linking first (app row), then the glasses link.
+    static func connect(registration: RegistrationState, appError: String?,
+                        status: GlassesDAT.LinkStatus, name: String?, battery: Int?,
+                        linkError: String?, searching: Bool) -> Row {
+        guard registration == .registered else {
+            return app(registration: registration, error: appError)
+        }
+        return glasses(status: status, name: name, battery: battery, error: linkError,
+                       searching: searching)
     }
 
     static func glasses(status: GlassesDAT.LinkStatus, name: String?,
@@ -185,21 +197,16 @@ enum SyncGate {
                 return SyncRows.glassesAudio(mic: permission(.microphone),
                                              glassesConnected: dat?.status == .connected,
                                              hfpName: hfpName)
-            case .metaApp, .glasses, .camera:
+            case .metaApp, .camera:
                 guard let dat else { return SyncRows.needsBluetooth }
-                switch item {
-                case .metaApp:
-                    return SyncRows.app(registration: dat.registrationState,
-                                        error: dat.lastError)
-                case .glasses:
-                    return SyncRows.glasses(
-                        status: dat.status, name: dat.deviceName,
-                        battery: dat.batteryLevel,
-                        error: dat.status == .error ? dat.lastError : nil,
-                        searching: !dat.devicesReported)
-                default:
+                if item == .camera {
                     return SyncRows.camera(dat.cameraPermission, step: dat.cameraStep)
                 }
+                return SyncRows.connect(
+                    registration: dat.registrationState, appError: dat.lastError,
+                    status: dat.status, name: dat.deviceName, battery: dat.batteryLevel,
+                    linkError: dat.status == .error ? dat.lastError : nil,
+                    searching: !dat.devicesReported)
             }
         }
     }
@@ -433,14 +440,20 @@ struct GlassesSyncScreen: View {
                 .textShadow()
                 .textIn(t, delay: delay + 0.055)
             Spacer(minLength: 18)
-            Text(value)
-                .font(Theme.t24)
-                .tracking(Theme.t24Tracking)
-                .foregroundStyle(.white.opacity(0.62))
-                .lineLimit(1)
-                .frame(height: Theme.t24Line)
-                .textShadow()
-                .textIn(t, delay: delay + 0.11)
+            Group {
+                if item == .audio, r.state == .ok {
+                    LevelMeter() // glasses mic on the route: show what it hears
+                } else {
+                    Text(value)
+                        .font(Theme.t24)
+                        .tracking(Theme.t24Tracking)
+                        .foregroundStyle(.white.opacity(0.62))
+                        .lineLimit(1)
+                }
+            }
+            .frame(height: Theme.t24Line)
+            .textShadow()
+            .textIn(t, delay: delay + 0.11)
         }
         .padding(.vertical, pad)
         .padding(.horizontal, 4)
@@ -493,8 +506,6 @@ struct GlassesSyncScreen: View {
             } else {
                 dat.askCameraRedirect()
             }
-        case .glasses:
-            break
         }
     }
 
@@ -595,5 +606,29 @@ private extension View {
     /// `.sync` text-shadow 0 4px 40px rgba(0,0,0,.25).
     func textShadow() -> some View {
         shadow(color: .black.opacity(0.25), radius: 20, y: 4)
+    }
+}
+
+/// Live input level from the one MicEngine tap (RMS, smoothed), as bars.
+/// Flat when the engine isn't running.
+struct LevelMeter: View {
+    @State private var meter = Meter()
+    final class Meter { var follower = LevelFollower(); var last: Date? }
+    private static let bars = 12
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20)) { ctx in
+            let dt = meter.last.map { ctx.date.timeIntervalSince($0) } ?? 0
+            let _ = meter.last = ctx.date
+            let v = Double(min(1, meter.follower.step(MicEngine.shared.level, dt: dt) / 0.12))
+            HStack(spacing: 3) {
+                ForEach(0..<Self.bars, id: \.self) { i in
+                    Capsule()
+                        .fill(.white.opacity(Double(i) < v * Double(Self.bars) ? 0.9 : 0.22))
+                        .frame(width: 4, height: 8 + CGFloat(i) * 1.2)
+                }
+            }
+        }
+        .accessibilityLabel("Audio level")
     }
 }

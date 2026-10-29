@@ -82,8 +82,7 @@ enum DesignPreview: String {
 
     /// First `ok` rows done, then one pending row, the rest waiting.
     private func rows(ok: Int, pending: String?) -> [SyncRows.Row] {
-        let done = ["Allowed", "Connected", "Linked", "Ray-Ban Meta · 82%",
-                    "Glasses mic", "Allowed"]
+        let done = ["Allowed", "Connected", "Ray-Ban Meta · 82%", "Glasses mic", "Allowed"]
         return SyncItem.allCases.map { item in
             let i = item.rawValue
             if i < ok { return .init(state: .ok, value: done[i], hint: nil) }
@@ -98,10 +97,10 @@ enum DesignPreview: String {
             SplashView {}
         case .connecting:
             GlassesSyncScreen(dat: nil, onSkip: {}, onComplete: {},
-                              previewRows: rows(ok: 3, pending: "Searching nearby…"))
+                              previewRows: rows(ok: 2, pending: "Searching nearby…"))
         case .ready:
             GlassesSyncScreen(dat: nil, onSkip: {}, onComplete: {},
-                              previewRows: rows(ok: 6, pending: nil))
+                              previewRows: rows(ok: 5, pending: nil))
         case .header:
             HeaderSamples()
         }

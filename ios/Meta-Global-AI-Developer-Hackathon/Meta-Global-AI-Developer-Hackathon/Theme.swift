@@ -389,9 +389,9 @@ enum Theme {
         case .ok:
             return SyncStyle(rowOpacity: 1, icon: .tick)
         case .failed, .waiting:
-            // diff: the design has no failure; failed rows use the
-            // pending look (dim, hollow) with a short reason as the value.
-            return SyncStyle(rowOpacity: 0.38, icon: .hollow)
+            // diff: the design dims pending rows (.38); by iPad review all six
+            // rows stay the same white. Failed rows: hollow + a short reason.
+            return SyncStyle(rowOpacity: 1, icon: .hollow)
         case .action:
             // diff: the design has no tap-to-ask row; lit like .on so the
             // next step reads, hollow because nothing is running.

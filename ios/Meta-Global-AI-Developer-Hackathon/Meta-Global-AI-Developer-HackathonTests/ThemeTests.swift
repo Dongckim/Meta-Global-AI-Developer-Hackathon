@@ -95,7 +95,7 @@ struct SyncStyleTests {
         #expect(Theme.syncStyle(for: .failed).icon == .hollow)
         #expect(Theme.syncStyle(for: .ok).rowOpacity == 1)
         #expect(Theme.syncStyle(for: .checking).rowOpacity == 1)
-        #expect(Theme.syncStyle(for: .failed).rowOpacity == 0.38)
+        #expect(Theme.syncStyle(for: .failed).rowOpacity == 1) // all rows one white
     }
 }
 
@@ -167,7 +167,7 @@ struct SyncGateTests {
         let rows = SyncGate.rows(permission: { _ in .notAsked }, server: .idle,
                                  dat: nil, hfpName: nil)
         #expect(rows.count == SyncItem.allCases.count)
-        for item in [SyncItem.metaApp, .glasses, .camera] {
+        for item in [SyncItem.metaApp, .camera] {
             #expect(rows[item.rawValue] == SyncRows.needsBluetooth)
         }
         #expect(SyncRows.needsBluetooth.state == .waiting)
@@ -181,8 +181,19 @@ struct SyncGateTests {
 
     @Test func rowOrderMatchesDesignBrief() {
         #expect(SyncItem.allCases.map(\.title) == [
-            "Bluetooth", "Local network", "Meta AI app", "Glasses",
-            "Glasses audio", "Camera"])
+            "Bluetooth", "Local network", "Connect Glasses", "Audio", "Camera"])
+    }
+
+    @Test func connectGlassesLinksThenShowsTheGlasses() {
+        let linking = SyncRows.connect(registration: .registering, appError: nil, status: .unregistered,
+                                       name: nil, battery: nil, linkError: nil, searching: false)
+        #expect(linking.value == "Linking…")
+        let on = SyncRows.connect(registration: .registered, appError: nil, status: .connected,
+                                  name: "Ray-Ban Meta", battery: 82, linkError: nil, searching: false)
+        #expect(on.state == .ok && on.value == "Ray-Ban Meta · 82%")
+        let looking = SyncRows.connect(registration: .registered, appError: nil, status: .registered,
+                                       name: nil, battery: nil, linkError: nil, searching: true)
+        #expect(looking.value == "Searching nearby…")
     }
 }
 
@@ -217,7 +228,7 @@ struct PermissionRowTests {
         let tap = SyncRows.permission(.notAsked)
         #expect(!SyncGate.showsActions(rows: [tap, SyncRows.needsBluetooth], pendingFor: nil))
         #expect(Theme.syncStyle(for: .action).rowOpacity == 1)
-        #expect(Theme.syncStyle(for: .waiting).rowOpacity == 0.38)
+        #expect(Theme.syncStyle(for: .waiting).rowOpacity == 1)
     }
 }
 
