@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Observation
 
 // MARK: - JSON
@@ -676,24 +677,35 @@ struct ScreenDef: Decodable {
     var commands: [String]
 }
 
-/// Screen registry shared with the server (same screens.json). Falls back to
-/// the built-in three when the bundle copy is missing or undecodable.
-func loadScreens() -> [ScreenDef] {
-    if let url = Bundle.main.url(forResource: "screens", withExtension: "json"),
-       let data = try? Data(contentsOf: url),
-       let obj = try? JSONDecoder().decode([String: [ScreenDef]].self, from: data),
-       let list = obj["screens"], !list.isEmpty {
+/// Screen registry shared with the server (the bundled screens.json): the
+/// one source. Only `screens` is read; other keys (reads, use/not, ...) are
+/// the server's. No built-in fallback: a failure comes back as a reason the
+/// app shows, never as a silent substitute list.
+struct ScreenRegistry: Decodable {
+    var screens: [ScreenDef]
+
+    static func decode(_ data: Data) throws -> [ScreenDef] {
+        let list = try JSONDecoder().decode(ScreenRegistry.self, from: data).screens
+        guard !list.isEmpty else { throw RegistryError.empty }
         return list
     }
-    return [
-        ScreenDef(id: "main", commands: ["mark C2 done", "start a 5 minute timer", "show C5"]),
-        ScreenDef(id: "well_card", commands: ["note bubbles", "exclude this well", "back"]),
-        ScreenDef(id: "robot_preview", commands: ["make the robot protocol", "back"]),
-        ScreenDef(id: "protocol_review", commands: ["import a protocol", "start the run", "back"]),
-        ScreenDef(id: "home", commands: ["import a protocol", "open the demo protocol", "show yesterday's run"]),
-        ScreenDef(id: "sync", commands: ["retry the glasses check", "skip the glasses check", "back"]),
-        ScreenDef(id: "protocol_detail", commands: ["start a new run", "show the runs", "back"]),
-        ScreenDef(id: "run_view", commands: ["show yesterday's run", "read the notes", "back to the run"]),
-        ScreenDef(id: "protocol_source", commands: ["show me the original for this step", "back"]),
-    ]
+
+    enum RegistryError: Error { case missing, empty }
+}
+
+/// Loaded registry, or the reason it couldn't be (shown as a banner).
+func loadScreens(from url: URL? = Bundle.main.url(forResource: "screens", withExtension: "json"))
+    -> (screens: [ScreenDef], error: String?) {
+    do {
+        guard let url else { throw ScreenRegistry.RegistryError.missing }
+        return (try ScreenRegistry.decode(Data(contentsOf: url)), nil)
+    } catch {
+        let reason = switch error {
+        case ScreenRegistry.RegistryError.missing: "screens.json not in the app bundle"
+        case ScreenRegistry.RegistryError.empty: "screens.json has no screens"
+        default: syncReason(error)
+        }
+        Log.view.error("[view] screen registry unreadable: \(reason, privacy: .public)")
+        return ([], reason)
+    }
 }

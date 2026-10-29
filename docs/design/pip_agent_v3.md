@@ -308,6 +308,10 @@ smoke + iPad check.
   import, no view). Replies are store results only: the model's own line is
   spoken only when the store said nothing, mixed results are separate
   sentences, and text is cut only at sentence ends.
+- The app reads only `screens` from the bundled screens.json (hint
+  commands). No built-in screen list: an unreadable registry shows a red
+  "Screen registry unreadable" banner (it silently fell back before,
+  because the whole file was decoded as screen lists and `reads` broke it).
 
 ## Standing rules (carried over)
 

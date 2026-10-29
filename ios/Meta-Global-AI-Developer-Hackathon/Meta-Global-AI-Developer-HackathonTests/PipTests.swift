@@ -112,6 +112,24 @@ struct PipTests {
         #expect(SpeechBus.choose([ap], persona: p) == nil)                  // system default
     }
 
+    @Test func screenRegistryLoadsFromBundleWithoutFallback() {
+        let r = loadScreens()
+        #expect(r.error == nil)
+        let ids = Set(r.screens.map(\.id))
+        // the shared registry, not a built-in list (importer exists only there)
+        #expect(ids.isSuperset(of: ["main", "home", "protocol_source", "importer", "sync"]))
+        let missing = loadScreens(from: nil)
+        #expect(missing.screens.isEmpty && missing.error != nil)
+    }
+
+    @Test func screenRegistryReadsOnlyScreens() throws {
+        // reads/use/not belong to the server and must not break the app's decode
+        let ok = Data(#"{"screens": [{"id": "home", "commands": ["back"], "use": "x"}], "reads": [{"kind": "runs", "screens": [], "desc": "d"}]}"#.utf8)
+        #expect(try ScreenRegistry.decode(ok).map(\.id) == ["home"])
+        #expect(throws: (any Error).self) { try ScreenRegistry.decode(Data(#"{"screens": []}"#.utf8)) }
+        #expect(throws: (any Error).self) { try ScreenRegistry.decode(Data(#"{"screens": [{"id": 1}]}"#.utf8)) }
+    }
+
     @Test func personaLoadsFromBundledConfig() {
         let p = Persona.current
         #expect(p != Persona.fallback) // pip_voice.json is in the app bundle

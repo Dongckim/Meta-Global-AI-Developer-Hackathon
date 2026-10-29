@@ -89,7 +89,8 @@ struct ContentView: View {
     @State private var detailNotice = ""
     @State private var syncError: String?
     @State private var apiMismatch: String?
-    private let screens = loadScreens()
+    private let registry = loadScreens()
+    private var screens: [ScreenDef] { registry.screens }
     var dat: GlassesDAT? = nil
     /// Configures DAT from the sync screen's Bluetooth tap (the Bluetooth prompt).
     var enableDAT: () -> Void = {}
@@ -364,6 +365,11 @@ struct ContentView: View {
         VStack(spacing: 0) {
             if let err = syncError {
                 Text("Out of sync: \(err)")
+                    .font(.callout.bold()).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).padding(6).background(.red)
+            }
+            if let reason = registry.error {
+                Text("Screen registry unreadable: \(reason) — rebuild the app.")
                     .font(.callout.bold()).foregroundStyle(.white)
                     .frame(maxWidth: .infinity).padding(6).background(.red)
             }
