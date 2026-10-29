@@ -25,10 +25,10 @@ struct BenchCanvas: View {
 
 extension View {
     /// White card: radius 32, three-layer soft shadow.
-    func benchCard(radius: CGFloat = 32) -> some View {
+    func benchCard(radius: CGFloat = 32, fill: Color = Theme.card) -> some View {
         background {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(Theme.card)
+                .fill(fill)
                 .shadow(color: .black.opacity(0.04), radius: 1, y: 1)
                 .shadow(color: .black.opacity(0.07), radius: 10, y: 8)
                 .shadow(color: .black.opacity(0.12), radius: 28, y: 28)
@@ -51,22 +51,35 @@ struct SayButton: View {
 
     var body: some View {
         Button { perform(button) } label: {
-            (Text("Say ").foregroundStyle(kind == .primary ? Color.white.opacity(0.72) : Theme.polishBlue)
-             + Text(word).fontWeight(.semibold).foregroundStyle(kind == .primary ? .white : Theme.text1))
-                .font(.system(size: size))
-                .tracking(-0.54 * size / 34)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, minHeight: size * 93 / 34)
-                .background {
-                    Capsule().fill(kind == .primary ? Theme.polishBlue : Theme.card)
-                        .shadow(color: .black.opacity(kind == .primary ? 0.08 : 0.05), radius: 1, y: 1)
-                        .shadow(color: kind == .primary ? Theme.polishBlue.opacity(0.6) : .black.opacity(0.14),
-                                radius: kind == .primary ? 14 : 10, y: kind == .primary ? 12 : 8)
-                }
-                .contentShape(Capsule())
+            if button.greyed {
+                // registry `look: disabled`: greyed, with its note; a tap still asks the server why
+                (Text("Say ").foregroundStyle(Theme.text4)
+                 + Text(word).fontWeight(.semibold).foregroundStyle(Theme.text2)
+                 + Text(button.note.map { "  \($0)" } ?? "").foregroundStyle(Theme.text4))
+                    .font(.system(size: size))
+                    .tracking(-0.54 * size / 34)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, minHeight: size * 93 / 34)
+                    .background(Capsule().fill(Theme.cardOff))
+                    .contentShape(Capsule())
+            } else {
+                (Text("Say ").foregroundStyle(kind == .primary ? Color.white.opacity(0.72) : Theme.polishBlue)
+                 + Text(word).fontWeight(.semibold).foregroundStyle(kind == .primary ? .white : Theme.text1))
+                    .font(.system(size: size))
+                    .tracking(-0.54 * size / 34)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, minHeight: size * 93 / 34)
+                    .background {
+                        Capsule().fill(kind == .primary ? Theme.polishBlue : Theme.card)
+                            .shadow(color: .black.opacity(kind == .primary ? 0.08 : 0.05), radius: 1, y: 1)
+                            .shadow(color: kind == .primary ? Theme.polishBlue.opacity(0.6) : .black.opacity(0.14),
+                                    radius: kind == .primary ? 14 : 10, y: kind == .primary ? 12 : 8)
+                    }
+                    .contentShape(Capsule())
+            }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(word)
+        .accessibilityLabel(button.greyed ? "\(word), \(button.note ?? "unavailable")" : word)
     }
 }
 

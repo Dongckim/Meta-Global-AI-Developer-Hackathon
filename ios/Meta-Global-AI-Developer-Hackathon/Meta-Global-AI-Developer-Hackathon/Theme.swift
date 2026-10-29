@@ -64,6 +64,12 @@ enum Theme {
     static let wellEmpty = Color(hex: 0xEFEFF2)
     /// Translucent white chip and timer row.
     static let chip = Color.white.opacity(0.8)
+    /// The row that needs a look (Start ⑤c): a blue wash.
+    static let rowFocus = polishBlue.opacity(0.07)
+    /// Header bar of a document card (Start ⑤e).
+    static let cardHead = Color(hex: 0xF5F5F7)
+    /// Frosted choice card (Start ⑤a/⑤b): a light glass over the canvas, white rim.
+    static let cardGlass = Color(hex: 0xEEEEF1)
     /// Plate groups in plan order (design gc / dot / gb); cycles past three.
     static let groupTones: [Color] = [Color(hex: 0x8E8E93), Color(hex: 0x1D1D1F), Color(hex: 0x5A5A5E)]
     static func groupTone(_ index: Int) -> Color { groupTones[index % groupTones.count] }

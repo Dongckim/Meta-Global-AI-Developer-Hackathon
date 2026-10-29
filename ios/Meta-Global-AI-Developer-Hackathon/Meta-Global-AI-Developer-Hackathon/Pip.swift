@@ -100,6 +100,15 @@ struct PlanCondition: Decodable {
     var replicates: Int
     var wells: [String]
 
+    /// A draft's condition, for drawing the plan before it starts.
+    init(_ d: DraftCondition) {
+        label = d.label
+        abbr = d.abbr ?? ""
+        treatments = d.treatments
+        replicates = d.replicates
+        wells = d.wells
+    }
+
     enum CodingKeys: String, CodingKey {
         case label, abbr, treatments, replicates, wells
     }
@@ -253,6 +262,10 @@ struct ViewState: Decodable, Equatable {
     var stack: [ViewTarget] = []
     var tab = ""
     var sheet = ViewSheet()
+    /// Milo's line for this screen (registry prompt, filled by the server).
+    var prompt = ""
+    /// Values the screen's templated buttons fill from ("Step {step}").
+    var slots: [String: String] = [:]
 
     init() {}
     init(from decoder: Decoder) throws {
@@ -261,10 +274,12 @@ struct ViewState: Decodable, Equatable {
         stack = try c.decodeIfPresent([ViewTarget].self, forKey: .stack) ?? []
         tab = try c.decodeIfPresent(String.self, forKey: .tab) ?? ""
         sheet = try c.decodeIfPresent(ViewSheet.self, forKey: .sheet) ?? ViewSheet()
+        prompt = try c.decodeIfPresent(String.self, forKey: .prompt) ?? ""
+        slots = try c.decodeIfPresent([String: String].self, forKey: .slots) ?? [:]
     }
 
     private enum CodingKeys: String, CodingKey {
-        case current, stack, tab, sheet
+        case current, stack, tab, sheet, prompt, slots
     }
 }
 
@@ -293,10 +308,20 @@ struct ProtocolSummary: Decodable, Identifiable {
     var steps: Int
     /// Server label (server/labels.py): "Oct 29 · 12:51 AM · Drug A/B Dosing".
     var label: String?
+    /// Server short title (<= 4 words), wells the plan uses, its run counts.
+    var shortTitle: String?
+    var wells: Int?
+    var runs: Int?
+    var inProgress: Int?
+    /// Device key of the PDF or photos (OriginalStore); empty for older imports.
+    var originalId: String?
+
+    var title: String { shortTitle ?? name }
 
     enum CodingKeys: String, CodingKey {
         case id, name, sourceFilename = "source_filename", importedAt = "imported_at",
-             conditions, steps, label
+             conditions, steps, label, shortTitle = "short_title", wells, runs, inProgress = "in_progress",
+             originalId = "original_id"
     }
 }
 
@@ -306,9 +331,15 @@ struct ProtocolDoc: Decodable {
     var sourceFilename: String?
     var importedAt: Double?
     var plan: Plan
+    /// pdf | text | photo; the text a text/photo import was checked against;
+    /// the device key of the PDF or photos (OriginalStore).
+    var origin: String?
+    var sourceText: String?
+    var originalId: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, sourceFilename = "source_filename", importedAt = "imported_at", plan
+        case id, name, sourceFilename = "source_filename", importedAt = "imported_at", plan,
+             origin, sourceText = "source_text", originalId = "original_id"
     }
 }
 
@@ -334,14 +365,18 @@ struct RunSummary: Decodable, Identifiable {
     var endedAt: Double?
     var status: String
     var summary: RunCounts?
-    /// Server label: "Oct 29 · 2:20 PM · Drug A/B Dosing" (never the run id).
+    /// Server labels (server/labels.py): "Run 3", "Today", "Step 4 of 5" /
+    /// "Ended at step 3" / "Finished" (never the run id).
     var label: String?
+    var number: Int?
+    var day: String?
+    var state: String?
 
     var id: String { runId }
 
     enum CodingKeys: String, CodingKey {
         case runId = "run_id", protocolId = "protocol_id", protocolName = "protocol_name",
-             startedAt = "started_at", endedAt = "ended_at", status, summary, label
+             startedAt = "started_at", endedAt = "ended_at", status, summary, label, number, day, state
     }
 }
 
@@ -387,6 +422,8 @@ struct DraftLiquid: Decodable {
 
 struct DraftCondition: Decodable {
     var label: String
+    /// Plate letters (server rule, as for the run plan).
+    var abbr: String?
     var treatments: [String]
     var replicates: Int
     var wells: [String]
@@ -395,7 +432,7 @@ struct DraftCondition: Decodable {
     var quotePage: Int?
 
     enum CodingKeys: String, CodingKey {
-        case label, treatments, replicates, wells, quote, quoteSource = "quote_source",
+        case label, abbr, treatments, replicates, wells, quote, quoteSource = "quote_source",
              quotePage = "quote_page"
     }
 }
@@ -452,9 +489,44 @@ struct DraftIssue: Decodable, Identifiable {
     var quote: String?
 }
 
+struct DraftEvidence: Decodable {
+    var text: String
+    var pages: [String]?
+}
+
 struct DraftMeta: Decodable {
     var source: String
     var layout: [String: String]
+    /// pdf | text | photo, and the device key of the PDF or photos.
+    var origin: String?
+    var originalId: String?
+    var evidence: DraftEvidence?
+
+    enum CodingKeys: String, CodingKey {
+        case source, layout, origin, originalId = "original_id", evidence
+    }
+}
+
+/// One robot (pipetting) step of a draft as the Start screens show it.
+struct DraftRow: Decodable, Identifiable {
+    var n: Int
+    var index: Int
+    var title: String
+    var detail: String
+    var flagged: Bool
+    var reason: String
+    var quote: String
+    var page: Int?
+    var id: Int { n }
+}
+
+/// Server-made view of a draft (store snapshot draft.summary).
+struct DraftSummary: Decodable {
+    var rows: [DraftRow]
+    var others: [String]
+    var conditions: Int
+    var wells: Int
+    var steps: Int
 }
 
 struct ProtocolDraft: Decodable {
@@ -462,6 +534,7 @@ struct ProtocolDraft: Decodable {
     var review: [DraftIssue]
     var errors: [DraftIssue]
     var meta: DraftMeta
+    var summary: DraftSummary?
 }
 
 /// One per-step completion (API 5): which plan step (1-based) a well was
@@ -778,6 +851,12 @@ struct ScreenDef: Decodable {
     var commands: [String]
     /// "Say X" buttons: tap and voice run the same action.
     var buttons: [ScreenButton]?
+    /// The same buttons as another screen (protocol_detail keeps Home's).
+    var buttonsFrom: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, commands, buttons, buttonsFrom = "buttons_from"
+    }
 }
 
 /// One registry button: `say` is shown, spoken, and listed in `commands`;
@@ -788,6 +867,34 @@ struct ScreenButton: Decodable, Equatable {
     var args: [String: String]?
     /// Small line under a choice card ("PDF · Word"); plain buttons have none.
     var line: String?
+    /// Shown only in this state of the screen's slots ({"status": "finished"}).
+    var when: [String: String]?
+    /// "disabled": drawn greyed (a tap or the words still run the action,
+    /// which answers why), with `note` beside it ("Finished").
+    var look: String?
+    var note: String?
+
+    var greyed: Bool { look == "disabled" }
+
+    /// A templated button ("Step {step}") filled from the screen's slots;
+    /// nil while a slot it needs has no value (the server hides it too).
+    func filled(_ slots: [String: String]) -> ScreenButton? {
+        func fill(_ s: String) -> String? {
+            var out = s
+            while let r = out.range(of: #"\{(\w+)\}"#, options: .regularExpression) {
+                guard let v = slots[String(out[r].dropFirst().dropLast())] else { return nil }
+                out.replaceSubrange(r, with: v)
+            }
+            return out
+        }
+        guard (when ?? [:]).allSatisfy({ slots[$0.key] == $0.value }), let say = fill(say) else { return nil }
+        var a: [String: String]? = nil
+        if let args {
+            a = [:]
+            for (k, v) in args { guard let f = fill(v) else { return nil }; a?[k] = f }
+        }
+        return ScreenButton(say: say, action: action, args: a, line: line, when: when, look: look, note: note)
+    }
 }
 
 /// Screen registry shared with the server (the bundled screens.json): the
@@ -801,8 +908,14 @@ struct ScreenRegistry: Decodable {
     var cards: [String: [ScreenButton]]?
 
     static func decode(_ data: Data) throws -> ScreenRegistry {
-        let reg = try JSONDecoder().decode(ScreenRegistry.self, from: data)
+        var reg = try JSONDecoder().decode(ScreenRegistry.self, from: data)
         guard !reg.screens.isEmpty else { throw RegistryError.empty }
+        let all = reg.screens
+        for i in reg.screens.indices {
+            if let from = reg.screens[i].buttonsFrom {
+                reg.screens[i].buttons = all.first { $0.id == from }?.buttons
+            }
+        }
         return reg
     }
 

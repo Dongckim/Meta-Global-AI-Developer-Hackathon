@@ -3,6 +3,9 @@ import SwiftUI
 
 // MARK: - Original protocol files (this iPad only; the server never stores bytes)
 
+/// PDFs and page photos live here under the import's original id (the server
+/// keeps that id with the draft and the protocol). Protocols imported before
+/// original ids keep their file under the protocol id.
 enum OriginalStore {
     static func dir() -> URL {
         let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -17,6 +20,17 @@ enum OriginalStore {
 
     static func save(_ data: Data, protocolId: String) {
         try? data.write(to: url(protocolId: protocolId), options: .atomic)
+    }
+
+    static func photoURL(_ id: String, page: Int) -> URL {
+        dir().appending(path: "\(id)-p\(page).jpg")
+    }
+
+    /// Page photos of an import, in page order.
+    static func photos(_ id: String) -> [URL] {
+        guard !id.isEmpty else { return [] }
+        return Array((1...200).lazy.map { photoURL(id, page: $0) }
+            .prefix { FileManager.default.fileExists(atPath: $0.path) })
     }
 }
 
@@ -109,6 +123,11 @@ struct SourceView: View {
                FileManager.default.fileExists(atPath: OriginalStore.url(protocolId: parsed.protocolId).path) {
                 PDFDocView(url: OriginalStore.url(protocolId: parsed.protocolId),
                            page: page, phrase: phrase ?? textPhrase(fragment: parsed.fragment))
+            } else if let parsed = parseSourceTarget(target),
+                      case let photos = OriginalStore.photos(parsed.protocolId), !photos.isEmpty,
+                      let img = UIImage(contentsOfFile: photos[min(max((page ?? 1) - 1, 0), photos.count - 1)].path) {
+                // a photo import: the page photo is the original
+                Image(uiImage: img).resizable().scaledToFit().padding()
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: "doc.questionmark").font(.largeTitle)

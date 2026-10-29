@@ -18,18 +18,18 @@ Status: **done** = matches ver 2 · **old** = exists in the pre-ver-2 style ·
 
 | Group | Screen | Figma frame | Status | Bundle |
 |---|---|---|---|---|
-| Home | Splash | 37:12807 | old (not compared: Figma limit) | 2 |
-| Home | Glasses sync | 37:12820 | old (not compared: Figma limit) | 2 |
-| Home | ⓪ Home · Protocols | 37:12877 | done | 2 |
+| Home | Splash | 37:12807 | done (word mark still "Glassistant") | 2 |
+| Home | Glasses sync | 37:12820 | done (rows: the app's six checks) | 2 |
+| Home | ⓪ Home · Protocols | 37:12877 | done (Searches count: frame) | 2 |
 | Home | ⓪b Home · Run record | 37:12931 | done (Code tab: frame) | 2 |
 | Home | ⓪c Home · Web searches | 37:13104 | frame | 2 |
 | Start | ⑤a Mode | 37:13141 | done (Private: frame) | 3 |
-| Start | ⑤b Import protocol | 37:13167 | done (Text, Photo: frame) | 3 |
-| Start | ⑤b Draft ready | 37:13203 | old (draft sheet) | 3 |
-| Start | ⑤c Review steps | 37:13230 | old (draft sheet) | 3 |
-| Start | ⑤d Step source | 37:13288 | old (source view) | 3 |
-| Start | ⑤e PDF page | 37:13320 | old (source view) | 3 |
-| Start | ⑤f Plan check | 37:13351 | todo | 3 |
+| Start | ⑤b Import protocol | 37:13167 | done (Text, File, Photo) | 3 |
+| Start | ⑤b Draft ready | 37:13203 | done | 3 |
+| Start | ⑤c Review steps | 37:13230 | done | 3 |
+| Start | ⑤d Step source | 37:13288 | done (Fix it: tap editor) | 3 |
+| Start | ⑤e PDF page | 37:13320 | done (PDF, photo or text) | 3 |
+| Start | ⑤f Plan check | 37:13351 | done | 3 |
 | In run | ① Main | 37:13521 | done | 1 |
 | In run | ③ Confirm · single | 37:13714 | done | 1 |
 | In run | ③b Confirm · checklist | 37:13742 | done (One by one: later) | 1 |
@@ -46,11 +46,18 @@ Status: **done** = matches ver 2 · **old** = exists in the pre-ver-2 style ·
 | — | ⑥ Learn | 37:14460 | later (out of scope) | — |
 | Private | Private variants of the above | section 43:2 | mode tokens (Theme.RunMode) | — |
 
+Reference PNGs exported from Figma live in `docs/design/ref/` (read only, not
+committed). Milo's line at the top of each screen is the registry screen's
+`prompt` (pip_voice.json `prompts`), filled by the server; button words are
+the registry `buttons` (templated ones like "Step {step}" fill from the view's
+slots).
+
 ## Later
 
 - ③b checklist **"One by one"** (answer the cards one at a time): needs a card
   mode in the server view and an answer word; the checklist shows "Yes to all"
   only until then.
 - ⑥ Learn.
+- Draft value edits by voice (⑤d "Fix it" opens the tap editor for now).
 
 Update the status column when a bundle lands.

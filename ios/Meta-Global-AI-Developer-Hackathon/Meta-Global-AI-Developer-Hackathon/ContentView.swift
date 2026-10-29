@@ -75,6 +75,12 @@ struct ContentView: View {
     @State private var draftState = DraftState.idle
     @State private var reviewTab = 0
     @State private var showImporter = false
+    @State private var showTextImport = false
+    @State private var showPhotoImport = false
+    /// The last view change came from a tap (its screen line is spoken only
+    /// in a live session; a voice reply already says it).
+    @State private var navByTap = false
+    @State private var promptKey = ""
     @State private var ttsOn = SpeechBus.shared.enabled
     @State private var routeLine = ""
     @State private var showHome = false
@@ -84,8 +90,6 @@ struct ContentView: View {
     @State private var protocols: [ProtocolSummary] = []
     @State private var runs: [RunSummary] = []
     @State private var reviewError = ""
-    @State private var reviewBusy = false
-    @State private var detailNotice = ""
     @State private var syncError: String?
     @State private var apiMismatch: String?
     private let registry = loadScreens()
@@ -147,9 +151,17 @@ struct ContentView: View {
         if cur == "robot_preview" {
             if case .idle = robotState { runRobot() }
         } else if case .idle = robotState {} else { robotState = .idle }
-        if cur == "protocol_review" {
-            if lab.draft != nil, case .idle = draftState { draftState = .reviewing }
+        // Milo's line for the screen (registry prompt): shown on entry, and
+        // said when a tap opened it during a live session
+        let key = "\(cur)#\(tgt)"
+        if key != promptKey {
+            promptKey = key
+            if !v.prompt.isEmpty {
+                lastReply = v.prompt
+                if navByTap && voice.inSession { sayAloud(v.prompt) }
+            }
         }
+        navByTap = false
         showHome = cur == "home"
         // "setup" is the old id for the same screen (records saved before)
         if cur == "sync" || cur == "setup", top.front != .sync,
@@ -258,6 +270,12 @@ struct ContentView: View {
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .plainText]) { res in
             importPicked(res)
         }
+        .sheet(isPresented: $showTextImport) {
+            TextImportSheet { text, name in upload(text: text, filename: name) }
+        }
+        .sheet(isPresented: $showPhotoImport) {
+            PhotoImportSheet { pages in importPhotos(pages) }
+        }
         .onAppear {
             if canReachServer { connect(); loadLists() }
             refreshRoute()
@@ -333,6 +351,9 @@ struct ContentView: View {
                     hintsBar.padding(.horizontal)
                     inputBar.padding(.horizontal).padding(.bottom)
                 }
+            } else if let d = lab.draft, StartScreen.ids.contains(lab.view.current.screen) {
+                // ⑤b-⑤f start review (Figma 37:13203-37:13351)
+                stage { u in startScreen(d, u) }
             } else if ["mode", "import_choice"].contains(lab.view.current.screen) {
                 // ⑤a / ⑤b start (Figma 37:13141, 37:13167)
                 stage { u in
@@ -345,19 +366,24 @@ struct ContentView: View {
             } else if let rid = viewingRun {
                 // ⓪b run record (Figma 37:12931)
                 stage { u in
-                    RunRecordScreen(runId: rid, runs: runs, buttons: buttons("run_view"), u: u,
-                                    perform: performButton)
+                    if lab.cards.isEmpty {
+                        RunRecordScreen(runId: rid, runs: runs, buttons: buttons("run_view"), u: u,
+                                        perform: performButton)
+                    } else {
+                        // "Run 1 is finished. Start a new run?" (and finish-first) take the screen
+                        ConfirmScreen(lab: lab, buttons: registry.cards, u: u,
+                                      onAnswer: answer(id:ok:), onAnswerAll: answerAll)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             } else if let pid = selectedProtocol {
-                VStack(spacing: 0) {
-                    ProtocolDetailView(
-                        protocolId: pid, cards: lab.cards, notice: detailNotice,
-                        onBack: { sendAction("back") },
-                        onStart: startProtocolRun,
-                        onRun: { sendAction("open", ["target": "run:\($0)"]) },
-                        onAnswer: answer(id:ok:), onAnswerAll: answerAll)
-                    hintsBar.padding(.horizontal)
-                    inputBar.padding(.horizontal).padding(.bottom)
+                // ⓪ a protocol picked on Home: its detail and runs on the right
+                stage { u in
+                    ProtocolsHome(protocols: protocols, runs: runs, selectedId: pid,
+                                  activeRunId: lab.run?.runId, buttons: buttons("protocol_detail"), u: u,
+                                  onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
+                                  onRun: { sendAction("open", ["target": "run:\($0)"]) },
+                                  perform: performButton)
                 }
             } else if showHome || lab.run == nil {
                 // ⓪ protocols (Figma 37:12877); a waiting card takes it like the bench
@@ -406,14 +432,38 @@ struct ContentView: View {
         }
     }
 
-    /// A registry screen's Say buttons.
+    /// A registry screen's Say buttons, templates filled from the view's
+    /// slots ("Say Step {step}" -> "Say Step 2"); unfilled ones are hidden.
     private func buttons(_ screen: String) -> [ScreenButton] {
-        screens.first { $0.id == screen }?.buttons ?? []
+        (screens.first { $0.id == screen }?.buttons ?? []).compactMap { $0.filled(lab.view.slots) }
     }
 
     /// Taps send the registry button's action, as saying it would.
     private func performButton(_ b: ScreenButton) {
         sendAction(b.action, b.args ?? [:])
+    }
+
+    private enum StartScreen {
+        static let ids = ["protocol_review", "draft_steps", "draft_step", "draft_page", "plan_check"]
+    }
+
+    @ViewBuilder private func startScreen(_ d: ProtocolDraft, _ u: CGFloat) -> some View {
+        let cur = lab.view.current
+        let step = Int(cur.target) ?? 1
+        switch cur.screen {
+        case "draft_steps":
+            DraftStepsScreen(draft: d, buttons: buttons(cur.screen), u: u,
+                             onRow: { sendAction("show_step", ["step": $0]) }, perform: performButton)
+        case "draft_step":
+            DraftStepScreen(draft: d, step: step, buttons: buttons(cur.screen), u: u, perform: performButton)
+        case "draft_page":
+            DraftPageScreen(draft: d, step: step, buttons: buttons(cur.screen), u: u, perform: performButton)
+        case "plan_check":
+            PlanCheckScreen(draft: d, buttons: buttons(cur.screen), u: u, perform: performButton)
+        default:
+            DraftReadyScreen(draft: d, title: lab.view.slots["title"] ?? d.plan.title ?? "",
+                             buttons: buttons(cur.screen), u: u, perform: performButton)
+        }
     }
 
     /// A ver 2 screen's stage: design px scaled to the space under the
@@ -536,12 +586,7 @@ struct ContentView: View {
     private var draftSheet: Binding<Bool> {
         Binding(
             get: { if case .idle = draftState { false } else { true } },
-            set: {
-                if !$0 {
-                    draftState = .idle
-                    if lab.view.current.screen == "protocol_review" { sendAction("back") }
-                }
-            }
+            set: { if !$0 { draftState = .idle } }  // the editor closes; the screen stays
         )
     }
 
@@ -580,15 +625,14 @@ struct ContentView: View {
     private var draftPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Review protocol").font(.title2.bold())
+                Text(draftState == .importing ? "Reading protocol" : "Edit draft").font(.title2.bold())
                 Spacer()
-                Button("Discard") { discard() }
-                    .buttonStyle(.bordered).controlSize(.small)
-                    .disabled(reviewBusy)
-                Button("Close") {
+                Button("Discard") {
                     draftState = .idle
-                    if lab.view.current.screen == "protocol_review" { sendAction("back") }
+                    sendAction("discard_draft")
                 }
+                    .buttonStyle(.bordered).controlSize(.small)
+                Button("Done") { draftState = .idle }
                     .buttonStyle(.bordered).controlSize(.small)
             }
             switch draftState {
@@ -623,14 +667,6 @@ struct ContentView: View {
                     let rest = unmatchedIssues(d)
                     if !rest.isEmpty {
                         ForEach(rest) { r in issueRow(r, .yellow) }
-                    }
-                    HStack {
-                        Button("Save to library") { save() }
-                            .buttonStyle(.bordered)
-                            .disabled(!d.errors.isEmpty || reviewBusy)
-                        Button("Start run") { start() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(!d.errors.isEmpty || reviewBusy)
                     }
                 } else {
                     Text("No draft.").foregroundStyle(.secondary)
@@ -782,10 +818,10 @@ struct ContentView: View {
         }
     }
 
-    /// Draft quotes open the picked PDF, kept as _draft until Save/Start names it.
+    /// Draft quotes open the import's original (kept under its original id).
     private func openDraftQuote(page: Int?, phrase: String) {
         draftState = .idle
-        openSource("protocol:_draft", page, phrase)
+        openSource("protocol:\(lab.draft?.meta.originalId ?? "")", page, phrase)
     }
 
     private func reviewLayout(_ d: ProtocolDraft) -> some View {
@@ -967,6 +1003,17 @@ struct ContentView: View {
         case "import":
             showImporter = true
             return true
+        case "import_text":
+            showTextImport = true
+            return true
+        case "import_photo":
+            showPhotoImport = true
+            return true
+        case "draft_edit":
+            // value edits are taps for now (Start ⑤d "Fix it")
+            guard lab.draft != nil else { return uiFail("No draft open.") }
+            draftState = .reviewing
+            return true
         case "flash":
             lab.flash(Set(a.wells ?? []))
             return true
@@ -1011,23 +1058,41 @@ struct ContentView: View {
                 say("Can't read that file")
                 return
             }
+            let oid = UUID().uuidString
             if url.pathExtension.lowercased() == "pdf" {
-                OriginalStore.save(data, protocolId: "_draft")
+                OriginalStore.save(data, protocolId: oid)
             }
-            draftState = .importing
-            Task { @MainActor in
-                do {
-                    let r = try await PipClient.importProtocol(data: data,
-                                                               filename: url.lastPathComponent)
-                    lab.draft = r.draft
-                    reviewError = ""
-                    say(r.reply)
-                    sayAloud(r.speak)
-                    draftState = .reviewing
-                } catch {
-                    say("Import failed: \(error.localizedDescription)")
-                    draftState = .idle
-                }
+            upload(files: [(url.lastPathComponent, data)], oid: oid)
+        }
+    }
+
+    /// Page photos stay on this iPad under the import's original id.
+    private func importPhotos(_ pages: [Data]) {
+        let oid = UUID().uuidString
+        for (i, d) in pages.enumerated() {
+            try? d.write(to: OriginalStore.photoURL(oid, page: i + 1), options: .atomic)
+        }
+        upload(files: pages.enumerated().map { ("page\($0.offset + 1).jpg", $0.element) }, oid: oid)
+    }
+
+    /// The one import route (PDF, .txt, pasted text, photos). The server opens
+    /// Draft ready when it's done.
+    private func upload(files: [(String, Data)] = [], text: String = "", filename: String = "",
+                        oid: String = UUID().uuidString) {
+        draftState = .importing
+        navByTap = true  // Draft ready's line is said in a live session, like a tap
+        Task { @MainActor in
+            do {
+                let r = try await PipClient.importProtocol(
+                    files: files.map { (name: $0.0, data: $0.1) }, text: text,
+                    filename: filename, originalId: oid)
+                lab.draft = r.draft
+                reviewError = ""
+                say(r.reply)
+                draftState = .idle
+            } catch {
+                say("Import failed: \(error.localizedDescription)")
+                draftState = .idle
             }
         }
     }
@@ -1061,110 +1126,6 @@ struct ContentView: View {
 
     private func patch(path: String, text raw: String) {
         patch(path: path, value: raw)
-    }
-
-    private func start() {
-        guard !reviewBusy else { return }
-        reviewBusy = true
-        reviewError = ""
-        Task { @MainActor in
-            defer { reviewBusy = false }
-            do {
-                let r = try await PipClient.startRun()
-                say(r.reply)
-                sayAloud(r.speak)
-                if r.started {
-                    if let id = r.protocolId { keepOriginal(protocolId: id) }
-                    lab.draft = nil
-                    draftState = .idle
-                    loadLists()
-                } else if r.card != nil {
-                    // The draft is saved and popped; the card lives on.
-                    lab.draft = nil
-                    draftState = .idle
-                    loadLists()
-                } else {
-                    reviewError = r.reply
-                }
-            } catch {
-                reviewError = error.localizedDescription
-                say("Error: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    private func save() {
-        guard !reviewBusy else { return }
-        reviewBusy = true
-        reviewError = ""
-        Task { @MainActor in
-            defer { reviewBusy = false }
-            do {
-                let r = try await PipClient.saveDraft()
-                say(r.reply)
-                sayAloud(r.speak)
-                if r.saved {
-                    if let id = r.proto?.id {
-                        keepOriginal(protocolId: id)
-                        selectedProtocol = id
-                    }
-                    lab.draft = nil
-                    draftState = .idle
-                    loadLists()
-                } else {
-                    reviewError = r.reply
-                }
-            } catch {
-                reviewError = error.localizedDescription
-                say("Error: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    /// The picked PDF becomes this protocol's on-iPad original.
-    private func keepOriginal(protocolId: String) {
-        let fm = FileManager.default
-        let draft = OriginalStore.url(protocolId: "_draft")
-        guard fm.fileExists(atPath: draft.path) else { return }
-        try? fm.removeItem(at: OriginalStore.url(protocolId: protocolId))
-        try? fm.moveItem(at: draft, to: OriginalStore.url(protocolId: protocolId))
-    }
-
-    private func discard() {
-        guard !reviewBusy else { return }
-        reviewBusy = true
-        reviewError = ""
-        Task { @MainActor in
-            defer { reviewBusy = false }
-            do {
-                try await PipClient.discardDraft()
-                try? FileManager.default.removeItem(at: OriginalStore.url(protocolId: "_draft"))
-                lab.draft = nil
-                draftState = .idle
-            } catch {
-                reviewError = error.localizedDescription
-                say("Error: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    private func startProtocolRun(_ id: String) {
-        detailNotice = ""
-        Task { @MainActor in
-            do {
-                let r = try await PipClient.runsStart(protocolId: id)
-                say(r.reply)
-                sayAloud(r.speak)
-                if r.started {
-                    detailNotice = ""
-                    selectedProtocol = nil
-                    loadLists()
-                }
-            } catch {
-                detailNotice = error.localizedDescription
-                say("Error: \(error.localizedDescription)")
-            }
-        }
     }
 
     private func endRun() {
@@ -1207,7 +1168,10 @@ struct ContentView: View {
         } else {
             phrase = textPhrase(fragment: parsed.fragment)
         }
-        viewingSource = ViewingSource(target: t, page: page, phrase: phrase)
+        // the original lives under its import's id; older imports under the protocol id
+        let oid = protocols.first { $0.id == parsed.protocolId }?.originalId ?? ""
+        viewingSource = ViewingSource(target: oid.isEmpty ? t : "protocol:\(oid)#\(parsed.fragment)",
+                                      page: page, phrase: phrase)
     }
 
     private func openCurrentSource() {
@@ -1225,6 +1189,7 @@ struct ContentView: View {
     /// Taps travel as Actions; the server updates view and broadcasts.
     private func sendAction(_ id: String, _ args: [String: Any] = [:], quiet: Bool = true) {
         Log.view.info("[view] send action \(id, privacy: .public) \(String(describing: args), privacy: .public)")
+        navByTap = true
         Task { @MainActor in
             do {
                 let r = try await PipClient.inputAction(id: id, args: args)

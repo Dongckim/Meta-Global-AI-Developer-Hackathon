@@ -1,11 +1,6 @@
 import AVFoundation
 import SwiftUI
 
-func fmtDate(_ ts: Double?) -> String {
-    guard let ts else { return "—" }
-    return Date(timeIntervalSince1970: ts).formatted(date: .abbreviated, time: .shortened)
-}
-
 // MARK: - Pending cards (home, detail, and bench show the same cards)
 
 struct CardPanel: View {
@@ -68,105 +63,6 @@ struct CardPanel: View {
 // MARK: - Home
 
 // MARK: - Protocol detail
-
-struct ProtocolDetailView: View {
-    var protocolId: String
-    var cards: [ServerCard]
-    var notice: String
-    var onBack: () -> Void
-    var onStart: (String) -> Void
-    var onRun: (String) -> Void
-    var onAnswer: (String, Bool) -> Void
-    var onAnswerAll: () -> Void
-    @State private var doc: ProtocolDoc?
-    @State private var runs: [RunSummary] = []
-    @State private var error = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Button { onBack() } label: {
-                    Image(systemName: "chevron.left").font(.headline)
-                }
-                .buttonStyle(.borderless)
-                Text(doc?.name ?? "Protocol").font(.title2.bold())
-                Spacer()
-            }
-            if !cards.isEmpty {
-                CardPanel(cards: cards, onAnswer: onAnswer, onAnswerAll: onAnswerAll)
-            }
-            if !notice.isEmpty {
-                Text(notice).font(.callout).foregroundStyle(.red)
-            }
-            if !error.isEmpty {
-                Text(error).foregroundStyle(.red)
-            } else if let doc {
-                Text("\(doc.plan.conditions.count) conditions · \(doc.plan.steps.count) steps")
-                    .font(.callout).foregroundStyle(.secondary)
-                Button("Start new run") { onStart(doc.id) }
-                    .buttonStyle(.borderedProminent)
-                List {
-                    Section("Steps") {
-                        ForEach(Array(doc.plan.steps.enumerated()), id: \.offset) { i, s in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("[\(i + 1)] \(s.text)").font(.callout)
-                                Text(stepLine(s)).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    Section("Runs") {
-                        if runs.isEmpty {
-                            Text("No runs yet").font(.callout).foregroundStyle(.secondary)
-                        }
-                        ForEach(runs) { r in
-                            Button { onRun(r.runId) } label: {
-                                HStack {
-                                    Circle().fill(r.status == "active" ? .green : .secondary)
-                                        .frame(width: 8, height: 8)
-                                    Text(r.label ?? fmtDate(r.startedAt)).font(.callout)
-                                    Spacer()
-                                    Text(r.status).font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                ProgressView()
-            }
-            Spacer()
-        }
-        .padding()
-        .task { await load() }
-        .onChange(of: protocolId) { _, _ in Task { await load() } }
-    }
-
-    private func stepLine(_ s: PlanStep) -> String {
-        var bits = [s.kind]
-        if let m = s.minutes { bits.append(fmtNum(m) + " min") }
-        if let v = s.pipette?.volume {
-            bits.append(fmtNum(v) + " " + (s.pipette?.unit ?? "uL"))
-        }
-        return bits.joined(separator: " · ")
-    }
-
-    @MainActor
-    private func load() async {
-        error = ""
-        do {
-            async let d = PipClient.protocolDetail(id: protocolId)
-            async let r = PipClient.runs(protocolId: protocolId)
-            doc = try await d
-            runs = try await r
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-}
-
-// MARK: - Past run (read-only)
-
-// MARK: - Glasses audio (iOS Bluetooth; no DAT dependency)
 
 struct GlassesAudioSection: View {
     /// Speaks through the voice session (same route switch and [audio] tts

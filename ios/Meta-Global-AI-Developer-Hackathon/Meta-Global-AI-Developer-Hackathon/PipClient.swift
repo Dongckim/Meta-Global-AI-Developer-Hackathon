@@ -96,47 +96,6 @@ struct PatchResponse: Decodable {
     let reason: String?
 }
 
-struct StartResponse: Decodable {
-    let started: Bool
-    let errors: [DraftIssue]?
-    let card: ServerCard?
-    let runId: String?
-    let protocolId: String?
-    let protocolName: String?
-    let reply: String
-    let speak: String?
-
-    enum CodingKeys: String, CodingKey {
-        case started, errors, card, runId = "run_id", protocolId = "protocol_id",
-             protocolName = "protocol_name", reply, speak
-    }
-}
-
-struct SaveResponse: Decodable {
-    let saved: Bool
-    let proto: ProtocolSummary?
-    let errors: [DraftIssue]?
-    let reply: String
-    let speak: String?
-
-    enum CodingKeys: String, CodingKey {
-        case saved, proto = "protocol", errors, reply, speak
-    }
-}
-
-struct RunStartResponse: Decodable {
-    let started: Bool
-    let card: ServerCard?
-    let runId: String?
-    let protocolId: String?
-    let reply: String
-    let speak: String?
-
-    enum CodingKeys: String, CodingKey {
-        case started, card, runId = "run_id", protocolId = "protocol_id", reply, speak
-    }
-}
-
 struct RunEndResponse: Decodable {
     let ended: Bool
     let card: ServerCard?
@@ -146,14 +105,6 @@ struct RunEndResponse: Decodable {
 
 struct ProtocolListResponse: Decodable {
     let protocols: [ProtocolSummary]
-}
-
-struct ProtocolDetailResponse: Decodable {
-    let proto: ProtocolDoc
-
-    enum CodingKeys: String, CodingKey {
-        case proto = "protocol"
-    }
 }
 
 struct RunListResponse: Decodable {
@@ -211,7 +162,7 @@ enum PipError: Error, LocalizedError {
 
 enum PipClient {
     /// Must match server API_VERSION (test_snapshot_schema pins both sides).
-    static let EXPECTED_API_VERSION = 10
+    static let EXPECTED_API_VERSION = 11
     /// A server link silent this long is dead: three missed keepalives
     /// (server HEARTBEAT_S = 15) on /events and /voice/live.
     static let idleTimeout: TimeInterval = 45
@@ -285,16 +236,28 @@ enum PipClient {
         try await post("notes/edit", ["id": id, "text": text])
     }
 
-    static func importProtocol(data: Data, filename: String) async throws -> ImportResponse {
+    /// One import route for every origin: a PDF or .txt file, page photos
+    /// (several = pages), or pasted text. originalId names the device copy.
+    static func importProtocol(files: [(name: String, data: Data)], text: String = "",
+                               filename: String = "", originalId: String) async throws -> ImportResponse {
         let boundary = "----pip\(UUID().uuidString)"
         var body = Data()
-        body.append(Data("--\(boundary)\r\n".utf8))
-        body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".utf8))
-        body.append(Data("Content-Type: application/octet-stream\r\n\r\n".utf8))
-        body.append(data)
-        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        for f in files {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"\(f.name)\"\r\n".utf8))
+            body.append(Data("Content-Type: application/octet-stream\r\n\r\n".utf8))
+            body.append(f.data)
+            body.append(Data("\r\n".utf8))
+        }
+        for (k, v) in [("text", text), ("filename", filename), ("original_id", originalId)] where !v.isEmpty {
+            body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(k)\"\r\n\r\n".utf8))
+            body.append(Data(v.utf8))
+            body.append(Data("\r\n".utf8))
+        }
+        body.append(Data("--\(boundary)--\r\n".utf8))
         var req = URLRequest(url: Config.baseURL.appending(path: "protocols/import"))
         req.httpMethod = "POST"
+        req.timeoutInterval = 180  // photos: one transcription per page, then extraction
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
         let (respData, resp) = try await URLSession.shared.data(for: req)
@@ -312,26 +275,9 @@ enum PipClient {
         return try JSONDecoder().decode(PatchResponse.self, from: data)
     }
 
-    static func startRun() async throws -> StartResponse {
-        try await post("protocols/start", [:])
-    }
-
-    static func saveDraft() async throws -> SaveResponse {
-        try await post("protocols/save", [:])
-    }
-
     static func protocols() async throws -> [ProtocolSummary] {
         let r: ProtocolListResponse = try await get("protocols")
         return r.protocols
-    }
-
-    static func protocolDetail(id: String) async throws -> ProtocolDoc {
-        let r: ProtocolDetailResponse = try await get("protocols/\(id)")
-        return r.proto
-    }
-
-    static func runsStart(protocolId: String) async throws -> RunStartResponse {
-        try await post("runs/start", ["protocol_id": protocolId])
     }
 
     static func runsEnd() async throws -> RunEndResponse {
@@ -354,15 +300,6 @@ enum PipClient {
 
     static func health() async throws -> HealthInfo {
         try await get("health")
-    }
-
-    static func discardDraft() async throws {
-        var req = URLRequest(url: Config.baseURL.appending(path: "protocols/draft"))
-        req.httpMethod = "DELETE"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: [:])
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        try check(resp, data)
     }
 
     static func record() async throws -> RecordSnapshot {
