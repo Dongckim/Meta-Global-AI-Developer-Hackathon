@@ -15,7 +15,7 @@ os.environ["MODEL_API_KEY"] = "dummy"
 from fastapi.testclient import TestClient  # noqa: E402
 
 import server.api as api  # noqa: E402
-from server.screens import SCREENS, button_call  # noqa: E402
+from server.screens import PLANNED, SCREENS, button_call  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
 buttons = [(sid, b) for sid, s in SCREENS.items() for b in s.get("buttons", [])]
@@ -36,9 +36,14 @@ api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
 api.store.start_demo_run()
 c = TestClient(api.app)
 for sid, b in buttons:
-    api.store.r["view"]["current"] = {"screen": sid, "target": ""}
+    api.store.r["view"]["current"] = {"screen": sid, "target": ""}  # said on its own screen
     j = c.post("/input", json={"text": b["say"], "session": "bt"}).json()
     names = [t["name"] for t in j["tool_calls"]]
+    if (b.get("args") or {}).get("screen") in PLANNED:
+        # a planned screen: saying and tapping both answer "not ready"
+        tap = c.post("/input", json={"action": {"id": b["action"], "args": b["args"]}, "session": "bt"}).json()
+        assert j["reply"] == tap["reply"] == "That isn't ready yet.", (sid, b, j, tap)
+        continue
     assert names == [b["action"]] and j["route"] == "grammar", (sid, b["say"], j)
 print("BT2 ok: spoken button runs its action")
 
@@ -46,6 +51,8 @@ print("BT2 ok: spoken button runs its action")
 from server.screens import verbs  # noqa: E402
 
 for sid, b in buttons:
+    if b.get("args"):  # a targeted button is its screen's command (BT1), not a bare verb
+        continue
     assert b["say"].lower() in [v.lower() for v in verbs(b["action"])], (sid, b, verbs(b["action"]))
 print("BT3 ok: button words come from action verbs")
 

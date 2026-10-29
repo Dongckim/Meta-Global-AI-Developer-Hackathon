@@ -162,6 +162,14 @@
     "end_run": {"title": "Finish this run?", "detail": ""},
     "default": {"title": "{question}", "detail": "{detail}"}
   },
+  "not_ready": [
+    "That isn't ready yet."
+  ],
+  "modes": {
+    "_note": "Run modes: header label and the line under each choice on the Mode screen.",
+    "full": {"label": "Full", "line": "Cloud model · fastest answers"},
+    "private": {"label": "Private", "line": "Private model · asks before anything leaves"}
+  },
   "also_ask": [
     "Should I also {what}?",
     "Want me to {what} too?"

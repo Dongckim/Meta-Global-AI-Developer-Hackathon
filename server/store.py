@@ -29,7 +29,7 @@ from server.grammar import (
     where_am_i_reply,
 )
 from server.screens import READ_KINDS as SCREEN_READ_KINDS
-from server.screens import SCREENS, canonical, parent_of, result_of, title_of, ui_of
+from server.screens import PLANNED, SCREENS, canonical, parent_of, result_of, title_of, ui_of
 from server.tone import say
 from server import library as lib
 from server import protocol as proto
@@ -1233,6 +1233,9 @@ class RecordStore:
         elif name == "navigate":
             raw = args.get("screen")
             screen = canonical(raw) if isinstance(raw, str) else None
+            if screen is None and isinstance(raw, str) and raw.strip() in PLANNED:
+                res["messages"].append(say("not_ready", session))  # registry: planned
+                return
             if screen is None:
                 res["messages"].append(
                     "I couldn't open that: no screen given."

@@ -51,8 +51,20 @@ def load() -> dict:
 REGISTRY = load()
 #: Built screens. `planned` ones (registry only, not in the app yet) are
 #: never navigable, offered to the model, or resolved by alias.
-SCREENS: dict[str, dict] = {s["id"]: s for s in REGISTRY.get("screens", []) if not s.get("planned")}
-PLANNED: list[str] = [s["id"] for s in REGISTRY.get("screens", []) if s.get("planned")]
+SCREENS: dict[str, dict] = {s["id"]: s for s in REGISTRY.get("screens", []) if s.get("status") != "planned"}
+PLANNED: list[str] = [s["id"] for s in REGISTRY.get("screens", []) if s.get("status") == "planned"]
+_PLANNED_ALIASES: dict[str, str] = {
+    a.lower(): s["id"] for s in REGISTRY.get("screens", []) if s.get("status") == "planned"
+    for a in [s["id"].replace("_", " "), *s.get("aliases", [])]}
+
+
+def planned_screen(text: str) -> str | None:
+    """A planned screen asked for by name ("open web searches", "private
+    mode"): its id, so the server can say it isn't ready without the model."""
+    import re
+    said = " ".join(re.sub(r"[^a-z0-9' ]+", " ", (text or "").lower()).split())
+    said = re.sub(r"^(?:please |can you |could you )?(?:open|show(?: me)?|go to|start|let's see|see)\s+(?:the |my )?", "", said)
+    return _PLANNED_ALIASES.get(said)
 #: Card answer words (`answers`: all / yes / no / cancel -> phrases).
 ANSWERS: dict[str, list[str]] = dict(REGISTRY.get("answers", {}))
 #: Words that carry nothing beside an answer ("um", "please").

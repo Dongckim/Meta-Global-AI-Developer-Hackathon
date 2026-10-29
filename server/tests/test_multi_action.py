@@ -296,4 +296,17 @@ api._SESSIONS.setdefault("ma", api.get_session("ma"))["turns"] = [
 j, _ = turn("yes", [perform("add_note", "m2", target="C8", text="bubbles")])
 assert len(sent) == 1 and "add_note" in [t["name"] for t in j["tool_calls"]], j
 print("MA14 ok: repeated answers, repeats of answered cards, sentence joins")
+
+# MA15. Planned screens (registry status "planned"): asked for by voice or
+# a tap, the server says it isn't ready, without the model.
+from server.screens import REGISTRY  # noqa: E402
+
+assert all(s.get("status") in ("ready", "planned") for s in REGISTRY["screens"]), "every screen has a status"
+fresh()
+for said in ("open web searches", "Show me the label check", "private mode"):
+    j, _ = turn(said)
+    assert j["reply"] == "That isn't ready yet." and not sent, (said, j)
+r = api.store.apply_calls([{"name": "navigate", "args": {"screen": "export"}}], "tap", "", "tap", {})
+assert r["messages"] == ["That isn't ready yet."], r["messages"]
+print("MA15 ok: planned screens answer 'not ready' without the model")
 print("ALL PASS")

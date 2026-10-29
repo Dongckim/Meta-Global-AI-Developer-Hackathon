@@ -59,7 +59,7 @@ from server.grammar import (
 )
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
-from server.screens import ask_choice, button_call
+from server.screens import ask_choice, button_call, planned_screen
 from server.screens import guide as _screen_guide
 from server.screens import READS as SCREEN_READS
 from server import library as lib
@@ -705,6 +705,9 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         res = store.apply_calls(calls, source, text, "grammar", session)
         reply = _compose_reply(calls, res, store.prompt_state(session), session)
         return calls, res["messages"], reply, 0, "grammar", res["cards"], res["info"], []
+    if planned_screen(text):
+        # a registry screen that isn't built yet: say so, no model call
+        return [], [], say("not_ready", session), 0, "grammar", [], {"dropped": 0, "drop_reasons": []}, []
     parts = request_parts(text, WRITE_ACTIONS)
     v = store.r["view"]
     b = button_call(text, [x for x in ((v.get("sheet") or {}).get("name"), v["current"]["screen"]) if x])
