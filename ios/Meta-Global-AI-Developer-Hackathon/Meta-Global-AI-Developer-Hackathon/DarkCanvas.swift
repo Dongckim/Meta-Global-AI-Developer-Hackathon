@@ -40,16 +40,30 @@ nonisolated enum Keyframes {
             .truncatingRemainder(dividingBy: period) / period
         return easeInOut(phase < 0.5 ? phase * 2 : (1 - phase) * 2)
     }
+}
 
-    /// Seconds since `start`; DEBUG `-uiPreviewTime <s>` freezes it.
-    static func elapsed(_ now: Date, since start: Date) -> Double {
+/// Screen clock: starts at the first drawn frame and advances at most
+/// 1/30s per frame, so a stalled frame (launch work, first blur) pauses
+/// the motion instead of skipping ahead. DEBUG `-uiPreviewTime <s>`
+/// freezes it.
+final class FrameClock {
+    private var last: Date?
+    private(set) var t = 0.0
+
+    /// Call with each TimelineView date; same date twice adds nothing.
+    func tick(_ now: Date) -> Double {
         #if DEBUG
         if let frozen = UserDefaults.standard.string(forKey: "uiPreviewTime")
             .flatMap(Double.init) {
-            return frozen
+            t = frozen
+            return t
         }
         #endif
-        return now.timeIntervalSince(start)
+        if let last {
+            t += min(max(now.timeIntervalSince(last), 0), 1.0 / 30)
+        }
+        last = now
+        return t
     }
 }
 

@@ -5,11 +5,11 @@ import SwiftUI
 /// `runSplash`); tap skips.
 struct SplashView: View {
     var onDone: () -> Void
-    @State private var start = Date()
+    @State private var clock = FrameClock()
 
     var body: some View {
         TimelineView(.animation) { ctx in
-            let t = Keyframes.elapsed(ctx.date, since: start)
+            let t = clock.tick(ctx.date)
             // brandIn 1.4s --ease .25s both: from opacity 0,
             // letter-spacing .06em, blur 14
             let p = Keyframes.tween(t, delay: 0.25, duration: 1.4)
@@ -31,7 +31,11 @@ struct SplashView: View {
         .contentShape(Rectangle())
         .onTapGesture { onDone() }
         .task {
-            try? await Task.sleep(for: .seconds(2.6))
+            // on the screen clock, so a launch stall doesn't cut the bloom
+            while clock.t < 2.6 {
+                try? await Task.sleep(for: .milliseconds(50))
+                if Task.isCancelled { return }
+            }
             onDone()
         }
     }

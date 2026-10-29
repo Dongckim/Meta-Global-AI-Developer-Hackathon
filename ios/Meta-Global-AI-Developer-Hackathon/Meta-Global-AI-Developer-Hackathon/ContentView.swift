@@ -89,9 +89,11 @@ struct ContentView: View {
     @State private var apiMismatch: String?
     private let screens = loadScreens()
     var dat: GlassesDAT? = nil
-    @State private var showSplash = true
-    @State private var showSync = false
-    @State private var showSyncCover = false
+    /// Top-level screens; every switch goes through `top.show`.
+    enum TopScreen: Hashable { case splash, sync, main }
+    @State private var top = ScreenStack(TopScreen.splash)
+    /// Sync opened by the launch gate (Skip remembers) vs from Setup/voice.
+    @State private var syncFromGate = false
     @State private var syncRefreshGen = 0
     @AppStorage("pip.syncSkipped") private var syncSkipped = false
 
@@ -132,10 +134,10 @@ struct ContentView: View {
         showHome = cur == "home"
         if cur == "setup", setupDone, lastViewScreen != "setup" {
             setupDone = false
-            showSyncCover = false
+            if top.front == .sync, !syncFromGate { top.show(.main) }
         }
-        if cur == "sync", !showSync, lastViewScreen != "sync" {
-            showSyncCover = true
+        if cur == "sync", top.front != .sync, lastViewScreen != "sync" {
+            openSync()
         }
         if let i = ["liquids", "steps", "layout"].firstIndex(of: v.tab) { reviewTab = i }
         if cur != lastViewScreen, cur == "home" || cur == "protocol_detail" { loadLists() }
@@ -145,24 +147,37 @@ struct ContentView: View {
     /// Launch flow: splash, then the sync gate unless glasses are
     /// already connected or the user skipped (Setup comes after).
     private func dismissSplash() {
-        showSplash = false
-        showSync = SyncGate.needed(
+        guard top.front == .splash else { return }
+        if SyncGate.needed(
             rows: SyncGate.rows(dat: dat, hfpName: SyncGate.liveHFPName),
-            skipped: syncSkipped)
+            skipped: syncSkipped) {
+            syncFromGate = true
+            top.show(.sync)
+        } else {
+            top.show(.main)
+        }
     }
 
     private func skipSyncGate() {
         syncSkipped = true
-        showSync = false
+        top.show(.main)
+    }
+
+    /// Sync from Setup or voice (not the launch gate).
+    private func openSync() {
+        syncFromGate = false
+        top.show(.sync)
+    }
+
+    private func leaveSync() {
+        if syncFromGate { skipSyncGate() } else { top.show(.main) }
     }
 
     /// Voice "skip the glasses check": leave the sync UI when it is up,
     /// else finish Setup (tap Skip behaves the same per surface).
     private func dismissSyncOrSetup() {
-        if showSync {
-            skipSyncGate()
-        } else if showSyncCover {
-            showSyncCover = false
+        if top.front == .sync {
+            leaveSync()
         } else {
             setupDone = true
         }
@@ -172,28 +187,27 @@ struct ContentView: View {
     /// the screen when in setup-phase without it.
     private func retrySync() {
         syncRefreshGen += 1
-        if !showSync, !showSyncCover, !setupDone {
-            showSyncCover = true
+        if top.front != .sync, !setupDone {
+            openSync()
         }
     }
 
     var body: some View {
-        Group {
-            if showSplash {
+        ScreenTransition(stack: $top, screens: [.splash, .sync, .main],
+                         prewarm: [.main],
+                         floor: { $0 == .main ? Color(.systemBackground) : Theme.dark }) { id in
+            switch id {
+            case .splash:
                 SplashView { dismissSplash() }
-            } else if showSync {
+            case .sync:
                 GlassesSyncScreen(dat: dat, refreshGen: syncRefreshGen,
-                                  onSkip: skipSyncGate,
-                                  onComplete: { showSync = false })
-            } else {
+                                  onSkip: leaveSync,
+                                  onComplete: { top.show(.main) })
+            case .main:
                 mainBody
             }
         }
-        .fullScreenCover(isPresented: $showSyncCover) {
-            GlassesSyncScreen(dat: dat, refreshGen: syncRefreshGen,
-                              onSkip: { showSyncCover = false },
-                              onComplete: { showSyncCover = false })
-        }
+        .statusBarHidden(top.front != .main)
         .sheet(item: $selectedWell, onDismiss: {
             peekTarget = nil
             if lab.view.sheet.name == "well_card" { sendAction("back") }
@@ -239,7 +253,7 @@ struct ContentView: View {
             Group {
                 if !setupDone {
                 SetupView(dat: dat, voice: voice,
-                          onOpenSync: { showSyncCover = true }) {
+                          onOpenSync: { openSync() }) {
                     setupDone = true
                     if lab.view.current.screen == "setup" { sendAction("back") }
                 }

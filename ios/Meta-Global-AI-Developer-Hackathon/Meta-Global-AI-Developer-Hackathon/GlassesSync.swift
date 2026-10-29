@@ -130,7 +130,7 @@ struct GlassesSyncScreen: View {
     #endif
     @State private var hfpName: String?
     @State private var registerNudge = false
-    @State private var start = Date()
+    @State private var clock = FrameClock()
     /// Clock time when every row turned ok (drives readyGlow / bump).
     @State private var readyAt: Double?
 
@@ -161,7 +161,7 @@ struct GlassesSyncScreen: View {
 
     var body: some View {
         TimelineView(.animation) { ctx in
-            let t = Keyframes.elapsed(ctx.date, since: start)
+            let t = clock.tick(ctx.date)
             DarkCanvas {
                 ZStack {
                     AuroraView(mode: readyAt.map { .syncReady(since: $0) } ?? .sync, t: t)
@@ -188,12 +188,13 @@ struct GlassesSyncScreen: View {
         .onReceive(NotificationCenter.default.publisher(
             for: AVAudioSession.routeChangeNotification)) { _ in refreshAudio() }
         .onChange(of: allOk) { _, ok in
-            readyAt = ok ? Date().timeIntervalSince(start) : nil
+            readyAt = ok ? clock.t : nil
         }
         .task(id: allOk) {
             guard allOk else { return }
             do {
-                try await Task.sleep(for: .seconds(1.6))
+                // design runSync: records 1.5s after "Glasses ready"
+                try await Task.sleep(for: .seconds(1.5))
             } catch {
                 return
             }
