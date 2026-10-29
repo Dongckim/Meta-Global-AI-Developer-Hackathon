@@ -89,6 +89,13 @@ struct ContentView: View {
     @State private var apiMismatch: String?
     private let screens = loadScreens()
     var dat: GlassesDAT? = nil
+    /// Configures DAT from Setup's Bluetooth Allow (the Bluetooth prompt).
+    var enableDAT: () -> Void = {}
+    /// Local network prompt fires on the first server request, so the app
+    /// reaches the server only after Setup's Local network Allow (or Server
+    /// check) made that request.
+    @AppStorage("pip.serverAllowed") private var serverAllowed = false
+    private var canReachServer: Bool { serverAllowed }
     /// Top-level screens; every switch goes through `top.show`.
     enum TopScreen: Hashable { case splash, sync, main }
     @State private var top = ScreenStack(TopScreen.splash)
@@ -148,7 +155,9 @@ struct ContentView: View {
     /// already connected or the user skipped (Setup comes after).
     private func dismissSplash() {
         guard top.front == .splash else { return }
-        if SyncGate.needed(
+        // Setup comes first while DAT is off or a permission is unasked
+        if dat != nil, !AppPermission.anyNotAsked(serverAllowed: serverAllowed),
+           SyncGate.needed(
             rows: SyncGate.rows(dat: dat, hfpName: SyncGate.liveHFPName),
             skipped: syncSkipped) {
             syncFromGate = true
@@ -165,6 +174,8 @@ struct ContentView: View {
 
     /// Sync from Setup or voice (not the launch gate).
     private func openSync() {
+        // no DAT = Bluetooth not allowed yet; Setup's Allow comes first
+        guard dat != nil else { return }
         syncFromGate = false
         top.show(.sync)
     }
@@ -218,7 +229,17 @@ struct ContentView: View {
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .plainText]) { res in
             importPicked(res)
         }
-        .onAppear { connect(); refreshRoute(); loadLists(); voice.activate(); dat?.checkCameraPermission() }
+        .onAppear {
+            // a permission nobody was asked for yet: start in Setup
+            if AppPermission.anyNotAsked(serverAllowed: serverAllowed) { setupDone = false }
+            if canReachServer { connect(); loadLists() }
+            refreshRoute()
+            voice.activate()
+            dat?.checkCameraPermission()
+        }
+        .onChange(of: canReachServer) { _, on in
+            if on { connect(); loadLists() }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { voice.activate() } else { voice.deactivate() }
         }
@@ -253,7 +274,10 @@ struct ContentView: View {
             Group {
                 if !setupDone {
                 SetupView(dat: dat, voice: voice,
-                          onOpenSync: { openSync() }) {
+                          onOpenSync: { openSync() },
+                          onServerChecked: { serverAllowed = true },
+                          serverAllowed: serverAllowed,
+                          onAllowBluetooth: enableDAT) {
                     setupDone = true
                     if lab.view.current.screen == "setup" { sendAction("back") }
                 }

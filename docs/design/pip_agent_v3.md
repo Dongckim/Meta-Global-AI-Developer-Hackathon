@@ -217,8 +217,14 @@ smoke + iPad check.
   speech (replies, timers, import) flows through speak() so the orb
   never lies. Orb + reply line only, no overlay (orb styling is a
   placeholder until Eunbi's design lands).
-- iPad incident fixes: undetermined permissions block wake (auto-ask
-  on activate, each prompts once); restart backoff (5/10s) + failure
+- Permissions are asked only from Setup's per-permission Allow taps
+  (Bluetooth, Microphone, Speech recognition, Local network; plus
+  hold-to-talk for the mic). Launch reads status only and starts in
+  Setup while any is not yet asked. DAT is configured at launch only
+  when Bluetooth is already allowed (configure starts Bluetooth); the
+  server is reached only after the Local network Allow made its first
+  request (no status API, so `pip.serverAllowed` records it).
+- iPad incident fixes: concurrent permission requests join one prompt; restart backoff (5/10s) + failure
   latch instead of churning; press/release pairing (pressGen) so a
   release before spin-up aborts instead of stranding listening; mic
   permission owned by beginManual.

@@ -1,4 +1,5 @@
 import AVFoundation
+import Speech
 import SwiftUI
 
 func fmtDate(_ ts: Double?) -> String {
@@ -484,7 +485,16 @@ struct SetupView: View {
     var dat: GlassesDAT? = nil
     var voice: VoiceSession? = nil
     var onOpenSync: () -> Void = {}
+    /// The Server check ran (its request is what shows the local network prompt).
+    var onServerChecked: () -> Void = {}
+    var serverAllowed = false
+    /// Bluetooth Allow: configures DAT, which shows the Bluetooth prompt.
+    var onAllowBluetooth: () -> Void = {}
     var onDone: () -> Void
+    /// Re-read permission states after a prompt (the app goes inactive
+    /// while it shows, so the phase change re-renders too).
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var permissionGen = 0
     @State private var mic = "Not checked"
     @State private var server = "Not checked"
     @State private var heard = ""
@@ -496,8 +506,14 @@ struct SetupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Setup").font(.title.bold())
+            Text("Permissions").font(.headline)
+            let _ = (scenePhase, permissionGen)
+            ForEach(AppPermission.allCases, id: \.self) { p in
+                permissionRow(p)
+            }
             row("Glasses sync", status: syncStatus) {
                 Button("Open") { onOpenSync() }.buttonStyle(.bordered).controlSize(.small)
+                    .disabled(dat == nil)
             }
             DisclosureGroup("Diagnostics", isExpanded: $showDiagnostics) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -547,7 +563,7 @@ struct SetupView: View {
     }
 
     private var syncStatus: String {
-        guard let dat else { return "Unavailable" }
+        guard let dat else { return "Allow Bluetooth first" }
         switch dat.status {
         case .connected:
             if let level = dat.batteryLevel {
@@ -565,7 +581,56 @@ struct SetupView: View {
         }
     }
 
-    private func row(_ title: String, status: String, action: () -> some View) -> some View {
+    private func permissionRow(_ p: AppPermission) -> some View {
+        let state = p.state(serverAllowed: serverAllowed)
+        let status = switch state {
+        case .notAsked: "Not allowed yet"
+        case .allowed: "Allowed"
+        case .denied: "Denied — enable in Settings"
+        }
+        return row(p.title, status: status) {
+            switch state {
+            case .notAsked:
+                Button("Allow") { allow(p) }.buttonStyle(.bordered).controlSize(.small)
+            case .denied:
+                Button("Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+            case .allowed:
+                EmptyView()
+            }
+        }
+    }
+
+    /// One tap, one system prompt.
+    private func allow(_ p: AppPermission) {
+        switch p {
+        case .bluetooth:
+            onAllowBluetooth()
+        case .microphone:
+            Task { @MainActor in
+                _ = await Recorder.requestPermission()
+                voice?.refresh()
+                permissionGen += 1
+            }
+        case .speech:
+            Task { @MainActor in
+                _ = await withCheckedContinuation { cont in
+                    SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0) }
+                }
+                voice?.refresh()
+                permissionGen += 1
+            }
+        case .localNetwork:
+            checkServer()
+        }
+    }
+
+    private func row(_ title: String, status: String,
+                     @ViewBuilder action: () -> some View) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.headline)
@@ -590,6 +655,7 @@ struct SetupView: View {
             } catch {
                 server = "Unreachable: \(error.localizedDescription)"
             }
+            onServerChecked()
         }
     }
 

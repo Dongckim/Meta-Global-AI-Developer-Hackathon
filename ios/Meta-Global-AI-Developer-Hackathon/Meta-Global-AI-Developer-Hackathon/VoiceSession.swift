@@ -148,15 +148,9 @@ final class VoiceSession {
         activated = true
         refreshWakeStatus()
         Log.voice.info("[voice] activate support=\(String(describing: self.support()), privacy: .public)")
-        if support() == .undetermined {
-            Task {
-                _ = await WakeListener.requestAccess()
-                refreshWakeStatus()
-                resumeWake()
-            }
-        } else {
-            resumeWake()
-        }
+        // Launch never prompts: undetermined waits for Setup's Hey Pip /
+        // Microphone check (resumeWake needs .ok).
+        resumeWake()
     }
 
     func deactivate() {

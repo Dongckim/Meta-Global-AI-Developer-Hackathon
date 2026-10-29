@@ -1,4 +1,7 @@
+import AVFoundation
+import CoreBluetooth
 import Foundation
+import Speech
 import MWDATCore
 import Testing
 @testable import Meta_Global_AI_Developer_Hackathon
@@ -222,5 +225,20 @@ struct FrameClockTests {
         #expect(abs(after - (1.0 / 60 + 1.0 / 30)) < 1e-6)
         // same date again adds nothing
         #expect(c.tick(t0.addingTimeInterval(1.0 / 60 + 0.3)) == after)
+    }
+}
+
+struct PermissionMapTests {
+    @Test func osStatusesMapToThreeStates() {
+        #expect(AppPermission.map(CBManagerAuthorization.notDetermined) == .notAsked)
+        #expect(AppPermission.map(CBManagerAuthorization.allowedAlways) == .allowed)
+        #expect(AppPermission.map(CBManagerAuthorization.denied) == .denied)
+        #expect(AppPermission.map(CBManagerAuthorization.restricted) == .denied)
+        #expect(AppPermission.map(AVAudioApplication.recordPermission.undetermined) == .notAsked)
+        #expect(AppPermission.map(AVAudioApplication.recordPermission.granted) == .allowed)
+        #expect(AppPermission.map(SFSpeechRecognizerAuthorizationStatus.notDetermined) == .notAsked)
+        #expect(AppPermission.map(SFSpeechRecognizerAuthorizationStatus.restricted) == .denied)
+        #expect(AppPermission.localNetwork.state(serverAllowed: false) == .notAsked)
+        #expect(AppPermission.localNetwork.state(serverAllowed: true) == .allowed)
     }
 }

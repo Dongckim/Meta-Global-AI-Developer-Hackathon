@@ -44,7 +44,7 @@ final class WakeListener {
     static func describe(_ s: Support) -> String {
         switch s {
         case .ok: "Ready"
-        case .undetermined: "Waiting for permission — allow mic + speech recognition"
+        case .undetermined: "Not allowed yet — tap Check to allow mic + speech recognition"
         case .micDenied: "Off — mic denied (enable in Settings)"
         case .speechDenied: "Off — speech recognition denied (enable in Settings)"
         case .speechRestricted: "Off — speech recognition restricted on this iPad"

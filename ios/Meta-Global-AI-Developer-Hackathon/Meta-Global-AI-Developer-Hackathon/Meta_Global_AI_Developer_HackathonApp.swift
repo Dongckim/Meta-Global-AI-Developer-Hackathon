@@ -5,6 +5,7 @@
 //  Created by dongchankim on 10/26/26.
 //
 
+import CoreBluetooth
 import MWDATCore
 import os
 import SwiftData
@@ -12,9 +13,17 @@ import SwiftUI
 
 @main
 struct Meta_Global_AI_Developer_HackathonApp: App {
-    @State private var dat: GlassesDAT
+    /// nil until Bluetooth is allowed or the user opens Glasses sync:
+    /// configuring DAT starts Bluetooth, which prompts on first use.
+    @State private var dat: GlassesDAT?
 
     init() {
+        if CBManager.authorization == .allowedAlways {
+            _dat = State(initialValue: Self.makeDAT())
+        }
+    }
+
+    private static func makeDAT() -> GlassesDAT {
         var configError: String?
         do {
             try Wearables.configure()
@@ -28,7 +37,11 @@ struct Meta_Global_AI_Developer_HackathonApp: App {
         if let configError {
             d.noteError(configError)
         }
-        _dat = State(initialValue: d)
+        return d
+    }
+
+    private func enableDAT() {
+        if dat == nil { dat = Self.makeDAT() }
     }
 
     var sharedModelContainer: ModelContainer = {
@@ -51,10 +64,10 @@ struct Meta_Global_AI_Developer_HackathonApp: App {
                 UserDefaults.standard.string(forKey: "uiPreview") ?? "") {
                 preview.view
             } else {
-                ContentView(dat: dat)
+                ContentView(dat: dat, enableDAT: enableDAT)
             }
             #else
-            ContentView(dat: dat)
+            ContentView(dat: dat, enableDAT: enableDAT)
             #endif
         }
         .modelContainer(sharedModelContainer)
