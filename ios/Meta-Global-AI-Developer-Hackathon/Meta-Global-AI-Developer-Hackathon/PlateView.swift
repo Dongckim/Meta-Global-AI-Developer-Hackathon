@@ -221,98 +221,6 @@ struct ConditionBars: View {
     }
 }
 
-// MARK: - Well card
-
-struct WellSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    let well: String
-    @Bindable var lab: LabState
-    var readOnly = false
-    let onLog: (String) -> Void
-    @State private var editText = ""
-    @State private var saving = false
-
-    private var memos: [Memo] { lab.memos(for: well) }
-
-    private var status: String {
-        var s: [String] = []
-        if lab.excluded[well] != nil { s.append("Excluded") }
-        if lab.redo[well] != nil { s.append("Redo") }
-        if lab.done.contains(well) {
-            s.append("Done this step")
-        } else if lab.doneEarlier.contains(well) {
-            s.append("Done in an earlier step")
-        }
-        if s.isEmpty { s.append(lab.conditionOf(well) == nil ? "Empty" : "Planned") }
-        return s.joined(separator: ", ")
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(well).font(.title.bold())
-                Spacer()
-                Button("Done") { dismiss() }
-            }
-            LabeledContent("Condition", value: lab.conditionLabel(well) ?? "—")
-            LabeledContent("Status", value: status)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Notes").font(.callout).foregroundStyle(.secondary)
-                if memos.isEmpty {
-                    Text("—").font(.callout)
-                } else {
-                    ForEach(memos) { m in
-                        Text("• \(m.text) \(m.history.isEmpty ? "" : "(edited \(m.history.count)×)")").font(.callout)
-                        if let raw = m.raw, raw != m.text {
-                            DisclosureGroup("View original") {
-                                Text(raw).font(.caption).foregroundStyle(.secondary)
-                            }.font(.caption)
-                        }
-                    }
-                }
-            }
-            if !readOnly, let last = memos.last {
-                HStack {
-                    TextField("Edit last note", text: $editText)
-                        .textFieldStyle(.roundedBorder)
-                        .onAppear { if editText.isEmpty { editText = last.text } }
-                    Button(saving ? "Saving…" : "Save") { saveEdit(id: last.id) }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(saving || editText.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            }
-            LabeledContent("Exclude reason", value: reasonText)
-            LabeledContent("Recorded", value: timeText)
-            LabeledContent("Source", value: lab.wellSource[well] ?? "—")
-            Spacer()
-        }
-        .padding()
-    }
-
-    private func saveEdit(id: String) {
-        saving = true
-        Task { @MainActor in
-            do {
-                let r = try await PipClient.editNote(id: id, text: editText)
-                onLog(r.message)
-                dismiss()
-            } catch {
-                onLog("Error: \(error.localizedDescription)")
-            }
-            saving = false
-        }
-    }
-
-    private var reasonText: String {
-        guard let r = lab.excluded[well] else { return "—" }
-        return r.isEmpty ? "(no reason)" : r
-    }
-
-    private var timeText: String {
-        lab.wellTime[well]?.formatted(date: .omitted, time: .standard) ?? "—"
-    }
-}
-
 // MARK: - Side panel
 
 /// "Step 4 of 5", the step name, its amount and wells, and one bar per
@@ -373,7 +281,9 @@ struct StepCard: View {
             if let m = s.minutes { bits.append(fmtNum(m) + " min") }
             if let t = s.tempC { bits.append(fmtNum(t) + " °C") }
         }
-        if let r = lab.currentRange { bits.append(r) }
+        if lab.stepIndex < lab.planSteps.count, !lab.planSteps[lab.stepIndex].wells.isEmpty {
+            bits.append(wellRuns(lab.planSteps[lab.stepIndex].wells))  // "B2–B8, C2–C8", as "N left"
+        }
         return bits.isEmpty ? nil : bits.joined(separator: " · ")
     }
 }
@@ -440,10 +350,13 @@ struct TimerList: View {
         HStack(spacing: 14 * u) {
             Circle().strokeBorder(Theme.text4, style: StrokeStyle(lineWidth: 2 * u, dash: [3 * u, 3 * u]))
                 .frame(width: 24 * u, height: 24 * u)
-            if let r = wellRangeLabel(step.wells) {
-                Text(r).font(.system(size: 22 * u, weight: .semibold)).foregroundStyle(Theme.text5)
+            if !step.wells.isEmpty {
+                Text(wellRuns(step.wells)).font(.system(size: 22 * u, weight: .semibold)).foregroundStyle(Theme.text5)
             }
-            Text(step.text).font(.system(size: 21 * u, weight: .light)).foregroundStyle(Theme.text2)
+            // "Incubate · 30 min": the step's short title and its time, never the sentence
+            Text([step.shortTitle.flatMap { $0.isEmpty ? nil : $0 }, step.minutes.map { fmtNum($0) + " min" }]
+                    .compactMap { $0 }.joined(separator: " · "))
+                .font(.system(size: 21 * u, weight: .light)).foregroundStyle(Theme.text2)
             Spacer(minLength: 0)
             Text("After step \(n)").font(.system(size: 20 * u)).foregroundStyle(Theme.text2)
         }
@@ -475,66 +388,5 @@ struct RemainingCard: View {
         .padding(.horizontal, 36 * u).padding(.vertical, 28 * u)
         .frame(maxWidth: .infinity, minHeight: 145 * u, alignment: .leading)
         .benchCard(radius: 32 * u)
-    }
-}
-
-// MARK: - Memo list
-
-private func isWellID(_ s: String) -> Bool {
-    guard s.count >= 2 else { return false }
-    let u = s.uppercased()
-    guard let c = Int(u.dropFirst()), (1...12).contains(c) else { return false }
-    return "ABCDEFGH".contains(String(u.prefix(1)))
-}
-
-struct MemoList: View {
-    @Bindable var lab: LabState
-    let onSelect: (String) -> Void
-    @State private var expanded = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                expanded.toggle()
-            } label: {
-                HStack {
-                    Text("Notes (\(lab.notes.count))").font(.headline)
-                    Spacer()
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .buttonStyle(.plain)
-            if expanded {
-                if lab.notes.isEmpty {
-                    Text("No notes").font(.callout).foregroundStyle(.secondary)
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(lab.notes) { m in
-                                Button {
-                                    if isWellID(m.target) { onSelect(m.target) }
-                                } label: {
-                                    HStack(alignment: .top, spacing: 6) {
-                                        Text(m.target).font(.callout.bold())
-                                            .frame(width: 32, alignment: .leading)
-                                        Text(m.text).font(.callout).lineLimit(2)
-                                        Spacer()
-                                        if !m.history.isEmpty {
-                                            Text("edited").font(.caption2).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                    .frame(maxHeight: 160)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
     }
 }

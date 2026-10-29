@@ -167,12 +167,12 @@ struct Enter: ViewModifier {
     }
 }
 
-/// cmdIn for the primary command, then the cue pulse that invites saying it.
+/// cmdIn for the primary command: it rises in with a spring. Nothing draws
+/// outside the button (no cue ring).
 struct CommandIn: ViewModifier {
     var u: CGFloat
     var delay: Double = 0
     @State private var shown = false
-    @State private var start = Date()
     @Environment(\.accessibilityReduceMotion) private var reduce
 
     func body(content: Content) -> some View {
@@ -181,21 +181,7 @@ struct CommandIn: ViewModifier {
             .opacity(shown ? 1 : 0)
             .offset(y: shown || reduce ? 0 : M.cmdInY * u)
             .scaleEffect(shown || reduce ? 1 : M.cmdInScale)
-            .background {
-                if !reduce {
-                    TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
-                        let t = ctx.date.timeIntervalSince(start) - delay - M.cmdIn
-                        let p = t < 0 ? 0 : t.truncatingRemainder(dividingBy: M.cuePeriod) / M.cuePeriod
-                        let e = M.easeCurve(p)
-                        Capsule().stroke(Theme.polishBlue.opacity(0.45 * (1 - e)), lineWidth: M.cueRing * u * e)
-                            .opacity(t < 0 ? 0 : 1)
-                    }
-                }
-            }
-            .onAppear {
-                start = Date()
-                withAnimation(M.spring(M.cmdIn).delay(delay)) { shown = true }
-            }
+            .onAppear { withAnimation(M.spring(M.cmdIn).delay(delay)) { shown = true } }
     }
 }
 

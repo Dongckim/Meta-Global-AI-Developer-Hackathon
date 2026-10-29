@@ -81,6 +81,8 @@
 		<string>audio</string>
 		<string>bluetooth-peripheral</string>
 	</array>
+	<key>UIRequiresFullScreen</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

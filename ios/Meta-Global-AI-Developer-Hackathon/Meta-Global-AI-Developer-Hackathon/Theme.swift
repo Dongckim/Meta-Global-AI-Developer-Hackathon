@@ -208,12 +208,11 @@ enum Theme {
         static let seg = 0.5
         static let segBase = 0.25
         static let segStep = 0.11
-        /// cmdIn .7s spring from +28 at .9; cue pulse 2.4s ease-out after it.
+        /// cmdIn .7s spring from +28 at .9 (the prototype's cue ring is left
+        /// out: nothing draws outside a button).
         static let cmdIn = 0.7
         static let cmdInY: CGFloat = 28
         static let cmdInScale: CGFloat = 0.9
-        static let cuePeriod = 2.4
-        static let cueRing: CGFloat = 14
         /// shake-once .55s at .9s: -10, 9, -6, 4 px.
         static let shake = 0.55
         static let shakeDelay = 0.9
