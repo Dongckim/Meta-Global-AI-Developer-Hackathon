@@ -121,6 +121,12 @@ def timer_noun(q: str) -> str:
     return f"a {q} timer"
 
 
+def _one_line(text: str, limit: int = 80) -> str:
+    """First line of a note, cut at a word within `limit` chars."""
+    t = " ".join((text or "").split())
+    return t if len(t) <= limit else t[:limit].rsplit(" ", 1)[0] + "…"
+
+
 def timer_label(step: str, range_: str | None, minutes, on_done) -> str:
     s = f"{step} · {range_}" if range_ else step
     s += f" · {fmt_minutes(minutes)} min"
@@ -1052,6 +1058,7 @@ class RecordStore:
                 "raw": origin,
                 "ts": now,
                 "route": route,
+                "step": self.current_step(),
                 "wells": parse_wellref(target),
                 "history": [],
             }
@@ -1534,7 +1541,9 @@ class RecordStore:
                     "wells": [self.get_well_data(w, rec) for w in self.filter_wells(f, rec)][:n]}
         if kind == "notes":
             ws = None if not f or f.lower() == "all" else set(self.filter_wells(f, rec))
-            out = [{"target": m["target"], "text": m["text"]}
+            # compact for the model's second round: where, one line, which step
+            out = [{"target": m["target"], "text": _one_line(m["text"]),
+                    **({"step": m["step"]} if m.get("step") else {})}
                    for m in rec.get("notes", []) if ws is None or m["target"] in ws]
             return {"run": rid, "notes": out[-n:]}
         if kind == "timers":

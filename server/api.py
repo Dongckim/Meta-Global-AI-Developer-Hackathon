@@ -47,6 +47,8 @@ from server.grammar import (
     parse_wellref,
     request_parts,
     split_card_answer,
+    bare_completion,
+    unfinished,
     unserved_parts,
     relevant_plan_numbers,
     speak_text,
@@ -85,6 +87,8 @@ API_VERSION = 9
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
+#: Seconds a cut-off live owner turn ("I want to") waits for the rest.
+LIVE_HOLD_S = 3.0
 
 BASE_URL = "https://api.meta.ai/v1"
 SPARK_MODEL = "muse-spark-1.3"
@@ -566,11 +570,12 @@ def _which_one(pool: list) -> str:
     return "Which one — " + ", ".join(qs[:-1]) + f", or {qs[-1]}?"
 
 
-def _answer_cards(ans: str, session: dict):
+def _answer_cards(ans: str, session: dict, latest: bool = False):
     """Resolve open cards without a model call. Returns the run_utterance tuple.
 
     A bare yes/no/cancel answers what Pip asked last (still pending); when
-    that is unclear the turn asks which one instead of guessing.
+    that is unclear the turn asks which one instead of guessing. `latest`
+    (an answer leading a longer turn) takes the most recent of them.
     """
     cards = sorted(store.r["cards"].values(), key=lambda c: c["ts"], reverse=True)
     if ans == "all":
@@ -578,10 +583,15 @@ def _answer_cards(ans: str, session: dict):
     else:  # yes / no / cancel
         last = session.get("last_asked_cards") or []
         pool = [c for c in cards if c["id"] in last] or cards
-        if len(pool) > 1:
+        if len(pool) > 1 and not latest:
             reply = _which_one(pool)
             return [], [reply], reply, 0, "card", [], {"dropped": 0, "drop_reasons": []}, []
         targets = [(pool[0]["id"], ans == "yes")]
+    return _resolve_cards(targets, session)
+
+
+def _resolve_cards(targets: list, session: dict):
+    """Answer cards by id ((id, ok) pairs) through the store; no model call."""
     calls = [{"name": "answer_card", "args": {"card_id": cid, "ok": ok}}
              for cid, ok in targets]
     res = store.apply_calls(calls, "card", "", "card", session)
@@ -663,11 +673,26 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             return _answer_cards(ans, session)
         ans, rest = split_card_answer(text)
         if ans is not None:
-            # "Yes. Exclude C6.": the answer goes to the card, the rest is a new turn
-            head = _answer_cards(ans, session)
+            # "Yes. Exclude C6.": the answer goes to the latest card, the rest is a new turn
+            head = _answer_cards(ans, session, latest=True)
+            if not store.r.get("run") and bare_completion(rest):
+                return head  # "Yep, finished." closed the run: nothing left to finish
             tail = await run_utterance(client, key, rest, session, source)
             return (tail[0], head[1] + tail[1], f"{head[2]} {tail[2]}".strip(), tail[3],
                     tail[4], head[5] + tail[5], tail[6], tail[7])
+    steps = store.r["plan"]["steps"]
+    if store.r.get("run") and steps and store.r["step_index"] >= len(steps) - 1 \
+            and bare_completion(text):
+        # "Finished." on the last step ends the run, never marks wells: answer
+        # an open end-run card, else ask with one
+        end = next((c for c in sorted(store.r["cards"].values(), key=lambda c: c["ts"], reverse=True)
+                    if (c.get("payload") or {}).get("op") == "end_run"), None)
+        if end is not None:
+            return _resolve_cards([(end["id"], True)], session)
+        calls = [{"name": "end_run", "args": {}}]
+        res = store.apply_calls(calls, source, text, "grammar", session)
+        reply = _compose_reply(calls, res, store.prompt_state(session), session)
+        return calls, res["messages"], reply, 0, "grammar", res["cards"], res["info"], []
     parts = request_parts(text, WRITE_ACTIONS)
     v = store.r["view"]
     b = button_call(text, [x for x in ((v.get("sheet") or {}).get("name"), v["current"]["screen"]) if x])
@@ -770,8 +795,14 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             rc, res2, question2, ordered2, outcomes2, gdrop2, t2 = more
             if question is None and question2 is None and pre_all_reads and not res2["cards"]:
                 nav_only = all(c.get("name") in ("navigate", "open", "back", "show") for c in rc)
-                if t2.strip() and (not rc or nav_only):
-                    model_line = _short_text(t2)
+                line = _short_text(t2) if t2.strip() and (not rc or nav_only) else ""
+                # a summary names something it read (a well or a count);
+                # "pulling up your notes" names nothing, so the read is said
+                if line and (find_well_mentions(line) & find_well_mentions(reads_text)
+                             or re.search(r"\d", line) or not read_lines):
+                    model_line = line
+                elif rc and nav_only and read_lines:
+                    model_line = _executed_reply(calls, read_lines, session)
                 elif not t2.strip() and not rc:
                     for c in calls:
                         a = c.get("args") or {}
@@ -826,8 +857,12 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         reply = q if not base else base + " " + q
         asked = {"question": q, "target": recent_target() or ""}
     else:
-        # Store results are the reply; the model's line never joins them.
-        reply = _compose_reply(calls, res, store.prompt_state(session), session) or model_line
+        # Store results are the reply and the model's line never joins them;
+        # but a read answer (reads, then only a screen move) is the summary,
+        # and the move's "Here's ..." line is left out (the screen shows it).
+        base = _compose_reply(calls, res, store.prompt_state(session), session)
+        failed = any(is_failure_message(m) for m in res["messages"])
+        reply = model_line if model_line and not failed else base or model_line
         if sentence and sources and not reply:
             reply = sentence
         if not reply:
@@ -1401,9 +1436,29 @@ async def voice_live(ws: WebSocket):
             return text, short(say("session_thanks", session) if end == "thanks" else "", "grammar"), end
         return text, await _handle_text(text, session, "voice"), None
 
+    async def next_owner_item(held: str) -> dict:
+        """The next owner turn, with a held cut-off turn joined in front; a
+        held turn alone after LIVE_HOLD_S of silence."""
+        if not held:
+            return await owner_q.get()
+        try:
+            item = await asyncio.wait_for(owner_q.get(), LIVE_HOLD_S)
+        except asyncio.TimeoutError:
+            return {"type": "owner", "text": held, "flush": True}
+        if item["type"] != "owner":
+            return item
+        return {**item, "text": f"{held} {item['text']}"}
+
     async def worker():
+        held = ""
         while True:
-            item = await owner_q.get()
+            item = await next_owner_item(held)
+            held = ""
+            if item["type"] == "owner" and not item.get("flush") \
+                    and unfinished(item["text"], store.prompt_state(session), tone.agent_name()):
+                held = item["text"]  # "I want to see": wait for the rest
+                print(f'live hold: "{held}"', flush=True)
+                continue
             try:
                 text, resp, end = await owner_turn(item)
             except Exception as e:  # any failure: the session stays, the turn says sorry

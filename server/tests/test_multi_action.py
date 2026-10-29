@@ -223,4 +223,41 @@ r = api.store.apply_calls([{"name": "navigate", "args": {"screen": "well_card", 
 assert r["messages"] == ["Opened C8."], r["messages"]
 assert api.store.r["view"]["sheet"] == {"name": "well_card", "target": "C8"}, api.store.r["view"]
 print("MA10 ok: navigate to a well card opens that well")
+
+# MA11. Card answer words live in the registry ("not yet" is a no); an answer
+# leading a longer turn goes to the latest card, the rest runs as a turn.
+from server.grammar import match_card_answer  # noqa: E402
+from server.screens import ANSWERS, IDS, PLANNED, canonical  # noqa: E402
+
+assert all(match_card_answer(w) == k for k, ws in ANSWERS.items() for w in ws), ANSWERS
+assert match_card_answer("Not yet.") == "no" and match_card_answer("yep") == "yes"
+fresh()
+turn("C6 looks bad, drop it", [perform("exclude_well", "l1", well="C6")])
+turn("C7 looks bad, drop it", [perform("exclude_well", "l2", well="C7")])
+j, _ = turn("Yes, note C2 clear")  # the rest is a grammar note
+assert "C7" in api.store.r["excluded"] and "C6" not in api.store.r["excluded"], api.store.r["excluded"]
+assert [cd["payload"]["well"] for cd in api.store.r["cards"].values()] == ["C6"], api.store.r["cards"]
+assert "add_note" in [t["name"] for t in j["tool_calls"]], j
+print("MA11 ok: registry answer words; a leading answer takes the latest card")
+
+# MA12. On the last step a bare finish ends the run: an end-run card, or the
+# answer to the open one. Never a well mark, never the model.
+fresh()
+api.store.r["step_index"] = len(api.store.r["plan"]["steps"]) - 1
+j, _ = turn("Finished.")
+assert j["route"] == "grammar" and [t["name"] for t in j["tool_calls"]] == ["end_run"], j
+assert [cd["payload"]["op"] for cd in api.store.r["cards"].values()] == ["end_run"], api.store.r["cards"]
+assert not sent, "no model call"
+j, _ = turn("Yep, finished.")
+assert not api.store.r.get("run"), "the end-run card was answered yes"
+assert not sent and "Which wells" not in j["reply"], j
+fresh()  # not the last step: a bare finish is not a run end
+api.store.r["step_index"] = 1
+j, _ = turn("Finished.", [])
+assert "end_run" not in [t["name"] for t in j["tool_calls"]] and api.store.r.get("run"), j
+print("MA12 ok: 'finished' on the last step ends the run")
+
+# MA13. A planned screen (registry only) is never offered or navigable.
+assert "notes" in PLANNED and "notes" not in IDS and canonical("notes") is None
+print("MA13 ok: planned screens stay out of navigation")
 print("ALL PASS")

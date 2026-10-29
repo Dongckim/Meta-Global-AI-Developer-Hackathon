@@ -119,6 +119,7 @@
           "raw": {"type": "string"},
           "ts": {"type": "number"},
           "route": {"type": "string"},
+          "step": {"type": "integer", "description": "1-based step the note was taken in (absent on older notes)."},
           "wells": {"type": "array", "items": {"type": "string"}},
           "history": {
             "type": "array",

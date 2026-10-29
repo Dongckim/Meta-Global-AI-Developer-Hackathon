@@ -49,7 +49,12 @@ def load() -> dict:
 
 
 REGISTRY = load()
-SCREENS: dict[str, dict] = {s["id"]: s for s in REGISTRY.get("screens", [])}
+#: Built screens. `planned` ones (registry only, not in the app yet) are
+#: never navigable, offered to the model, or resolved by alias.
+SCREENS: dict[str, dict] = {s["id"]: s for s in REGISTRY.get("screens", []) if not s.get("planned")}
+PLANNED: list[str] = [s["id"] for s in REGISTRY.get("screens", []) if s.get("planned")]
+#: Card answer words (`answers`: all / yes / no / cancel -> phrases).
+ANSWERS: dict[str, list[str]] = dict(REGISTRY.get("answers", {}))
 IDS = sorted(SCREENS)
 #: Every UI-displayable data kind, in registry order. read_record's kinds,
 #: the tool enum, and the speechless renderer all derive from this.

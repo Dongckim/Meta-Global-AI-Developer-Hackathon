@@ -259,4 +259,54 @@ assert turns[1]["reply"] in ("I'm here.", "Yes?", "Go ahead.") and turns[1]["rou
 assert "C4" in done_wells(api.store.r), turns[2]
 assert calls["n"] == 2, calls  # "here" never reached the text path
 print("LV6 ok: failing turn keeps the session; wake-only says here")
+# LV7. A cut-off owner turn waits for the rest: the live log's order
+# ("I wanna I want to see", "I want", "I want to see all the notes") gets one
+# answer, for the joined sentence. A cut-off turn alone is answered after the hold.
+heard = []
+
+
+async def record_text(text, session, source):
+    heard.append(text)
+    return await real_handle("next", session, source)  # any grammar reply
+
+api._handle_text = record_text
+FakeMeta.script = [
+    {"type": "speechStart", "turnId": 1, "audioProcessedMs": 0},
+    {"type": "speaker", "label": "A", "audioProcessedMs": 100},
+    {"type": "speechComplete", "turnId": 1, "transcript": "I wanna I want to see", "audioProcessedMs": 200},
+    {"type": "speechStart", "turnId": 2, "audioProcessedMs": 300},
+    {"type": "speaker", "label": "A", "audioProcessedMs": 400},
+    {"type": "speechComplete", "turnId": 2, "transcript": "I want", "audioProcessedMs": 500},
+    {"type": "speechStart", "turnId": 3, "audioProcessedMs": 600},
+    {"type": "speaker", "label": "A", "audioProcessedMs": 700},
+    {"type": "speechComplete", "turnId": 3, "transcript": "I want to see all the notes", "audioProcessedMs": 800},
+]
+with c.websocket_connect("/voice/live") as ws:
+    ws.send_json({"type": "start", "session": "live-hold"})
+    assert check(ws.receive_json())["type"] == "ready"
+    turns = []
+    while not turns:
+        m = check(ws.receive_json())
+        if m["type"] == "turn":
+            turns.append(m)
+    ws.send_json({"type": "end"})
+    while check(ws.receive_json())["type"] != "closed":
+        pass
+assert heard == ["I wanna I want to see I want I want to see all the notes"], heard
+assert len(turns) == 1, turns
+heard.clear()
+api.LIVE_HOLD_S, hold = 0.2, api.LIVE_HOLD_S
+FakeMeta.script = FakeMeta.script[:3]  # only the cut-off turn
+with c.websocket_connect("/voice/live") as ws:
+    ws.send_json({"type": "start", "session": "live-hold-2"})
+    assert check(ws.receive_json())["type"] == "ready"
+    while check(ws.receive_json())["type"] != "turn":
+        pass
+    ws.send_json({"type": "end"})
+    while check(ws.receive_json())["type"] != "closed":
+        pass
+api.LIVE_HOLD_S = hold
+api._handle_text = real_handle
+assert heard == ["I wanna I want to see"], heard
+print("LV7 ok: cut-off turns wait for the rest, then go alone")
 print("ALL PASS")

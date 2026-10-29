@@ -117,11 +117,31 @@ with patch("httpx.AsyncClient", FakeClient):
     with patch("httpx.AsyncClient", ScriptClient):
         r = c.post("/orchestrate", json={"text": "read all my notes", "session": "r3"})
     j = r.json()
-    # the store result is the reply; the model's line is never glued to it
-    assert j["reply"] == "Here's the bench.", j
+    # a read answer: the summary alone is the reply. The move's "Here's ..."
+    # line is left out (the screen shows it) and never glued to the summary.
+    assert j["reply"] == summary, j
+    assert "Here's the bench." in j["messages"], j  # the move still happened
     assert [x["name"] for x in j["tool_calls"]] == ["read_record", "navigate"], j
     assert api.store.r["view"]["current"]["screen"] == "main", j
-    print("R3 ok: notes summary + list screen")
+    # same without the model's line: the read itself is said, not the move
+    ScriptClient.queue = [
+        {"id": "r3e", "output": [fc("read_record", '{"kind": "notes"}', "c1")]},
+        {"id": "r3f", "output": [fc("navigate", '{"screen": "main"}', "c3")]},
+    ]
+    with patch("httpx.AsyncClient", ScriptClient):
+        j = c.post("/orchestrate", json={"text": "read all my notes", "session": "r3"}).json()
+    assert "C3" in j["reply"] and "Here's the bench." not in j["reply"], j
+    # a model line that names nothing it read isn't a summary: the read is said
+    ScriptClient.queue = [
+        {"id": "r3g", "output": [fc("read_record", '{"kind": "notes"}', "c1")]},
+        {"id": "r3h", "output": [fc("navigate", '{"screen": "main"}', "c3"),
+                                 {"type": "message", "content": [{"type": "output_text",
+                                  "text": "Got it — pulling up your notes now."}]}]},
+    ]
+    with patch("httpx.AsyncClient", ScriptClient):
+        j = c.post("/orchestrate", json={"text": "read all my notes", "session": "r3"}).json()
+    assert "C3" in j["reply"] and "pulling up" not in j["reply"], j
+    print("R3 ok: notes summary is the reply, the screen move is silent")
 
     # R3b. model says success, the store failed: only the failure is said.
     ScriptClient.queue = [

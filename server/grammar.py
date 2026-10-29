@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 
-from server.screens import canonical, title_of, verbs
+from server.screens import ACTIONS, ANSWERS, canonical, title_of, verbs
 
 # Well letters/digits by sound. Only applied AT well positions, never inside free text.
 LETTER_SOUND = {"see": "C", "sea": "C", "she": "C", "bee": "B", "dee": "D"}
@@ -222,10 +222,6 @@ def whats_next_reply(state: dict) -> str:
     return out
 
 
-_CARD_YES = {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "do it", "confirm"}
-_CARD_NO = {"no", "nope", "nah", "don't", "dont"}
-_CARD_CANCEL = {"cancel", "never mind", "nevermind", "forget it"}
-_CARD_ALL = {"yes to all", "yes all", "approve all"}
 
 
 _SESSION_THANKS = re.compile(
@@ -273,16 +269,12 @@ def match_session_end(text: str, name: str = "") -> str | None:
 
 
 def match_card_answer(text: str) -> str | None:
-    """Bare card answers only: yes/no/cancel/all. Anything else is a new command."""
+    """Bare card answers only (registry `answers`): all / yes / no / cancel.
+    Anything else is a new command."""
     t = re.sub(r"\s+", " ", (text or "").lower()).strip(" \t.,!?;:")
-    if t in _CARD_ALL:
-        return "all"
-    if t in _CARD_YES:
-        return "yes"
-    if t in _CARD_NO:
-        return "no"
-    if t in _CARD_CANCEL:
-        return "cancel"
+    for kind in ("all", "yes", "no", "cancel"):
+        if t in (a.lower() for a in ANSWERS.get(kind, [])):
+            return kind
     return None
 
 
@@ -967,6 +959,38 @@ def unserved_parts(parts: list[dict], calls: list, views) -> list[dict]:
     return [p for p in parts
             if not (p["actions"] & names)
             and (short or (p["wells"] and not p["wells"] & wells) or (p["timer"] and not timers))]
+
+
+def bare_completion(text) -> bool:
+    """A finish said with no target ("Finished.", "all done", "that's it"):
+    only completion or end-run verbs, no wells, a few words. On the last
+    step it means the run is over, never a well mark."""
+    t = text or ""
+    words = re.findall(r"[a-z']+", t.lower())
+    if not words or len(words) > 4 or find_well_mentions(t):
+        return False
+    acts = {a for p in request_parts(t, list(ACTIONS)) for a in p["actions"]}
+    return bool(acts) and acts <= {"mark_done", "end_run"}
+
+
+#: Words a sentence doesn't stop on ("I want to", "show me the"): a live turn
+#: ending on one was cut off mid-thought.
+_OPEN_END = {"to", "want", "wanna", "see", "the", "a", "an", "and", "or", "of", "for",
+             "my", "i", "need", "like", "gonna", "can", "could", "would", "with", "on",
+             "in", "at", "um", "uh", "so", "but", "about", "me", "is", "are", "what"}
+
+
+def unfinished(text, state: dict, name: str = "") -> bool:
+    """A live owner turn cut off mid-thought: nothing to act on (no card
+    answer, session end, grammar command, action verb or well) and it ends on
+    an open word or is one or two words. Decided here, without the model."""
+    t = text or ""
+    words = re.findall(r"[a-z']+", t.lower())
+    if not words or find_well_mentions(t) or match_card_answer(t) \
+            or match_session_end(t, name) or match_grammar(t, state) is not None \
+            or request_parts(t, list(ACTIONS)):
+        return False
+    return words[-1] in _OPEN_END or len(words) <= 2
 
 
 def ungrounded_targets(reply) -> dict:
