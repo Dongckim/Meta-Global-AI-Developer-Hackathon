@@ -260,4 +260,40 @@ print("MA12 ok: 'finished' on the last step ends the run")
 # MA13. A planned screen (registry only) is never offered or navigable.
 assert "notes" in PLANNED and "notes" not in IDS and canonical("notes") is None
 print("MA13 ok: planned screens stay out of navigation")
+
+# MA14. The live log: repeated answers never leak to the model, a repeat of
+# a card just answered makes no new card, and lines never run together.
+from server.grammar import unfinished  # noqa: E402
+from server.tone import variants  # noqa: E402
+
+assert not unfinished("Yes, Yes.", {}, "Milo"), "an answer is never held as cut off"
+for well in ("C3", "D3"):
+    fresh()
+    j, _ = turn(f"Exclude {well}")
+    assert j["reply"] in [v.format(wells_spoken=well) for v in variants("confirm_exclude")], j
+    j, _ = turn("Yes, Yes.")
+    assert j["reply"] == f"{well} excluded." and well in api.store.r["excluded"], j
+    j, _ = turn("Yes. Yeah.")
+    assert j["reply"] == "Nothing to confirm right now.", j
+    assert not sent and not api.store.r["cards"], (sent, api.store.r["cards"])
+# the model repeating the answered change: no new card, it says so
+j, _ = turn("D3 looks bad, drop it", [perform("exclude_well", "m1", well="D3")])
+assert j["reply"] == "D3 is already out." and not api.store.r["cards"], j
+# an answer then filler: the filler is dropped, never sent to the model
+fresh()
+turn("Exclude C4")
+j, _ = turn("Yes, um, please.")
+assert j["reply"] == "C4 excluded." and not sent, j
+# answer + a new change: two sentences, never one run-on line
+fresh()
+turn("Exclude C5")
+j, _ = turn("Yes. Exclude C6.")
+assert j["reply"].startswith("C5 excluded. ") and "C6" in j["reply"], j
+# with a question of ours pending, a bare yes still goes to answer it
+fresh()
+api._SESSIONS.setdefault("ma", api.get_session("ma"))["turns"] = [
+    {"text": "x", "calls": [], "messages": [], "asked": {"question": "Should I also note bubbles?"}}]
+j, _ = turn("yes", [perform("add_note", "m2", target="C8", text="bubbles")])
+assert len(sent) == 1 and "add_note" in [t["name"] for t in j["tool_calls"]], j
+print("MA14 ok: repeated answers, repeats of answered cards, sentence joins")
 print("ALL PASS")

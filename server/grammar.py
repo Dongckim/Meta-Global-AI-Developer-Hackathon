@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 
-from server.screens import ACTIONS, ANSWERS, canonical, title_of, verbs
+from server.screens import ACTIONS, ANSWERS, FILLERS, canonical, title_of, verbs
 
 # Well letters/digits by sound. Only applied AT well positions, never inside free text.
 LETTER_SOUND = {"see": "C", "sea": "C", "she": "C", "bee": "B", "dee": "D"}
@@ -249,11 +249,47 @@ def collapse_repeats(text: str) -> str:
     return " ".join(w)
 
 
+def said_words(text: str) -> str:
+    """The one normalization for short spoken replies (card answers, session
+    end): lowercase, punctuation dropped, immediate repeats folded once
+    ("Yes, Yes." -> "yes")."""
+    return " ".join(collapse_repeats(re.sub(r"[^\w\s']+", " ", (text or "").lower())).split())
+
+
+def _answer_phrases() -> list:
+    """(words, kind) for every registry answer and filler, longest first."""
+    out = [(a.lower().split(), k) for k, ws in ANSWERS.items() for a in ws]
+    out += [(f.lower().split(), None) for f in FILLERS]
+    return sorted(out, key=lambda p: -len(p[0]))
+
+
+def _answer_kinds(text: str) -> set | None:
+    """Answer kinds a turn is made of when it is nothing but answer words and
+    fillers ("yes yeah", "um, sure please"); None when anything else is said."""
+    words, kinds, i = said_words(text).split(), set(), 0
+    phrases = _answer_phrases()
+    while i < len(words):
+        for ph, kind in phrases:
+            if words[i:i + len(ph)] == ph:
+                i += len(ph)
+                if kind:
+                    kinds.add(kind)
+                break
+        else:
+            return None
+    return kinds
+
+
+def answer_or_filler(text: str) -> bool:
+    """Nothing but answer words and fillers (or nothing at all)."""
+    return _answer_kinds(text) is not None
+
+
 def match_session_end(text: str, name: str = "") -> str | None:
     """Live session end said as the whole turn: "thanks" (reply, then close)
     or "stop" (close now). A trailing word is allowed only when it is the
     agent's name ("thanks Milo"); anything longer is a command."""
-    t = collapse_repeats(re.sub(r"[^\w\s']+", " ", (text or "").lower()))
+    t = said_words(text)
     for kind, pat in (("thanks", _SESSION_THANKS), ("stop", _SESSION_STOP)):
         m = pat.fullmatch(t)
         if not m:
@@ -269,13 +305,11 @@ def match_session_end(text: str, name: str = "") -> str | None:
 
 
 def match_card_answer(text: str) -> str | None:
-    """Bare card answers only (registry `answers`): all / yes / no / cancel.
-    Anything else is a new command."""
-    t = re.sub(r"\s+", " ", (text or "").lower()).strip(" \t.,!?;:")
-    for kind in ("all", "yes", "no", "cancel"):
-        if t in (a.lower() for a in ANSWERS.get(kind, [])):
-            return kind
-    return None
+    """A card answer said as the whole turn (registry `answers`): all / yes /
+    no / cancel, repeated or mixed within one kind ("Yes. Yeah.", "yeah sure",
+    "um yes please"). Mixed kinds ("yes no") or anything else: None."""
+    kinds = _answer_kinds(text)
+    return next(iter(kinds)) if kinds and len(kinds) == 1 else None
 
 
 def _verb(action: str) -> str:

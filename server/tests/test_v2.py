@@ -87,7 +87,7 @@ with patch("httpx.AsyncClient", FakeClient):
     j = r.json()
     assert len(calls) == n_before, "card answer must not call the model"
     assert j["route"] == "card" and j["ms"] == {"spark": 0}, j
-    assert j["reply"] == "C8 excluded (cloudy)", j
+    assert j["reply"] == "C8 excluded (cloudy).", j  # reply lines end as sentences
     assert card_id not in api.store.r["cards"] and "C8" in api.store.r["excluded"]
     print("V1 ok: voice yes resolves card, 0 model calls")
 

@@ -742,7 +742,7 @@ with patch("httpx.AsyncClient", FakeClient):
     body = calls[-1][1]["json"]
     assert body["store"] is False and "previous_response_id" not in body, body
     assert '"recent_turns": ["C3 all set → mark_done[C3]' in body["instructions"], body["instructions"]
-    card = c.post("/orchestrate", json={"text": "exclude D8", "session": "s33"}).json()["cards"][0]
+    card = c.post("/orchestrate", json={"text": "exclude E8", "session": "s33"}).json()["cards"][0]
     c.post("/confirm", json={"card_id": card["id"], "ok": True, "session": "s33"})
     assert len(api._SESSIONS["s33"]["turns"]) == 4, api._SESSIONS["s33"]["turns"]
     assert api._SESSIONS["s33"]["turns"][-1]["text"] == "yes"
@@ -783,7 +783,7 @@ with patch("httpx.AsyncClient", FakeClient):
     j = r.json()
     assert len(calls) == n_before, "card answer must not call the model"
     assert j["route"] == "card" and j["ms"] == {"spark": 0}, j
-    assert j["reply"] == "D7 excluded", j
+    assert j["reply"] == "D7 excluded.", j
     assert card_id not in api.store.r["cards"]
     print("35 ok: voice yes resolves cards, no model call")
 
@@ -805,12 +805,12 @@ with patch("httpx.AsyncClient", FakeClient):
     print("36 ok: perform expansion")
 
     # 37. /input tap answer_card resolves; model answer_card is rejected.
-    r = c.post("/orchestrate", json={"text": "exclude D8", "session": "s37"})
+    r = c.post("/orchestrate", json={"text": "exclude E9", "session": "s37"})
     cid = r.json()["cards"][0]["id"]
     j = c.post("/input", json={"action": {"id": "answer_card",
                                           "args": {"card_id": cid, "ok": True}},
                                "session": "s37"}).json()
-    assert j["route"] == "tap" and j["reply"] == "D8 excluded", j
+    assert j["route"] == "tap" and j["reply"] == "E9 excluded.", j
     assert cid not in api.store.r["cards"]
     r = c.post("/orchestrate", json={"text": "exclude D9", "session": "s37"})
     cid2 = r.json()["cards"][0]["id"]

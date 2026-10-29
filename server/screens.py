@@ -55,6 +55,8 @@ SCREENS: dict[str, dict] = {s["id"]: s for s in REGISTRY.get("screens", []) if n
 PLANNED: list[str] = [s["id"] for s in REGISTRY.get("screens", []) if s.get("planned")]
 #: Card answer words (`answers`: all / yes / no / cancel -> phrases).
 ANSWERS: dict[str, list[str]] = dict(REGISTRY.get("answers", {}))
+#: Words that carry nothing beside an answer ("um", "please").
+FILLERS: list[str] = list(REGISTRY.get("fillers", []))
 IDS = sorted(SCREENS)
 #: Every UI-displayable data kind, in registry order. read_record's kinds,
 #: the tool enum, and the speechless renderer all derive from this.

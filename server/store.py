@@ -996,6 +996,10 @@ class RecordStore:
             if not isinstance(well, str) or not is_well(well):
                 res["messages"].append(invalid_message([well], session))
                 return
+            if well in self.r["excluded"]:
+                # already out (e.g. a repeat of a card just answered): no new card
+                res["messages"].append(say("already_out", session, wells=well))
+                return
             if not force:
                 self._card(res, "confirm_exclude", say("confirm_exclude", session, wells=well),
                            reason, {"op": "exclude_well", "well": well, "reason": reason})

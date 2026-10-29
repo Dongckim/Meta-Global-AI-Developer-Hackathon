@@ -48,6 +48,7 @@ from server.grammar import (
     request_parts,
     split_card_answer,
     bare_completion,
+    answer_or_filler,
     unfinished,
     unserved_parts,
     relevant_plan_numbers,
@@ -595,8 +596,15 @@ def _resolve_cards(targets: list, session: dict):
     calls = [{"name": "answer_card", "args": {"card_id": cid, "ok": ok}}
              for cid, ok in targets]
     res = store.apply_calls(calls, "card", "", "card", session)
-    reply = " ".join(res["messages"]) or "Done."
+    reply = _sentences(res["messages"]) or "Done."
     return [], res["messages"], reply, 0, "card", res["cards"], res["info"], []
+
+
+def _sentences(lines) -> str:
+    """Reply lines joined as whole sentences: a line without an end mark gets
+    a period, so two results never read as one ("C3 excluded. Drop C4?")."""
+    out = [x.strip() for x in lines if isinstance(x, str) and x.strip()]
+    return " ".join(x if x[-1] in ".!?…" else x + "." for x in out)
 
 
 #: Args an action can't run without. A missing one becomes ask(), never a
@@ -675,11 +683,15 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         if ans is not None:
             # "Yes. Exclude C6.": the answer goes to the latest card, the rest is a new turn
             head = _answer_cards(ans, session, latest=True)
-            if not store.r.get("run") and bare_completion(rest):
-                return head  # "Yep, finished." closed the run: nothing left to finish
+            if answer_or_filler(rest) or (not store.r.get("run") and bare_completion(rest)):
+                return head  # "Yes, um." / "Yep, finished." with the run closed: nothing left
             tail = await run_utterance(client, key, rest, session, source)
-            return (tail[0], head[1] + tail[1], f"{head[2]} {tail[2]}".strip(), tail[3],
+            return (tail[0], head[1] + tail[1], _sentences([head[2], tail[2]]), tail[3],
                     tail[4], head[5] + tail[5], tail[6], tail[7])
+    elif match_card_answer(text) is not None and not ((session.get("turns") or [{}])[-1].get("asked")):
+        # "yes" with no card and no question of ours pending: nothing to answer
+        reply = say("nothing_to_confirm", session)
+        return [], [], reply, 0, "grammar", [], {"dropped": 0, "drop_reasons": []}, []
     steps = store.r["plan"]["steps"]
     if store.r.get("run") and steps and store.r["step_index"] >= len(steps) - 1 \
             and bare_completion(text):
@@ -1161,7 +1173,7 @@ def _compose_reply(calls, res, state, session) -> str:
     for d in res["info"].get("drop_reasons", []):
         _log_drop(d["call"], d.get("args"), d["reason"])
         parts.append(_couldnt(d["call"], d["reason"]))
-    return " ".join(parts)
+    return _sentences(parts)
 
 
 def _fold_told(msgs: list, told: list, session) -> list:

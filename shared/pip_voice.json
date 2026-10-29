@@ -147,6 +147,12 @@
     "I didn't log {target} — want me to?",
     "Hmm, nothing logged on {target} — should I log it?"
   ],
+  "nothing_to_confirm": [
+    "Nothing to confirm right now."
+  ],
+  "already_out": [
+    "{wells_spoken} is already out."
+  ],
   "also_ask": [
     "Should I also {what}?",
     "Want me to {what} too?"
