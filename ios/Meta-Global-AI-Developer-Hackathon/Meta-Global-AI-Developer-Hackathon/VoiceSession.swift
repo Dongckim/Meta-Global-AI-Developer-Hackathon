@@ -559,12 +559,13 @@ struct SilenceGate {
     }
 }
 
-// MARK: - Orb (placeholder styling until Eunbi's design lands)
+// MARK: - Top header (design light-screen `.top` + `.pip`)
 
-/// Top orb + Pip line (design `.orb` + `.pip`, shrunk from the fullscreen
-/// Pip screens to bar size). Reads VoiceSession state only; never blocks
-/// the run screen. `partialText` is nil until slice B streams transcripts.
-struct VoiceOrb: View {
+/// The one header every light screen shows: mode ("Full") small at top
+/// left, orb + Pip line centered at the top as one group (design `.pip`:
+/// top 44, row 64, gap 16, orb 52; 1376-canvas scaled). Reads VoiceSession
+/// state only. Dark screens (Splash, Sync) have no header.
+struct TopHeader: View {
     var voice: VoiceSession
     var speakText: String = ""
     var partialText: String? = nil
@@ -572,50 +573,79 @@ struct VoiceOrb: View {
     var onBlockedTap: () -> Void = {}
 
     var body: some View {
-        let style = Theme.orbStyle(for: voice.state)
         let line = Theme.pipText(for: voice.state, speakText: speakText,
                                  partialText: partialText, wake: voice.wakeSupport,
                                  wakeOn: VoiceSession.wakeEnabled)
-        let blocked = voice.state == .ready
-            && Theme.talkBlocker(wake: voice.wakeSupport, wakeOn: true) != nil
-        HStack(spacing: 10) {
-            OrbDisc(style: style)
-            WordReveal(text: line.text, dots: line.dots)
-            Spacer()
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .onTapGesture { if blocked { onBlockedTap() } }
-        .accessibilityAddTraits(blocked ? .isButton : [])
+        TopHeaderView(style: Theme.orbStyle(for: voice.state), text: line.text, dots: line.dots,
+                      blocked: voice.state == .ready
+                          && Theme.talkBlocker(wake: voice.wakeSupport, wakeOn: true) != nil,
+                      onBlockedTap: onBlockedTap)
     }
 }
 
-/// Design orb at top size (40pt): radial gradient core, breathe, expanding
-/// ring, and a small state-palette halo standing in for the fullscreen
-/// aurora.
+/// Header layout only (plain values, so DEBUG previews can show any line).
+/// The orb keeps a slot as wide as its largest state so growing never
+/// pushes or covers the text; the line wraps to two lines, then truncates,
+/// and the group stays centered.
+struct TopHeaderView: View {
+    var style: Theme.OrbStyle
+    var text: String
+    var dots: Bool
+    var blocked = false
+    var onBlockedTap: () -> Void = {}
+    @State private var width: CGFloat = 0
+
+    var body: some View {
+        let px = { (v: CGFloat) in Theme.px(v, in: width) }
+        ZStack(alignment: .top) {
+            HStack(spacing: px(12)) {
+                Image(systemName: "cloud").font(.system(size: px(22)))
+                Text(Theme.modeLabel).font(Theme.ui(px(22))).tracking(-0.012 * px(22))
+            }
+            .foregroundStyle(Theme.mutSay)
+            .frame(height: px(64))
+            .padding(.leading, px(64))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: px(16)) {
+                OrbDisc(style: style, diameter: px(52))
+                    .frame(width: px(52) * Theme.orbMaxScale)
+                // 22 px (design .t24) by review; the design .pip is 26
+                WordReveal(text: text, dots: dots, size: px(22), lines: 2)
+            }
+            .frame(minHeight: px(64))
+            // keep clear of the mode label on both sides so the group stays centered
+            .frame(maxWidth: max(0, width - 2 * px(64 + 180)))
+            .contentShape(Rectangle())
+            .onTapGesture { if blocked { onBlockedTap() } }
+            .accessibilityAddTraits(blocked ? .isButton : [])
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.top, px(44)) // from the screen top, like the design canvas
+        .padding(.bottom, px(24))
+        .ignoresSafeArea(edges: .top)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
+    }
+}
+
+/// Design orb (`.orb`, `diameter` = core size): radial gradient core with
+/// a tight glow, breathe, expanding ring. No wandering halo (iPad review).
 struct OrbDisc: View {
     var style: Theme.OrbStyle
+    var diameter: CGFloat = 40
     @State private var on = false
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(halo)
-                .frame(width: 56, height: 56)
-                .blur(radius: 14)
-                .opacity(haloOpacity)
-                .scaleEffect(haloScale)
-                .offset(x: haloX)
-                .animation(haloAnim, value: on)
-            Circle()
                 .fill(RadialGradient(
                     gradient: Gradient(stops: style.hollow
                         ? Theme.orbSpeakingStops : Theme.orbStops),
                     center: .init(x: 0.5, y: 0.52),
-                    startRadius: 0, endRadius: 20))
-                .frame(width: 40, height: 40)
-                .blur(radius: 3)
+                    startRadius: 0, endRadius: diameter / 2))
+                .frame(width: diameter, height: diameter)
+                .blur(radius: diameter * 0.075)
+                // the orb itself glows; no larger aurora around it
+                .shadow(color: glow.opacity(0.75), radius: diameter * 0.18)
                 .scaleEffect(breathe * style.scale)
                 .opacity(breatheOpacity)
                 .animation(breatheAnim, value: on)
@@ -623,7 +653,7 @@ struct OrbDisc: View {
             if style.ring != nil {
                 Circle()
                     .stroke(Theme.orbRing, lineWidth: 2)
-                    .frame(width: 30, height: 30)
+                    .frame(width: diameter * 0.75, height: diameter * 0.75)
                     .scaleEffect(on ? 1.9 : 0.8)
                     .opacity(on ? 0 : 0.7)
                     .animation(
@@ -632,51 +662,13 @@ struct OrbDisc: View {
                         value: on)
             }
         }
-        .frame(width: 56, height: 56)
+        .frame(width: diameter, height: diameter)
         .onAppear { on = true }
     }
 
-    private var halo: Color {
-        if case .voice(let _) = style.aurora {
-            Theme.auroraVoice[3]
-        } else {
-            Theme.auroraDefault[3]
-        }
-    }
-
-    private var haloOpacity: Double {
-        style.aurora == .think ? 0.7 : 0.85
-    }
-
-    private var haloScale: CGFloat {
-        switch style.aurora {
-        case .breath: on ? 1.05 : 1
-        case .pulse: on ? 1.2 : 1.1
-        case let .still(s): s
-        case .think: on ? 0.82 : 0.75
-        case let .voice(amp): 1.24 + CGFloat(amp) * 0.16
-        case .sweep: on ? 0.95 : 0.9
-        }
-    }
-
-    private var haloX: CGFloat {
-        style.aurora == .sweep ? (on ? 6 : -6) : 0
-    }
-
-    private var haloAnim: Animation? {
-        switch style.aurora {
-        case .breath:
-            .easeInOut(duration: Theme.readyBreath)
-                .repeatForever(autoreverses: true)
-        case .pulse:
-            .easeInOut(duration: Theme.pulse).repeatForever(autoreverses: true)
-        case .still: nil
-        case .think:
-            .easeInOut(duration: Theme.think).repeatForever(autoreverses: true)
-        case .voice: nil
-        case .sweep:
-            .easeInOut(duration: Theme.sweep).repeatForever(autoreverses: true)
-        }
+    /// Glow tint, matched to the edge palette (violet while speaking).
+    private var glow: Color {
+        if case .voice = style.aurora { Theme.auroraVoice[3] } else { Theme.blue }
     }
 
     private var breathe: CGFloat {
@@ -700,6 +692,10 @@ struct OrbDisc: View {
 struct WordReveal: View {
     var text: String
     var dots: Bool
+    /// Font size in points (header: design 22 px scaled).
+    var size: CGFloat = 17
+    /// Lines before truncating (header: 2).
+    var lines: Int = 1
     @State private var shown = false
 
     var body: some View {
@@ -716,9 +712,13 @@ struct WordReveal: View {
         // via staggered overlay is overkill at bar size, so the line fades
         // in as one while the orb carries the motion.
         Text(text)
-            .font(.system(size: 17, weight: .light))
+            .font(Theme.ui(size))
+            .tracking(-0.012 * size)
             .foregroundStyle(.primary)
-            .lineLimit(1)
+            .lineLimit(lines)
+            .multilineTextAlignment(.leading)
+            .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
             .opacity(shown ? 1 : 0)
             .animation(Theme.ease(duration: 0.45), value: shown)
     }

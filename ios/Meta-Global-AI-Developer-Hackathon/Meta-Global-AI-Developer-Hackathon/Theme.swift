@@ -160,6 +160,13 @@ enum Theme {
     static let readyGlow: Double = 1.2
     static let spin: Double = 0.8
 
+    /// Largest orb size factor (listening 1.32 x breathe 1.08): the header
+    /// reserves this slot so the orb never pushes or covers the line.
+    static let orbMaxScale: CGFloat = 1.32 * 1.08
+
+    /// Header mode label: the app has one mode (cloud + web search = "Full").
+    static let modeLabel = "Full"
+
     // MARK: - Voice edge glow (design `.edge`, Apple-Intelligence style)
 
     /// conic-gradient(#0071E3, #1E90FF, #5AC8FA, #B9ECFF, #5AC8FA, #1E90FF, #0071E3)

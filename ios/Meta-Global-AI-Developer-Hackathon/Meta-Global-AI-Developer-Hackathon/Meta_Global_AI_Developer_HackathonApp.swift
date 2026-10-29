@@ -78,7 +78,7 @@ struct Meta_Global_AI_Developer_HackathonApp: App {
 /// Design captures without glasses: launch with `-uiPreview
 /// splash|connecting|ready` (optionally `-uiPreviewTime <s>` to freeze).
 enum DesignPreview: String {
-    case splash, connecting, ready
+    case splash, connecting, ready, header
 
     /// First `ok` rows done, then one pending row, the rest waiting.
     private func rows(ok: Int, pending: String?) -> [SyncRows.Row] {
@@ -102,7 +102,34 @@ enum DesignPreview: String {
         case .ready:
             GlassesSyncScreen(dat: nil, onSkip: {}, onComplete: {},
                               previewRows: rows(ok: 6, pending: nil))
+        case .header:
+            HeaderSamples()
         }
+    }
+}
+/// `-uiPreview header`: the top header with every state and line length
+/// (short, one long line, two lines, too long for two) stacked for review.
+struct HeaderSamples: View {
+    private let lines: [(VoiceSession.State, String, Bool)] = [
+        (.ready, "Say “\(Persona.current.wakePhrase)”", false),
+        (.listening, "\(Persona.current.agentName) Listening", false),
+        (.thinking, "\(Persona.current.agentName) Thinking", true),
+        (.speaking, "Nice, C2–C8 are in.", false),
+        (.speaking, "Got it — one active run, the Drug A / Drug B dosing protocol from tonight.", false),
+        (.speaking, "Step 3 of 5, add 10 µL of Drug A working solution to each Drug A well. Four wells left: C5 to C8, then incubate.", false),
+        (.speaking, String(repeating: "This reply is far too long for the header and must stop at two lines. ", count: 4), false),
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(lines.indices, id: \.self) { i in
+                    TopHeaderView(style: Theme.orbStyle(for: lines[i].0), text: lines[i].1, dots: lines[i].2)
+                        .border(Color.black.opacity(0.08))
+                }
+            }
+        }
+        .background(Color(.systemBackground)) // the light screens' floor
     }
 }
 #endif

@@ -285,6 +285,7 @@ smoke + iPad check.
   words whose sound key is within one edit of the name); the on-device
   recognizer gets a custom language model for the phrase when supported.
   DEBUG "Measure ×10" logs the hit rate and every heard sentence.
+
 - Voice edge (design `.edge`): one `EdgeGlow` overlay above the screen
   container, touch-through, full-bleed; the soft conic band only (blur
   20, band 30: thicker than the design's 16/18, and the crisp 4 px line
@@ -294,6 +295,13 @@ smoke + iPad check.
   brightness follow the smoothed tap RMS from MicEngine's one tap),
   transcribing/thinking/searching (half speed, dimmer), speaking (voice
   palette, pulse per TTS word), ready (not drawn). Reduce Motion: no spin.
+- Light-screen header: one `TopHeader` (mode "Full" small top-left; orb 52
+  + line 22 px centered at top 44 from the screen top, not the safe area)
+  for every light screen; none on Splash or Sync. Text is 22 (design .t24)
+  instead of the design's 26 by iPad review. The orb glows on its own; the
+  wandering halo is gone. The orb keeps a slot for its largest state, the
+  line wraps to two lines then truncates; DEBUG `-uiPreview header` stacks
+  every state and line length.
 - Screen registry owns when to use each screen (`use`/`not`, needs_target)
   and its spoken result line; the perform tool's screen guide and every
   navigation reply derive from it. importer is a registry sheet (ui

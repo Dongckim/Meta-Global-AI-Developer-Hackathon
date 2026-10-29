@@ -302,7 +302,7 @@ struct ContentView: View {
     private var mainBody: some View {
         VStack(spacing: 0) {
             contractBanners
-            VoiceOrb(voice: voice, speakText: lastReply, onBlockedTap: openSync)
+            TopHeader(voice: voice, speakText: lastReply, onBlockedTap: openSync)
             Group {
                 if let src = viewingSource {
                 VStack(spacing: 8) {
