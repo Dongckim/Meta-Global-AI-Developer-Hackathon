@@ -38,12 +38,16 @@ from server.grammar import (
     mentioned_targets,
     ungrounded_targets,
     is_failure_message,
+    join_wells_ranges,
     mark_each_timers,
     match_card_answer,
     match_grammar,
     needs_minutes_ask,
     normalize_text,
     parse_wellref,
+    request_parts,
+    split_card_answer,
+    unserved_parts,
     relevant_plan_numbers,
     speak_text,
     split_ask,
@@ -132,8 +136,10 @@ def _opt(spec: dict) -> dict:
     return {**spec, "type": [spec.get("type", "string"), "null"]}
 
 
-def _tool(name: str, desc: str, props: dict) -> dict:
-    """Strict function tool: every prop required, no extras.
+def _tool(name: str, desc: str, props: dict, required: list | None = None) -> dict:
+    """Function tool, no extras. Strict (every prop required, blanks as null)
+    unless `required` names the only must-have props: then the rest may be
+    left out, so a call carries only what it uses.
 
     Per dev.meta.ai strict only validates OUR schema; model output is NOT
     constrained, so server-side validation stays as the real gate.
@@ -142,11 +148,11 @@ def _tool(name: str, desc: str, props: dict) -> dict:
         "type": "function",
         "name": name,
         "description": desc,
-        "strict": True,
+        "strict": required is None,
         "parameters": {
             "type": "object",
             "properties": props,
-            "required": sorted(props),
+            "required": sorted(props) if required is None else required,
             "additionalProperties": False,
         },
     }
@@ -163,11 +169,17 @@ PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "extend_timer", "next_step", "end_run", "show", "navigate",
                    "open", "back", "make_robot", "edit_draft", "retry_sync",
                    "skip_sync"]
+#: Actions that aren't record writes; the coverage check counts only writes.
+VIEW_ACTIONS = frozenset(a for a in PERFORM_ACTIONS if a not in RecordStore.RUN_WRITES) \
+    - {"edit_draft"} | {"read_record", "ask"}
+#: Writes a turn can ask for by their registry verbs (screens.json `actions`).
+WRITE_ACTIONS = [a for a in PERFORM_ACTIONS if a in RecordStore.RUN_WRITES]
 
 TOOLS = [
     _tool(
         "perform",
         "Do one bench action per call; emit in run order. "
+        "Two requests in one sentence = two calls. "
         "mark_done{wells,step?}: REPORTED finished only (done/finished/added/I put); "
         "step = the plan step number it belongs to (blank = current step); "
         "bench instructions (wash/add/do) record nothing. "
@@ -177,29 +189,33 @@ TOOLS = [
         "set_timer{minutes,wells?,on_done?} (minutes stated, else ask); "
         "cancel_timer{label?}; extend_timer{label?,minutes?} (+5 default); "
         "next_step; end_run; show{view?,target?}; navigate{screen,target?}; "
-        "open{target} (well/screen/run/original/importer); back; make_robot; "
+        "open{target} (well/screen/run/original/importer; a well is always open{target}); "
+        "back; make_robot; "
         "edit_draft{path,value} (draft_open only); "
         "retry_sync; skip_sync (setup screen only). Never answer_card. "
         f"Screens (navigate.screen): {SCREEN_GUIDE} "
         "Backup well: read free_wells first, then act on the first candidate at once.",
         {
             "action": {"type": "string", "enum": PERFORM_ACTIONS},
-            "wells": _opt(WELLREF),
-            "well": _opt(WELLREF),
-            "target": _opt({"type": "string"}),
-            "text": _opt({"type": "string"}),
-            "minutes": _opt({"type": "number"}),
-            "label": _opt({"type": "string"}),
-            "note": _opt({"type": "string"}),
-            "reason": _opt({"type": "string"}),
-            "screen": {"type": ["string", "null"], "enum": [*SCREEN_IDS, None]},
-            "step": _opt({"type": "integer"}),
-            "path": _opt({"type": "string"}),
-            "value": _opt({"type": "string"}),
-            "step_id": _opt({"type": "string"}),
-            "on_done": _opt({"type": "string"}),
-            "view": _opt({"type": "string"}),
+            "wells": WELLREF,
+            "well": WELLREF,
+            "target": {"type": "string"},
+            "text": {"type": "string"},
+            "minutes": {"type": "number"},
+            "label": {"type": "string"},
+            "note": {"type": "string"},
+            "reason": {"type": "string"},
+            "screen": {"type": "string", "enum": SCREEN_IDS},
+            "step": {"type": "integer"},
+            "path": {"type": "string"},
+            "value": {"type": "string"},
+            "step_id": {"type": "string"},
+            "on_done": {"type": "string"},
+            "view": {"type": "string"},
         },
+        # only what the action uses: a strict call spelled out all 16 props
+        # (~250 output tokens each) and three of them overran the cap
+        required=["action"],
     ),
     _tool(
         "read_record",
@@ -370,7 +386,7 @@ async def _post(client: httpx.AsyncClient, name: str, *a, **k) -> httpx.Response
 async def _call_spark(
     client: httpx.AsyncClient, key: str, text: str, state: dict, session: dict,
     model: str = SPARK_MODEL, effort: str = REASONING_EFFORT, lookup: bool = False,
-    echo_calls: list | None = None,
+    echo_calls: list | None = None, nudge: str = "",
 ) -> tuple[list, str, int, bool, dict, list]:
     """Returns (calls, text, ms, truncated, usage, web_searches).
 
@@ -415,7 +431,7 @@ async def _call_spark(
                                   "output": outs.pop(cid)})
             for cid, output in outs.items():
                 print(f"spark lookup: dropping unbound output {cid}", flush=True)
-            req_input.append({"role": "user", "content": CONTINUE_TEXT})
+            req_input.append({"role": "user", "content": nudge or CONTINUE_TEXT})
         else:
             req_input = text
         body = {
@@ -525,6 +541,9 @@ def recent_target() -> str | None:
 
 #: Lookup-round nudge, mirroring the chained shape inline.
 CONTINUE_TEXT = "Continue with the looked-up data."
+#: Followup-round nudge: the model picks what is left; code re-checks.
+FOLLOWUP_TEXT = ("Do any part of my request that isn't done yet, one call each. "
+                 "If everything is done, call nothing.")
 
 
 def _short_text(t: str) -> str:
@@ -639,9 +658,18 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         ans = match_card_answer(text)
         if ans is not None:
             return _answer_cards(ans, session)
+        ans, rest = split_card_answer(text)
+        if ans is not None:
+            # "Yes. Exclude C6.": the answer goes to the card, the rest is a new turn
+            head = _answer_cards(ans, session)
+            tail = await run_utterance(client, key, rest, session, source)
+            return (tail[0], head[1] + tail[1], f"{head[2]} {tail[2]}".strip(), tail[3],
+                    tail[4], head[5] + tail[5], tail[6], tail[7])
+    parts = request_parts(text, WRITE_ACTIONS)
     v = store.r["view"]
     b = button_call(text, [x for x in ((v.get("sheet") or {}).get("name"), v["current"]["screen"]) if x])
-    g = ([b], "") if b else match_grammar(text, store.prompt_state(session))
+    # grammar claims a whole turn or nothing: two requests go to the model
+    g = ([b], "") if b else None if len(parts) > 1 else match_grammar(text, store.prompt_state(session))
     if g is not None:
         calls, gtext = g
         if not calls:
@@ -659,6 +687,7 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     if cut:
         return [], [], say("didnt_catch", session), ms, "spark", [], {"dropped": 0, "drop_reasons": []}, []
     raw_count = len(calls)
+    model_raw = [dict(c) for c in calls]
     calls = _expand_perform(calls)
     if raw_count and not calls and not texts.strip() and not searches:
         # every call was unusable (no action / no name): ask, offering the
@@ -751,17 +780,7 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
                         for w in store.filter_wells(filt if isinstance(filt, str) else "")[:4]:
                             res["messages"].append(store.describe_well(w))
             calls = calls + rc
-            res["messages"] += res2["messages"]
-            res["cards"] += res2["cards"]
-            res["outcomes"] += res2["outcomes"]
-            res["ui"] += res2["ui"]
-            res["info"]["ui"] = res["ui"]
-            res["info"]["dropped"] += res2["info"]["dropped"]
-            res["info"]["drop_reasons"] += res2["info"]["drop_reasons"]
-            for k in ("saved_memo", "edited", "robot", "setup_done",
-                        "sync_retry"):
-                if res2["info"].get(k):
-                    res["info"][k] = res2["info"][k]
+            _merge_round(res, res2)
             if question2 is not None:
                 question = question2
             if res2["info"].get("timer_started"):
@@ -769,6 +788,29 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             else:
                 gdrop = gdrop or gdrop2
             _store_outputs(session, ordered2, outcomes2)
+    also = ""
+    missing = unserved_parts(parts, calls, VIEW_ACTIONS) if question is None and not gdrop else []
+    if missing:
+        # one followup round, only when a requested part didn't run
+        session["pending_outputs"] = [{"call_id": c["call_id"], "output": outcomes[c["call_id"]]}
+                                      for c in model_raw if c.get("call_id") in outcomes]
+        ms3, more = await _lookup_round(client, key, text, session, source, plan_allowed, "",
+                                        summary, model_raw, nudge=FOLLOWUP_TEXT)
+        ms += ms3
+        if more is not None:
+            rc, res3, question3, ordered3, outcomes3, gdrop3, _ = more
+            calls = calls + rc
+            _merge_round(res, res3)
+            question = question3
+            gdrop = gdrop or gdrop3
+            _store_outputs(session, ordered3, outcomes3)
+        still = unserved_parts(parts, calls, VIEW_ACTIONS) if question is None and not gdrop else []
+        print(f"[orch] followup ms={ms3} missing={[p['text'] for p in missing]} "
+              f"filled={[c.get('name') for c in (more[0] if more else [])]} "
+              f"still={[p['text'] for p in still]}", flush=True)
+        if still:
+            what = " and ".join(p["text"][:1].lower() + p["text"][1:] for p in still)
+            also = say("also_ask", session, what=what)
     calls = _strip_ids(calls)
     asked: dict = {}
     if question is not None:
@@ -791,6 +833,11 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             print(f"ORPHAN REPLY: {sorted({c.get('name') for c in calls})} produced nothing",
                   flush=True)
             reply = say("found_empty", session)
+        if also:
+            # what ran is said first, then the part that didn't, as a question
+            reply = f"{reply} {also}"
+            wells = sorted({w for p in still for w in p["wells"]})
+            asked = {"question": also, "target": wells_label(wells) if wells else ""}
     for m in res["messages"]:
         if m.startswith("Note updated.") and res["info"].get("edited"):
             reply = f"Note updated ({res['info']['edited']['target']})."
@@ -799,8 +846,23 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     return calls, res["messages"], reply, ms, "spark", res["cards"], res["info"], sources
 
 
+def _merge_round(res: dict, res2: dict):
+    """Fold a later round's store results into the turn's."""
+    res["messages"] += res2["messages"]
+    res["cards"] += res2["cards"]
+    res["outcomes"] += res2["outcomes"]
+    res["ui"] += res2["ui"]
+    res["info"]["ui"] = res["ui"]
+    res["info"]["dropped"] += res2["info"]["dropped"]
+    res["info"]["drop_reasons"] += res2["info"]["drop_reasons"]
+    res.setdefault("told", []).extend(res2.get("told") or [])
+    for k in ("saved_memo", "edited", "robot", "setup_done", "sync_retry"):
+        if res2["info"].get(k):
+            res["info"][k] = res2["info"][k]
+
+
 async def _lookup_round(client, key, text, session, source, plan_numbers, reads_text, summary,
-                      r1raw):
+                      r1raw, nudge=""):
     """Second spark round replaying round 1 inline (question, calls, outputs).
 
     A bare repeated question restarts the lookup; outputs without their
@@ -808,7 +870,8 @@ async def _lookup_round(client, key, text, session, source, plan_numbers, reads_
     Returns (ms, None-or-tuple).
     """
     rc, t2, ms, cut, _, _ = await _call_spark(
-        client, key, text, store.model_state(session), session, lookup=True, echo_calls=r1raw)
+        client, key, text, store.model_state(session), session, lookup=True, echo_calls=r1raw,
+        nudge=nudge)
     if cut:
         return ms, None
     rc = _expand_perform(rc)
@@ -1045,7 +1108,8 @@ def _executed_reply(calls: list, read_lines: list, session: dict) -> str:
 def _compose_reply(calls, res, state, session) -> str:
     """Reply purely from store results: messages, card questions, drop reasons.
     Empty when nothing resulted; run_utterance resolves via _executed_reply."""
-    msgs = [m for m in res["messages"] if isinstance(m, str) and m]  # None/blank never joins
+    msgs = _fold_told([m for m in res["messages"] if isinstance(m, str) and m],  # None/blank never joins
+                      res.get("told") or [], session)
     fails = [m for m in msgs if is_failure_message(m)]
     if fails:
         ok = [m for m in msgs if not is_failure_message(m)]
@@ -1060,6 +1124,24 @@ def _compose_reply(calls, res, state, session) -> str:
         _log_drop(d["call"], d.get("args"), d["reason"])
         parts.append(_couldnt(d["call"], d["reason"]))
     return " ".join(parts)
+
+
+def _fold_told(msgs: list, told: list, session) -> list:
+    """One sentence per action: same-key, same-slot well lines (timer on
+    C2, C3, C4) become one line over the joined range ("on C2–C4")."""
+    groups: dict = {}
+    for t in told:
+        groups.setdefault((t["key"], json.dumps(t["slots"], sort_keys=True)), []).append(t)
+    out = list(msgs)
+    for (key, _), ts in groups.items():
+        if len(ts) < 2 or any(t["line"] not in out for t in ts):
+            continue
+        at = out.index(ts[0]["line"])
+        for t in ts:
+            out.remove(t["line"])
+        wells = [w for t in ts for w in t["wells"]]
+        out.insert(min(at, len(out)), say(key, session, wells=join_wells_ranges(wells), **ts[0]["slots"]))
+    return out
 
 
 #: Human verbs per tool. User-visible text never names a tool.

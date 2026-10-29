@@ -147,6 +147,10 @@
     "I didn't log {target} — want me to?",
     "Hmm, nothing logged on {target} — should I log it?"
   ],
+  "also_ask": [
+    "Should I also {what}?",
+    "Want me to {what} too?"
+  ],
   "sync_retry": [
     "Re-checking the glasses.",
     "Checking the glasses again."

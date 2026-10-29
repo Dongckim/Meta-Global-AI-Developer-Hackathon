@@ -259,7 +259,7 @@ class StoreTest(unittest.TestCase):
         r = self.apply([T("where_am_i")])
         self.assertTrue(r["messages"][0].startswith("Step 3 of 5"))
         r = self.apply([T("show", view="plate", target="C")])
-        self.assertEqual(r["messages"], ["Viewing: plate C"])
+        self.assertEqual(r["messages"], ["Here's the bench."])
         r = self.apply([T("open", target="importer")])
         self.assertEqual(r["ui"], [{"action": "import"}])
         self.assertEqual(r["messages"], ["Opening the importer."])

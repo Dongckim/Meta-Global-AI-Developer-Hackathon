@@ -55,6 +55,8 @@ IDS = sorted(SCREENS)
 #: the tool enum, and the speechless renderer all derive from this.
 READS: list[dict] = list(REGISTRY.get("reads", []))
 READ_KINDS: tuple[str, ...] = tuple(r["kind"] for r in READS)
+#: Per-action vocabulary (`verbs`), keyed by action name.
+ACTIONS: dict[str, dict] = dict(REGISTRY.get("actions", {}))
 ALIASES: dict[str, str] = {
     a.lower(): sid for sid, s in SCREENS.items() for a in s.get("aliases", [])
 }
@@ -151,3 +153,9 @@ def button_call(text: str, screen_ids: list[str]) -> dict | None:
             if _said(b["say"]) == said:
                 return {"name": b["action"], "args": dict(b.get("args") or {})}
     return None
+
+
+def verbs(action: str) -> list[str]:
+    """Same-meaning phrases for an action (registry `actions.<name>.verbs`):
+    the one word list grammar, buttons and the coverage check all use."""
+    return list(ACTIONS.get(action, {}).get("verbs", []))

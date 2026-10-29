@@ -290,6 +290,9 @@ class RecordStore:
         if screen == "run_view":
             self._open_run(res, session, t or "latest")
             return
+        if screen == "well_card" and is_well(t):
+            self._open_well(res, t)  # the same well card open{target} shows
+            return
         if screen == "protocol_review" and not self.r.get("draft"):
             res["messages"].append("No draft open — import a protocol from Home.")
             return
@@ -329,6 +332,11 @@ class RecordStore:
             return
         self._push_view(screen)
         res["messages"].append(result_of(screen))
+
+    def _open_well(self, res: dict, well: str) -> None:
+        self.r["view"]["sheet"] = {"name": "well_card", "target": well.upper()}
+        res["ui"].append({"action": "flash", "wells": [well.upper()]})
+        res["messages"].append(f"Opened {well.upper()}.")
 
     def _open_protocol(self, res: dict, session: dict, selector: str) -> None:
         doc, cands = labels.select_protocol(selector, lib.all_docs(self.root))
@@ -849,8 +857,24 @@ class RecordStore:
             subject = None
         return (op, subject if subject != [] else None)
 
+    @staticmethod
+    def _tell(res: dict, key: str, session, wells: list, **slots):
+        """A result line about wells, kept with its parts so the reply can
+        fold same-key, same-slot lines into one sentence over the joined
+        range (api._compose_reply)."""
+        line = say(key, session, wells=join_wells_ranges(wells), **slots)
+        res["messages"].append(line)
+        res.setdefault("told", []).append({"key": key, "wells": list(wells), "slots": slots,
+                                           "line": line})
+
     def _card(self, res: dict, kind: str, question: str, detail, payload: dict) -> dict:
         key = self._card_key(payload)
+        same = {k: v for k, v in (payload or {}).items() if not k.startswith("_")}
+        for c in self.r["cards"].values():
+            if {k: v for k, v in (c.get("payload") or {}).items() if not k.startswith("_")} == same:
+                # the same question is already up: ask it again, never stack a copy
+                res["cards"].append(c)
+                return c
         for cid in [cid for cid, c in self.r["cards"].items()
                     if self._card_key(c.get("payload")) == key]:
             del self.r["cards"][cid]
@@ -948,7 +972,10 @@ class RecordStore:
                        for w in good if w not in have],
                     key=lambda m: (m["step"], _well_coords(m["well"]), m["well"]))
                 self._stamp(good, source, now)
-                msg = say("mark_done", session, wells=join_wells_ranges(good))
+                if not bad:
+                    self._tell(res, "mark_done", session, good)
+                else:
+                    msg = say("mark_done", session, wells=join_wells_ranges(good))
                 res["ui"].append({"action": "flash", "wells": good})
             if bad:
                 bad_msg = invalid_message(bad, session)
@@ -1028,7 +1055,10 @@ class RecordStore:
             }
             self.r["notes"].append(memo)
             self._stamp([target], source, now)
-            res["messages"].append(say("note_saved", session, wells=target))
+            if memo["wells"] == [target]:
+                self._tell(res, "note_saved", session, [target])
+            else:
+                res["messages"].append(say("note_saved", session, wells=target))
             res["info"]["saved_memo"] = {"id": memo["id"], "target": target, "text": memo["text"]}
             if memo["wells"]:
                 res["ui"].append({"action": "flash", "wells": memo["wells"]})
@@ -1165,9 +1195,10 @@ class RecordStore:
                            {"op": "end_run",
                             "run_id": (self.r.get("run") or {}).get("run_id")})
         elif name == "show":
-            view = args.get("view", "?")
-            res["messages"].append(f"Viewing: {view} {args.get('target')}" if args.get("target") else f"Viewing: {view}")
+            # the person-facing line is the registry result, never the raw view id
             wells = parse_wellref(args.get("target")) if args.get("target") else []
+            sid = "well_card" if wells else canonical(str(args.get("view") or "")) or "main"
+            res["messages"].append(result_of(sid, target=wells_label(wells), name=args.get("target")))
             if wells:
                 res["ui"].append({"action": "flash", "wells": wells})
         elif name == "navigate":
@@ -1203,9 +1234,7 @@ class RecordStore:
                 self._open_source(res, session, t)
                 return
             if is_well(t):
-                self.r["view"]["sheet"] = {"name": "well_card", "target": t.upper()}
-                res["ui"].append({"action": "flash", "wells": [t.upper()]})
-                res["messages"].append(f"Opened {t.upper()}.")
+                self._open_well(res, t)
                 return
             screen = canonical(t)
             if screen is not None:
@@ -1296,8 +1325,11 @@ class RecordStore:
             "id": uuid.uuid4().hex[:8], "label": label, "minutes": minutes, "on_done": on_done,
             "started_at": now, "step": step, "wells": frozen, "warned": False, "notified": False,
         })
-        res["messages"].append(say("timer_start", session, minutes=fmt_minutes(minutes),
-                                   wells=frozen))
+        if wells:
+            self._tell(res, "timer_start", session, list(wells), minutes=fmt_minutes(minutes))
+        else:
+            res["messages"].append(say("timer_start", session, minutes=fmt_minutes(minutes),
+                                       wells=frozen))
         res["info"]["timer_started"] = True
         if wells:
             res["ui"].append({"action": "flash", "wells": list(wells)})

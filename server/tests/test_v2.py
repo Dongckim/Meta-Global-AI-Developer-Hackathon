@@ -91,7 +91,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert card_id not in api.store.r["cards"] and "C8" in api.store.r["excluded"]
     print("V1 ok: voice yes resolves card, 0 model calls")
 
-    # V2. same card twice replaces; still one card.
+    # V2. same card twice (same action + args) keeps the one already up.
     FakeClient.spark_payload = {"id": "v2a", "output": [
         fc("exclude_well", '{"well": "C8", "reason": "cloudy"}', "c1")]}
     c.post("/orchestrate", json={"text": "drop C8", "session": "v2"})
@@ -99,8 +99,8 @@ with patch("httpx.AsyncClient", FakeClient):
     c.post("/orchestrate", json={"text": "drop C8 again", "session": "v2"})
     ids = [cid for cid, card in api.store.r["cards"].items()
            if (card.get("payload") or {}).get("well") == "C8"]
-    assert len(ids) == 1 and ids != first, ids
-    print("V2 ok: same card replaces, never stacks")
+    assert ids == first, (ids, first)
+    print("V2 ok: same card stays, never stacks")
 
     # V3. memo keeps model-cleaned text plus the full raw origin; screen reacts.
     origin = ("um i wanna make some notes on C eight and I wanna write down "

@@ -121,7 +121,9 @@ with patch("httpx.AsyncClient", FakeClient):
     assert "Pip" not in api.SYSTEM, "no hardcoded persona name"
     assert "persona" not in tone.keys()
     screen = perf["parameters"]["properties"]["screen"]
-    assert screen["enum"] == [*api.SCREEN_IDS, None], screen  # registry ids only
+    assert screen["enum"] == api.SCREEN_IDS, screen  # registry ids only
+    # perform needs only its action: a call carries the props it uses
+    assert perf["parameters"]["required"] == ["action"] and not perf["strict"], perf["parameters"]
     # Blank required args ask instead of failing, for every action (one gate).
     for blank in (None, "", "null", " None "):
         out = api._expand_perform([{"name": "perform", "call_id": "c1",
@@ -139,8 +141,10 @@ with patch("httpx.AsyncClient", FakeClient):
         if t.get("type") != "function":
             continue
         p = t["parameters"]
-        assert t.get("strict") is True, t["name"]
         assert p.get("additionalProperties") is False, t["name"]
+        if t["name"] == "perform":  # only the action is required (see above)
+            continue
+        assert t.get("strict") is True, t["name"]
         assert sorted(p.get("required", [])) == sorted(p["properties"]), t["name"]
     assert body["prompt_cache_key"] == "pip-bench-spark", body
     assert body["prompt_cache_retention"] == "24h", body
@@ -757,7 +761,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert j["ui"] == [{"action": "flash", "wells": ["C5"]},
                        {"action": "flash", "wells": ["C5"]}], j
     assert api.store.r["view"]["sheet"] == {"name": "well_card", "target": "C5"}, j
-    assert j["speak"] == "Viewing: plate C 5 Opened C 5.", j
+    assert j["speak"] == "Here's C 5. Opened C 5.", j  # registry result line, never the view id
     body = calls[-1][1]["json"]
     assert '"current_screen": "main"' in body["instructions"], body["instructions"]
     assert f'"pending_cards": {len(api.store.r["cards"])}' in body["instructions"], body["instructions"]

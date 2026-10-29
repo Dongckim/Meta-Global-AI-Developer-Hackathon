@@ -41,4 +41,28 @@ for sid, b in buttons:
     names = [t["name"] for t in j["tool_calls"]]
     assert names == [b["action"]] and j["route"] == "grammar", (sid, b["say"], j)
 print("BT2 ok: spoken button runs its action")
+
+# BT3. A button's word is one of its action's registry verbs (one vocabulary).
+from server.screens import verbs  # noqa: E402
+
+for sid, b in buttons:
+    assert b["say"].lower() in [v.lower() for v in verbs(b["action"])], (sid, b, verbs(b["action"]))
+print("BT3 ok: button words come from action verbs")
+
+# BT4. Every screen has a person-facing label and result line; no screen
+# ever falls back to its raw id or leaves a hole.
+from server.screens import result_of  # noqa: E402
+
+for sid, s in SCREENS.items():
+    assert (s.get("title") or "").strip() and (s.get("choice") or "").strip(), (sid, "no label")
+    assert (s.get("result") or "").strip(), (sid, "no result line")
+    line = result_of(sid, target="C5", name="the demo protocol")
+    assert "_" not in line and "?" not in line and "{" not in line, (sid, line)
+    assert not line.startswith("Showing "), (sid, line, "fallback: no result line")
+api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+api.store.start_demo_run()
+r = api.store.apply_calls([{"name": "show", "args": {"view": "well_card", "target": "C5"}}],
+                          "voice", "show C5", "spark", {})
+assert r["messages"] == ["Here's C5."], r["messages"]
+print("BT4 ok: every screen has a label; show says it")
 print("ALL PASS")

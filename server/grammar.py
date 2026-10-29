@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 
-from server.screens import canonical, title_of
+from server.screens import canonical, title_of, verbs
 
 # Well letters/digits by sound. Only applied AT well positions, never inside free text.
 LETTER_SOUND = {"see": "C", "sea": "C", "she": "C", "bee": "B", "dee": "D"}
@@ -286,6 +286,23 @@ def match_card_answer(text: str) -> str | None:
     return None
 
 
+def _verb(action: str) -> str:
+    """Regex alternation of an action's registry verbs (longest first)."""
+    vs = sorted(verbs(action), key=len, reverse=True)
+    return "(?:" + "|".join(r"\s+".join(map(re.escape, v.lower().split())) for v in vs) + ")" if vs else "(?!)"
+
+
+def split_card_answer(text: str) -> tuple[str | None, str]:
+    """A leading card answer and the rest of the turn ("Yes. Exclude C6." ->
+    ("yes", "Exclude C6.")); (None, text) when the turn doesn't open with one."""
+    parts = _CLAUSE_SPLIT.split(text or "", maxsplit=1)
+    if len(parts) == 2 and parts[1].strip():
+        ans = match_card_answer(parts[0])
+        if ans is not None:
+            return ans, parts[1].strip()
+    return None, text
+
+
 def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
     """Exact short commands. Normalizes internally (certain rewrites only);
     structure matches on scrubbed text; reason/body sliced from normalized text.
@@ -302,7 +319,7 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
             return None
         spec = wells[0] if m.group(2) is None else f"{wells[0]} to {wells[-1]}"
         return [{"name": "mark_done", "args": {"wells": wells}}], f"{spec} done."
-    if re.fullmatch(r"\s*next[?!]?\s*", low):
+    if re.fullmatch(rf"\s*{_verb('next_step')}[?!]?\s*", low):
         return [{"name": "next_step", "args": {}}], "Next step."
     if re.fullmatch(r"\s*where am i[?!]?\s*", low):
         return [{"name": "where_am_i", "args": {}}], where_am_i_reply(state)
@@ -315,7 +332,7 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
     if re.fullmatch(r"\s*(can you |could you |please )?(hand|pass|give|bring|fetch|hold|carry)\b.*\b(me|my)\b.*", low) \
             and not re.search(r"\b(timer|note|tip|step|well|protocol)\b", low):
         return [], "cant_do_physical"
-    m = re.fullmatch(r"\s*exclude\s+([a-h]\d{1,2})\s*(.*)", low)
+    m = re.fullmatch(rf"\s*{_verb('exclude_well')}\s+([a-h]\d{{1,2}})\s*(.*)", low)
     if m:
         wells = expand_range(m.group(1).upper())
         if wells is None:
@@ -325,7 +342,7 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
         if reason:
             args["reason"] = reason
         return [{"name": "exclude_well", "args": args}], f"Exclude {wells[0]}?"
-    m = re.fullmatch(r"\s*note\s+([a-h]\d{1,2})\s*(.+)", low)
+    m = re.fullmatch(rf"\s*{_verb('add_note')}\s+(?:(?:on|for|in|to)\s+)?([a-h]\d{{1,2}})\s*(.+)", low)
     if m:
         wells = expand_range(m.group(1).upper())
         if wells is None:
@@ -334,20 +351,20 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
         if not body:
             return None
         return [{"name": "add_note", "args": {"target": wells[0], "text": body}}], f"Noted for {wells[0]}."
-    m = re.fullmatch(r"\s*edit\s+(?:the\s+|my\s+)?last\s+note\s*(.+)", low)
+    m = re.fullmatch(rf"\s*{_verb('edit_note')}\s*(.+)", low)
     if m:
         body = text[m.start(1):m.end(1)].strip(" \t.,!?;:")
         if not body:
             return None
         return [{"name": "edit_note", "args": {"text": body}}], "Note updated."
-    m = re.fullmatch(r"\s*cancel\s+(?:the\s+)?(.*?)\s*timer\s*", low)
+    m = re.fullmatch(rf"\s*{_verb('cancel_timer')}\s+(?:the\s+)?(.*?)\s*timer\s*", low)
     if m:
         label = text[m.start(1):m.end(1)].strip(" \t.,!?;:")
         args = {}
         if label:
             args["label"] = label
         return [{"name": "cancel_timer", "args": args}], f"Canceling {timer_who(label)}."
-    m = re.fullmatch(r"\s*extend\s+(?:the\s+)?(.*?)\s*timer\s+by\s+(.+?)(?:\s*min(?:ute)?s?)?\s*", low)
+    m = re.fullmatch(rf"\s*{_verb('extend_timer')}\s+(?:the\s+)?(.*?)\s*timer\s+by\s+(.+?)(?:\s*min(?:ute)?s?)?\s*", low)
     if m:
         minutes = words_to_minutes(text[m.start(2):m.end(2)])
         if minutes is not None:
@@ -358,13 +375,13 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
             n = int(minutes) if float(minutes).is_integer() else minutes
             who = timer_who(label)
             return [{"name": "extend_timer", "args": args}], f"Extending {who} by {n} minutes."
-    if re.fullmatch(r"\s*back[?!]?\s*", low):
+    if re.fullmatch(rf"\s*{_verb('back')}[?!]?\s*", low):
         return [{"name": "back", "args": {}}], "Back."
-    if re.fullmatch(r"\s*retry(?:\s+the)?\s+(glasses(?:\s+check|\s+sync)?|sync)[?!]?\s*", low):
+    if re.fullmatch(rf"\s*{_verb('retry_sync')}(?:\s+the)?\s+(glasses(?:\s+check|\s+sync)?|sync)[?!]?\s*", low):
         return [{"name": "retry_sync", "args": {}}], "Re-checking."
-    if re.fullmatch(r"\s*skip(?:\s+the)?\s+(glasses(?:\s+check|\s+sync)?|sync)[?!]?\s*", low):
+    if re.fullmatch(rf"\s*{_verb('skip_sync')}(?:\s+the)?\s+(glasses(?:\s+check|\s+sync)?|sync)[?!]?\s*", low):
         return [{"name": "skip_sync", "args": {}}], "Skipping."
-    m = re.fullmatch(r"\s*show\s+([a-h]\d{1,2})[?!]?\s*", low)
+    m = re.fullmatch(rf"\s*{_verb('show')}\s+([a-h]\d{{1,2}})[?!]?\s*", low)
     if m:
         wells = expand_range(m.group(1).upper())
         if wells is None:
@@ -375,7 +392,7 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
         if state.get("draft_open"):
             return [], "A draft is already open — review or discard it first."
         return [{"name": "open", "args": {"target": "importer"}}], "Opening the importer."
-    m = re.fullmatch(r"\s*open\s+(?:the\s+)?(.+?)[?!]?\s*", low)
+    m = re.fullmatch(rf"\s*{_verb('open')}\s+(?:the\s+)?(.+?)[?!]?\s*", low)
     if m:
         wm = re.fullmatch(r"([a-h]\d{1,2})", m.group(1).strip())
         if wm:
@@ -918,6 +935,36 @@ def mentioned_targets(text) -> dict:
         "step": bool(_STEP_REF.search(t)),
         "memo": bool(_MEMO_REF.search(t)),
     }
+
+
+_CLAUSE_SPLIT = re.compile(r"[.!?;]+\s*|,?\s+(?:and|then)\s+|,\s*", re.IGNORECASE)
+
+
+def request_parts(text, actions) -> list[dict]:
+    """Clauses of one utterance that ask for an action, in order: a clause
+    asks for every action in `actions` whose registry verbs it says.
+    Each part: {"text", "actions", **mentioned_targets}."""
+    out = []
+    for part in _CLAUSE_SPLIT.split(text or ""):
+        low = (part or "").lower()
+        acts = {a for a in actions if re.search(rf"\b{_verb(a)}\b", low)}
+        if acts:
+            out.append({"text": part.strip(" ,"), "actions": acts, **mentioned_targets(part)})
+    return out
+
+
+def unserved_parts(parts: list[dict], calls: list, views) -> list[dict]:
+    """Parts no executed call covers: none of its actions ran, and either a
+    well or timer it names was never touched, or fewer non-view calls ran
+    than parts were asked. A turn whose calls cover the count and its
+    targets did the work in its own words ("make control 6" -> edit_draft)."""
+    short = len([c for c in calls if c.get("name") not in views]) < len(parts)
+    names = {c.get("name") for c in calls}
+    wells = {w for c in calls for w in call_wells(c)}
+    timers = any("timer" in (n or "") for n in names)
+    return [p for p in parts
+            if not (p["actions"] & names)
+            and (short or (p["wells"] and not p["wells"] & wells) or (p["timer"] and not timers))]
 
 
 def ungrounded_targets(reply) -> dict:
