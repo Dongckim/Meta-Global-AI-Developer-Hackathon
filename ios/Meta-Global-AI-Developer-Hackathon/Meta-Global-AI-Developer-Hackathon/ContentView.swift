@@ -231,7 +231,7 @@ struct ContentView: View {
     var body: some View {
         ScreenTransition(stack: $top, screens: [.splash, .sync, .main],
                          prewarm: [.main],
-                         floor: { $0 == .main ? Color(.systemBackground) : Theme.dark }) { id in
+                         floor: { $0 == .main ? Theme.canvas : Theme.dark }) { id in
             switch id {
             case .splash:
                 SplashView { dismissSplash() }
@@ -316,6 +316,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             contractBanners
             TopHeader(voice: voice, speakText: lastReply, partialText: voice.partialText,
+                      timers: lab.timers,
                       onBlockedTap: openSync)
             Group {
                 if let src = viewingSource {

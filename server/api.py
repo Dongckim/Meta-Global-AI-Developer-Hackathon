@@ -52,7 +52,7 @@ from server.grammar import (
 )
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
-from server.screens import ask_choice
+from server.screens import ask_choice, button_call
 from server.screens import guide as _screen_guide
 from server.screens import READS as SCREEN_READS
 from server import library as lib
@@ -639,7 +639,9 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         ans = match_card_answer(text)
         if ans is not None:
             return _answer_cards(ans, session)
-    g = match_grammar(text, store.prompt_state(session))
+    v = store.r["view"]
+    b = button_call(text, [x for x in ((v.get("sheet") or {}).get("name"), v["current"]["screen"]) if x])
+    g = ([b], "") if b else match_grammar(text, store.prompt_state(session))
     if g is not None:
         calls, gtext = g
         if not calls:

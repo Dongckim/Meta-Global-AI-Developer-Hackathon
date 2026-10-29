@@ -122,6 +122,19 @@ struct PipTests {
         #expect(missing.screens.isEmpty && missing.error != nil)
     }
 
+    @Test func sayButtonsShowTheirRegistryCommand() {
+        // shown word == a screen command (the server matches the same word, test_buttons)
+        let buttons = loadScreens().screens.flatMap { s in (s.buttons ?? []).map { (s, $0) } }
+        #expect(!buttons.isEmpty)
+        for (s, b) in buttons {
+            #expect(s.commands.map { $0.lowercased() }.contains(b.say.lowercased()), "\(s.id): \(b.say)")
+            var sent: ScreenButton?
+            let view = SayButton(button: b) { sent = $0 }
+            view.perform(view.button)
+            #expect(sent == b) // a tap sends the registry action, nothing else
+        }
+    }
+
     @Test func screenRegistryReadsOnlyScreens() throws {
         // reads/use/not belong to the server and must not break the app's decode
         let ok = Data(#"{"screens": [{"id": "home", "commands": ["back"], "use": "x"}], "reads": [{"kind": "runs", "screens": [], "desc": "d"}]}"#.utf8)

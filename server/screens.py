@@ -135,3 +135,19 @@ def guide() -> str:
 
 def commands_for(screen_id: str) -> list[str]:
     return list(SCREENS.get(screen_id, {}).get("commands", []))
+
+
+def _said(text: str) -> str:
+    import re
+    return " ".join(re.sub(r"[^a-z0-9' ]+", " ", (text or "").lower()).split())
+
+
+def button_call(text: str, screen_ids: list[str]) -> dict | None:
+    """A visible screen's "Say X" button spoken exactly -> its action call,
+    the same one a tap sends (registry `buttons`)."""
+    said = _said(text)
+    for sid in screen_ids:
+        for b in SCREENS.get(sid, {}).get("buttons", []):
+            if _said(b["say"]) == said:
+                return {"name": b["action"], "args": dict(b.get("args") or {})}
+    return None

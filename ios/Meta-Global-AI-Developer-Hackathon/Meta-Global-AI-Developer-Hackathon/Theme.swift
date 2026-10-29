@@ -42,6 +42,21 @@ enum Theme {
     /// --on (text on dark)
     static let on = Color(hex: 0xFFFFFF)
 
+    // MARK: - Light canvas (Figma Glassistant "ver 2 - Final", node 20:31108)
+
+    /// Screen background.
+    static let canvas = Color(hex: 0xECECEF)
+    /// Primary text.
+    static let text1 = Color(hex: 0x1D1D1F)
+    /// Secondary text.
+    static let text2 = Color(hex: 0x86868B)
+    /// Chip secondary text.
+    static let text3 = Color(hex: 0x6E6E73)
+    /// Unselected card.
+    static let cardOff = Color(hex: 0xE2E2E7)
+    /// Bottom-right blue glow: rgba(0,113,227,.11) blur 118.
+    static let canvasGlow = polishBlue.opacity(0.11)
+
     // MARK: - Muted grays
 
     /// --mut-t (muted text)

@@ -394,3 +394,17 @@ struct EdgeGlowTests {
         #expect(Theme.wordPulse(since: t.addingTimeInterval(5), now: t) == 0)
     }
 }
+
+struct TimerChipTests {
+    @Test func soonestRunningTimerLeadsAndCountsTheRest() {
+        let now = Date()
+        let ts = [
+            TimerEntry(id: "a", label: "PBS", minutes: 10, started: now.addingTimeInterval(-245), wells: "B2–B8"),
+            TimerEntry(id: "b", label: "Drug A", minutes: 20, started: now, wells: "C2–C8"),
+            TimerEntry(id: "c", label: "old", minutes: 1, started: now.addingTimeInterval(-120), wells: "A1"),
+        ]
+        let s = TimerChip.summary(ts, now: now)
+        #expect(s?.wells == "B2–B8" && s?.minutesLeft == 6 && s?.more == 1)
+        #expect(TimerChip.summary([ts[2]], now: now) == nil) // finished timers don't show
+    }
+}

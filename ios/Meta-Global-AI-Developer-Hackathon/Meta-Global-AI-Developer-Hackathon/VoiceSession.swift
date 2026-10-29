@@ -760,6 +760,8 @@ struct TopHeader: View {
     var voice: VoiceSession
     var speakText: String = ""
     var partialText: String? = nil
+    /// Running timers for the header chip (top right).
+    var timers: [TimerEntry] = []
     /// Tap while talking is blocked by a permission: opens the sync screen.
     var onBlockedTap: () -> Void = {}
 
@@ -779,7 +781,8 @@ struct TopHeader: View {
                       blocked: voice.state == .ready
                           && Theme.talkBlocker(wake: voice.wakeSupport, wakeOn: true) != nil,
                       onBlockedTap: onBlockedTap,
-                      onOrbTap: { voice.open(trigger: .orbTap) })
+                      onOrbTap: { voice.open(trigger: .orbTap) },
+                      timers: timers)
     }
 }
 
@@ -805,6 +808,7 @@ struct TopHeaderView: View {
     var onBlockedTap: () -> Void = {}
     /// Orb tap: talk (VoiceSession.admission decides what it does).
     var onOrbTap: () -> Void = {}
+    var timers: [TimerEntry] = []
     @State private var width: CGFloat = 0
 
     var body: some View {
@@ -818,6 +822,10 @@ struct TopHeaderView: View {
             .frame(height: px(64))
             .padding(.leading, px(64))
             .frame(maxWidth: .infinity, alignment: .leading)
+            TimerChip(timers: timers, size: px(22))
+                .frame(height: px(64))
+                .padding(.trailing, px(64))
+                .frame(maxWidth: .infinity, alignment: .trailing)
             HStack(spacing: px(16)) {
                 OrbDisc(style: style, diameter: px(52), bright: hearing)
                     .frame(width: px(52) * Theme.orbMaxScale)

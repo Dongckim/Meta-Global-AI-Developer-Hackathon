@@ -681,6 +681,16 @@ final class LabState {
 struct ScreenDef: Decodable {
     var id: String
     var commands: [String]
+    /// "Say X" buttons: tap and voice run the same action.
+    var buttons: [ScreenButton]?
+}
+
+/// One registry button: `say` is shown, spoken, and listed in `commands`;
+/// `action`/`args` go to /input like any tap.
+struct ScreenButton: Decodable, Equatable {
+    var say: String
+    var action: String
+    var args: [String: String]?
 }
 
 /// Screen registry shared with the server (the bundled screens.json): the
