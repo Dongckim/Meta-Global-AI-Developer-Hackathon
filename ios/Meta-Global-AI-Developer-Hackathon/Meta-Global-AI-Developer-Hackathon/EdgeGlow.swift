@@ -69,7 +69,7 @@ struct EdgeGlow: View {
         let _ = live.map { meter.lastStyle = $0 }
         if let style = live ?? meter.lastStyle {
             let px = { (v: CGFloat) in Theme.px(v, in: width) }
-            let angle = style.spin.map { now.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: $0) / $0 * 360 } ?? 0
+            let angle = Self.angle(style, at: now.timeIntervalSinceReferenceDate)
             let blur = px(Theme.edgeSoftBlur)
             // The band's outer edge, corners and blur falloff sit one blur
             // radius past the screen, so no clipped corner arc shows; only
@@ -81,6 +81,14 @@ struct EdgeGlow: View {
                 .opacity(style.brightness)
                 .drawingGroup()
         }
+    }
+
+    /// spin: full turns; sweep (searching): side to side, ±45° (40/320 of a turn).
+    private static func angle(_ s: Theme.EdgeStyle, at t: Double) -> Double {
+        if let p = s.spin { return t.truncatingRemainder(dividingBy: p) / p * 360 }
+        guard let p = s.sweep else { return 0 }
+        let reach = Double(Theme.Motion.sweepShift) * 360
+        return sin(t / p * 2 * Double.pi) * reach
     }
 
     /// CSS conic 0deg points up; SwiftUI's angular 0 points right.

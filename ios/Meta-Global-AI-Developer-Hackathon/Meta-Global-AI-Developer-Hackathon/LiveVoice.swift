@@ -10,6 +10,8 @@ enum LiveEvent {
     case ignored(line: String)
     /// The owner's turn, processed by the server like a /voice reply.
     case turn(VoiceResponse, endSession: Bool)
+    /// Where that turn is on the server (thinking, searching, ...).
+    case stage(TurnStage)
     /// The session is over. `why`: window / max_duration / end_session /
     /// client / server (normal) or error (the stream broke).
     case closed(why: String)
@@ -265,6 +267,10 @@ final class LiveLink: LiveControlling {
         case "ignored":
             Log.voice.info("[voice] ignored speaker=\(obj["speaker"] as? String ?? "?", privacy: .public) text=\"\(obj["text"] as? String ?? "", privacy: .public)\"")
             onEvent?(.ignored(line: obj["line"] as? String ?? ""))
+        case "stage":
+            if case .string(let s) = m, let st = try? JSONDecoder().decode(TurnStage.self, from: Data(s.utf8)) {
+                onEvent?(.stage(st))
+            }
         case "turn":
             guard case .string(let s) = m,
                   let r = try? JSONDecoder().decode(VoiceResponse.self, from: Data(s.utf8)) else {

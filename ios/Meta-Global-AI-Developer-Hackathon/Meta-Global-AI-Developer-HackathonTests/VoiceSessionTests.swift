@@ -224,6 +224,19 @@ struct VoiceSessionTests {
         #expect(voice.state == .searching)
     }
 
+    /// The server's stages drive the state; done hands back the rest state.
+    @Test func serverStagesDriveState() async {
+        let voice = makeSession(chimed: Flag())
+        voice.applyStage(TurnStage(stage: "thinking"))
+        #expect(voice.state == .thinking)
+        voice.applyStage(TurnStage(stage: "searching", query: "q"))
+        #expect(voice.state == .searching && voice.stage?.query == "q")
+        voice.applyStage(TurnStage(stage: "summarizing"))
+        #expect(voice.state == .searching && voice.stage?.stage == "summarizing" && voice.stage?.query == "q")
+        voice.applyStage(TurnStage(stage: "done"))
+        #expect(voice.state == .ready && voice.stage == nil)
+    }
+
     @Test func speakCompletesToReadyAndResumesWake() async {
         let chimed = Flag()
         let wake = FakeWake(), speaker = FakeSpeaker()
@@ -559,6 +572,21 @@ struct VoiceSessionTests {
         await openSession(voice2, wake2)
         live2.send(.closed(why: "end_session")) // "thanks" already got its reply
         #expect(ended2.value && speaker2.texts.isEmpty)
+    }
+
+    /// "Thanks Milo": the reply is said to the end first; only then the edge
+    /// fades, the chime plays and wake listening resumes. The day's first-close
+    /// line isn't said again later that day.
+    @Test func thanksClosesAfterTheReply() async {
+        let wake = FakeWake(), speaker = FakeSpeaker(), live = FakeLive(), ended = Flag()
+        let voice = makeSession(wake: wake, speaker: speaker, live: live, ended: ended, firstClose: true)
+        await openSession(voice, wake)
+        voice.speak("Anytime! Call me whenever you need me.")
+        live.send(.closed(why: "end_session"))
+        #expect(!ended.value && voice.state == .speaking && !voice.inSession) // still talking: no chime yet
+        speaker.complete()
+        #expect(await settle { ended.value && voice.state == .ready })
+        #expect(speaker.texts == ["Anytime! Call me whenever you need me."]) // no close line after it
     }
 
     @Test func brokenStreamFallsBackForAWhile() async {

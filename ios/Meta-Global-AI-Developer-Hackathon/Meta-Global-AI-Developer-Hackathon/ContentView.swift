@@ -27,6 +27,12 @@ enum RobotState {
     case done(RobotResponse)
 }
 
+/// A web page to show in the in-app browser.
+struct WebLink: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
 enum DraftState {
     case idle
     case importing
@@ -89,6 +95,11 @@ struct ContentView: View {
     @State private var viewingSource: ViewingSource?
     @State private var protocols: [ProtocolSummary] = []
     @State private var runs: [RunSummary] = []
+    @State private var searches: [WebSearch] = []
+    /// Searches that answered (⓪c, counts); ⑧ also shows pending and failed ones.
+    private var answered: [WebSearch] { searches.filter { $0.status == "ok" } }
+    /// A cited page open in the in-app browser (Open source).
+    @State private var webSource: WebLink?
     @State private var reviewError = ""
     @State private var syncError: String?
     @State private var apiMismatch: String?
@@ -158,7 +169,7 @@ struct ContentView: View {
             promptKey = key
             if !v.prompt.isEmpty {
                 lastReply = v.prompt
-                if navByTap && voice.inSession { sayAloud(v.prompt) }
+                if navByTap && voice.inSession { sayAloud(v.promptSpeak) }
             }
         }
         navByTap = false
@@ -169,7 +180,11 @@ struct ContentView: View {
             openSync()
         }
         if let i = ["liquids", "steps", "layout"].firstIndex(of: v.tab) { reviewTab = i }
-        if cur != lastViewScreen, cur == "home" || cur == "protocol_detail" { loadLists() }
+        if cur != lastViewScreen, ["home", "protocol_detail", "web_searches", "web_answer", "run_view"].contains(cur) {
+            loadLists()
+        } else if cur == "web_answer", !searches.contains(where: { $0.id == tgt }) {
+            loadLists()  // a search that just ran
+        }
         lastViewScreen = cur
     }
 
@@ -270,6 +285,7 @@ struct ContentView: View {
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .plainText]) { res in
             importPicked(res)
         }
+        .sheet(item: $webSource) { SafariSheet(url: $0.url).ignoresSafeArea() }
         .sheet(isPresented: $showTextImport) {
             TextImportSheet { text, name in upload(text: text, filename: name) }
         }
@@ -308,6 +324,9 @@ struct ContentView: View {
             if let t = voice.typed { say("> \(t)"); Task { await sendText(t) } }
         }
         #endif
+        .onChange(of: voice.stage == nil) { _, ended in
+            if ended { loadLists() }  // a turn ended: a search's answer (or why not) fills ⑧
+        }
         .onChange(of: voice.noticeGen) { _, _ in
             if !voice.notice.isEmpty { say(voice.notice) }
         }
@@ -351,6 +370,20 @@ struct ContentView: View {
                     hintsBar.padding(.horizontal)
                     inputBar.padding(.horizontal).padding(.bottom)
                 }
+            } else if lab.view.current.screen == "web_answer" {
+                // ⑧ web search answer (Figma 37:14048)
+                stage { u in
+                    if let item = searches.first(where: { $0.id == lab.view.current.target }) {
+                        WebAnswerScreen(item: item, buttons: buttons("web_answer"), u: u, perform: performButton)
+                    }
+                }
+            } else if lab.view.current.screen == "web_searches" {
+                // ⓪c web searches (Figma 37:13104)
+                stage { u in
+                    WebSearchesScreen(items: answered, buttons: buttons("web_searches"), u: u,
+                                      onOpen: { sendAction("open", ["target": "search:\($0)"]) },
+                                      perform: performButton)
+                }
             } else if let d = lab.draft, StartScreen.ids.contains(lab.view.current.screen) {
                 // ⑤b-⑤f start review (Figma 37:13203-37:13351)
                 stage { u in startScreen(d, u) }
@@ -367,8 +400,9 @@ struct ContentView: View {
                 // ⓪b run record (Figma 37:12931)
                 stage { u in
                     if lab.cards.isEmpty {
-                        RunRecordScreen(runId: rid, runs: runs, buttons: buttons("run_view"), u: u,
-                                        perform: performButton)
+                        RunRecordScreen(runId: rid, runs: runs, searches: answered.filter { $0.runId == rid },
+                                        buttons: buttons("run_view"), u: u, perform: performButton,
+                                        onSearch: { sendAction("open", ["target": "search:\($0)"]) })
                     } else {
                         // "Run 1 is finished. Start a new run?" (and finish-first) take the screen
                         ConfirmScreen(lab: lab, buttons: registry.cards, u: u,
@@ -380,7 +414,7 @@ struct ContentView: View {
                 // ⓪ a protocol picked on Home: its detail and runs on the right
                 stage { u in
                     ProtocolsHome(protocols: protocols, runs: runs, selectedId: pid,
-                                  activeRunId: lab.run?.runId, buttons: buttons("protocol_detail"), u: u,
+                                  activeRunId: lab.run?.runId, searchCount: answered.count, buttons: buttons("protocol_detail"), u: u,
                                   onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
                                   onRun: { sendAction("open", ["target": "run:\($0)"]) },
                                   perform: performButton)
@@ -391,7 +425,7 @@ struct ContentView: View {
                     stage { u in
                         if lab.cards.isEmpty {
                             ProtocolsHome(protocols: protocols, runs: runs, selectedId: nil,
-                                          activeRunId: lab.run?.runId, buttons: buttons("home"), u: u,
+                                          activeRunId: lab.run?.runId, searchCount: answered.count, buttons: buttons("home"), u: u,
                                           onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
                                           onRun: { sendAction("open", ["target": "run:\($0)"]) },
                                           perform: performButton)
@@ -975,6 +1009,8 @@ struct ContentView: View {
             sayAloud(speak)
         case .ui(let act):
             _ = applyUI(act)
+        case .stage(let st):
+            applyStage(st)
         }
     }
 
@@ -990,6 +1026,12 @@ struct ContentView: View {
     /// wake pause). Refused mid-listening; card questions pre-selected.
     private func sayAloud(_ text: String?) {
         voice.speak(text)
+    }
+
+    /// A server turn stage (SSE, outside a live session; a live session's come
+    /// on its socket to VoiceSession directly).
+    private func applyStage(_ st: TurnStage) {
+        voice.applyStage(st)
     }
 
     /// Applies one server ui action. False when the app could not do it: says
@@ -1008,6 +1050,10 @@ struct ContentView: View {
             return true
         case "import_photo":
             showPhotoImport = true
+            return true
+        case "web_source":
+            guard let t = a.target, let url = URL(string: t) else { return uiFail("I couldn't open that source.") }
+            webSource = WebLink(url: url)
             return true
         case "draft_edit":
             // value edits are taps for now (Start ⑤d "Fix it")
@@ -1145,8 +1191,10 @@ struct ContentView: View {
             do {
                 async let p = PipClient.protocols()
                 async let r = PipClient.runs()
+                async let w = PipClient.searches()
                 protocols = try await p
                 runs = try await r
+                searches = try await w.searches
             } catch {
                 // Home shows empty; the refresh button retries.
             }

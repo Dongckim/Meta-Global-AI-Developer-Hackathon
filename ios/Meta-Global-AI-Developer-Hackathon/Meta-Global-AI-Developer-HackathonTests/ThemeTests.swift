@@ -68,7 +68,29 @@ struct PipLineTests {
         #expect(Theme.pipText(for: .thinking, speakText: "", partialText: nil)
             == Theme.PipLine(text: "Thinking", dots: true, status: true))
         #expect(Theme.pipText(for: .searching, speakText: "", partialText: nil)
-            == Theme.PipLine(text: "Searching the web", dots: true, status: true))
+            == Theme.PipLine(text: "Searching the web", dots: true, status: true, icon: "magnifyingglass"))
+    }
+
+    /// Server stages (TurnStage) name what's happening: the query as sent, cut
+    /// when long; then reading the results.
+    @Test func stageLines() {
+        let q = TurnStage(stage: "searching", query: "max DMSO for HeLa cells")
+        #expect(Theme.pipText(for: .searching, speakText: "", partialText: nil, stage: q)
+            == Theme.PipLine(text: "Searching “max DMSO for HeLa cells”", dots: true, status: true,
+                             icon: "magnifyingglass"))
+        let long = TurnStage(stage: "searching", query: String(repeating: "a", count: 60))
+        #expect(Theme.pipText(for: .searching, speakText: "", partialText: nil, stage: long).text
+            == "Searching “" + String(repeating: "a", count: 39) + "…”")
+        #expect(Theme.pipText(for: .searching, speakText: "", partialText: nil,
+                              stage: TurnStage(stage: "summarizing")).text == "Reading the results")
+    }
+
+    /// Searching sweeps side to side instead of spinning (HTML sweep); still under Reduce Motion.
+    @Test func searchingEdgeSweeps() {
+        let s = Theme.edgeStyle(for: .searching, level: 0, pulse: 0, reduceMotion: false)
+        #expect(s?.spin == nil && s?.sweep == Theme.sweep)
+        let r = Theme.edgeStyle(for: .searching, level: 0, pulse: 0, reduceMotion: true)
+        #expect(r?.spin == nil && r?.sweep == nil)
     }
 
     @Test func headerPillLightsWhileTheAgentIsBusy() {

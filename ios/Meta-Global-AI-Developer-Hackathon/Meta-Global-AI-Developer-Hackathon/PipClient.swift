@@ -111,6 +111,12 @@ struct RunListResponse: Decodable {
     let runs: [RunSummary]
 }
 
+/// GET /searches: answered web searches (newest first) and how many were sent.
+struct SearchListResponse: Decodable {
+    let searches: [WebSearch]
+    let sent: Int
+}
+
 struct RunDetailResponse: Decodable {
     let run: RunDoc
     let label: String?
@@ -148,6 +154,7 @@ enum SSEvent {
     case timerWarning(message: String, speak: String?)
     case timerDone(message: String, speak: String?)
     case ui(UIAction)
+    case stage(TurnStage)
     case broken(String)
 }
 
@@ -162,7 +169,7 @@ enum PipError: Error, LocalizedError {
 
 enum PipClient {
     /// Must match server API_VERSION (test_snapshot_schema pins both sides).
-    static let EXPECTED_API_VERSION = 11
+    static let EXPECTED_API_VERSION = 13
     /// A server link silent this long is dead: three missed keepalives
     /// (server HEARTBEAT_S = 15) on /events and /voice/live.
     static let idleTimeout: TimeInterval = 45
@@ -294,6 +301,10 @@ enum PipClient {
         return try JSONDecoder().decode(RunListResponse.self, from: data).runs
     }
 
+    static func searches() async throws -> SearchListResponse {
+        try await get("searches")
+    }
+
     static func runDetail(id: String) async throws -> RunDetailResponse {
         try await get("runs/\(id)")
     }
@@ -350,6 +361,10 @@ enum PipClient {
                     case "ui":
                         if let act = try? JSONDecoder().decode(UIAction.self, from: payload) {
                             cont.yield(.ui(act))
+                        }
+                    case "stage":
+                        if let st = try? JSONDecoder().decode(TurnStage.self, from: payload) {
+                            cont.yield(.stage(st))
                         }
                     default: break
                     }

@@ -6,8 +6,8 @@
   the app scales them with `Theme.px` / the screen's `u`.
 - **Motion**: the BenchTrace · Milo HTML prototype (v36, kept outside the repo). Its
   values live once in `Theme.Motion`; screens use them through the shared parts.
-- **Names**: the app is BenchTrace and the agent is Milo; the mock's "Glassistant" is
-  not used. Private mode reuses every screen; only `Theme` mode tokens (color, badge,
+- **Names**: the app is Glassistant and the agent is Milo ("BenchTrace" is only the
+  motion prototype's title). Private mode reuses every screen; only `Theme` mode tokens (color, badge,
   line) change (Figma section `43:2`).
 
 ## Screens
@@ -18,11 +18,11 @@ Status: **done** = matches ver 2 · **old** = exists in the pre-ver-2 style ·
 
 | Group | Screen | Figma frame | Status | Bundle |
 |---|---|---|---|---|
-| Home | Splash | 37:12807 | done (word mark still "Glassistant") | 2 |
+| Home | Splash | 37:12807 | done | 2 |
 | Home | Glasses sync | 37:12820 | done (rows: the app's six checks) | 2 |
-| Home | ⓪ Home · Protocols | 37:12877 | done (Searches count: frame) | 2 |
+| Home | ⓪ Home · Protocols | 37:12877 | done | 2 |
 | Home | ⓪b Home · Run record | 37:12931 | done (Code tab: frame) | 2 |
-| Home | ⓪c Home · Web searches | 37:13104 | frame | 2 |
+| Home | ⓪c Home · Web searches | 37:13104 | done | 2 |
 | Start | ⑤a Mode | 37:13141 | done (Private: frame) | 3 |
 | Start | ⑤b Import protocol | 37:13167 | done (Text, File, Photo) | 3 |
 | Start | ⑤b Draft ready | 37:13203 | done | 3 |
@@ -37,7 +37,7 @@ Status: **done** = matches ver 2 · **old** = exists in the pre-ver-2 style ·
 | In run | ③d Confirm · next step | 37:13804 | done | 1 |
 | In run | ④ Well card | 37:13833 | done | 1 |
 | In run | ⑦ Label check | 37:14014 | frame | 4 |
-| In run | ⑧ Web search answer | 37:14048 | frame | 4 |
+| In run | ⑧ Web search answer | 37:14048 | done ("Source" or "Pages searched") | 4 |
 | After run | ⑨ Simulate | 37:14080 | frame (robot panel stays) | 4 |
 | After run | ⑨a Export | 37:14280 | frame | 4 |
 | After run | ⑨b Files | 37:14316 | frame | 4 |

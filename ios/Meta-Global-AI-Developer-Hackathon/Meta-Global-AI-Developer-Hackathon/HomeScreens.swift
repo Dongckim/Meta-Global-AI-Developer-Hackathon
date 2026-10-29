@@ -5,8 +5,7 @@ import SwiftUI
 // Data: /protocols (short title, source file, steps, wells, run counts) and
 // /runs (server labels: "Run 3", day, "Step 4 of 5" / "Ended at step 3" /
 // "Finished"), a run's record for the run record.
-// Server to do: robot code per run (Code tab); web search history (⓪c and
-// the Searches count, registry status "planned").
+// Server to do: robot code per run (Code tab).
 
 /// Runs of one protocol, oldest first.
 func runsOf(_ protocolId: String?, in runs: [RunSummary]) -> [RunSummary] {
@@ -47,6 +46,8 @@ struct ProtocolsHome: View {
     /// active run's, else the newest).
     var selectedId: String?
     var activeRunId: String?
+    /// Answered web searches (the Searches pill's count).
+    var searchCount = 0
     /// Registry home buttons (Continue, Import protocol, Searches).
     var buttons: [ScreenButton]
     var u: CGFloat
@@ -139,12 +140,12 @@ struct ProtocolsHome: View {
             }
             Rectangle().fill(Theme.cardOff).frame(height: 2 * u).padding(.horizontal, 8 * u)
             if let b = searches {
-                // ⓪c is planned: the server answers "That isn't ready yet."
                 Button { perform(b) } label: {
                     HStack(spacing: 18 * u) {
                         Image(systemName: "globe").foregroundStyle(Theme.polishBlue)
                         (Text("Say ").foregroundStyle(Theme.polishBlue) + Text(b.say).foregroundStyle(Theme.text1))
                         Spacer(minLength: 0)
+                        if searchCount > 0 { Text("\(searchCount)").foregroundStyle(Theme.text2) }
                     }
                     .font(.system(size: 28 * u))
                     .padding(.horizontal, 32 * u).frame(height: 80 * u)
@@ -233,10 +234,13 @@ struct ProtocolsHome: View {
 struct RunRecordScreen: View {
     var runId: String
     var runs: [RunSummary]
-    /// Registry run_view buttons (Hand off, Back).
+    /// Web searches asked during this run (Searches tab).
+    var searches: [WebSearch] = []
+    /// Registry run_view buttons (Continue or a greyed Start run, Back).
     var buttons: [ScreenButton]
     var u: CGFloat
     var perform: (ScreenButton) -> Void
+    var onSearch: (String) -> Void = { _ in }
     @State private var rlab = LabState()
     @State private var doc: RunDoc?
     @State private var error = ""
@@ -274,6 +278,7 @@ struct RunRecordScreen: View {
                 switch tab {
                 case 0: notes
                 case 1: timers
+                case 2: searchList
                 default: Text("That isn't ready yet.").foregroundStyle(Theme.text2)  // Code: planned
                 }
             }
@@ -287,7 +292,7 @@ struct RunRecordScreen: View {
 
     private var tabs: some View {
         HStack(spacing: 36 * u) {
-            ForEach(Array(["Notes", "Timers", "Code"].enumerated()), id: \.offset) { i, t in
+            ForEach(Array(["Notes", "Timers", "Searches", "Code"].enumerated()), id: \.offset) { i, t in
                 Button { withAnimation(Theme.Motion.ease(Theme.Motion.seg)) { tab = i } } label: {
                     VStack(spacing: 10 * u) {
                         Text(t).font(.system(size: 26 * u, weight: tab == i ? .semibold : .regular))
@@ -322,6 +327,26 @@ struct RunRecordScreen: View {
         }
     }
 
+    private var searchList: some View {
+        VStack(alignment: .leading, spacing: 18 * u) {
+            ForEach(Array(searches.prefix(4).enumerated()), id: \.element.id) { i, s in
+                Button { onSearch(s.id) } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 0) {
+                        Text(s.time).foregroundStyle(Theme.polishBlue).frame(width: 110 * u, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 4 * u) {
+                            Text(s.question).foregroundStyle(Theme.text1)
+                            Text(s.answerShort).font(.system(size: 20 * u)).foregroundStyle(Theme.text2)
+                        }
+                        .lineLimit(1)
+                    }
+                }
+                .buttonStyle(.plain)
+                .enter(.text, i, u: u)
+            }
+            if searches.isEmpty { Text("No web searches in this run.").foregroundStyle(Theme.text2) }
+        }
+    }
+
     private var timers: some View {
         VStack(alignment: .leading, spacing: 14 * u) {
             ForEach(Array(rlab.timers.suffix(4).enumerated()), id: \.element.id) { i, t in
@@ -349,59 +374,6 @@ struct RunRecordScreen: View {
         }
     }
 }
-
-// MARK: - ⓪c Web searches (skeleton)
-
-/// One past web search: what was asked, the answer's source, when.
-struct WebSearchItem: Identifiable, Equatable {
-    var id: String
-    var query: String
-    var source: String
-    var day: String
-}
-
-/// Draws a list of searches; no data source yet (registry "planned").
-struct WebSearchesScreen: View {
-    var items: [WebSearchItem]
-    var buttons: [ScreenButton]
-    var u: CGFloat
-    var perform: (ScreenButton) -> Void
-
-    var body: some View {
-        VStack(spacing: 36 * u) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { i, s in
-                    HStack(spacing: 18 * u) {
-                        Image(systemName: "globe").foregroundStyle(Theme.polishBlue)
-                        VStack(alignment: .leading, spacing: 4 * u) {
-                            Text(s.query).font(.system(size: 28 * u)).foregroundStyle(Theme.text1)
-                            Text(s.source).font(.system(size: 22 * u)).foregroundStyle(Theme.text2)
-                        }
-                        Spacer(minLength: 0)
-                        Text(s.day).font(.system(size: 22 * u)).foregroundStyle(Theme.text2)
-                    }
-                    .lineLimit(1)
-                    .padding(.vertical, 18 * u)
-                    .enter(.text, i, u: u)
-                }
-            }
-            .padding(.horizontal, 48 * u).padding(.vertical, 24 * u)
-            .frame(width: 756 * u)
-            .benchCard(radius: 44 * u)
-            SayRow(buttons: buttons, u: u, perform: perform).frame(width: 756 * u)
-        }
-    }
-}
-
-#if DEBUG
-#Preview("⓪c Web searches") {
-    WebSearchesScreen(items: [
-        WebSearchItem(id: "1", query: "MTT incubation time", source: "abcam.com", day: "Today"),
-        WebSearchItem(id: "2", query: "DMSO max concentration", source: "sigmaaldrich.com", day: "Oct 27"),
-    ], buttons: [ScreenButton(say: "Back", action: "back", args: nil)], u: 0.7) { _ in }
-    .background(Theme.canvas)
-}
-#endif
 
 // MARK: - ⑤a Mode, ⑤b Import (Start)
 // ⑤a (Figma 37:13141): Full or Private, lines from pip_voice.json `modes`;

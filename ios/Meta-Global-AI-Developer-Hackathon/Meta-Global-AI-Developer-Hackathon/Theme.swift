@@ -178,6 +178,13 @@ enum Theme {
     /// (v36), the one place for durations, curves and delays. Distances are
     /// design px (multiply by the screen's `u`). Reduce Motion: opacity only.
     enum Motion {
+        /// sweep (searching): scale .9 <-> .95 and translateX -40 <-> 40 on a
+        /// 320 px aurora, so 40/320 of the size each side.
+        static let sweepShift: CGFloat = 40.0 / 320
+        static let sweepScale: ClosedRange<CGFloat> = 0.9...0.95
+        /// sheen 1.4s ease-in-out: a white band (.35 at 50%) crossing a loading card.
+        static let sheen = 1.4
+        static let sheenPeak = 0.35
         /// --ease cubic-bezier(.22,1,.36,1) and --spring cubic-bezier(.34,1.36,.64,1).
         static func ease(_ duration: Double) -> Animation { .timingCurve(0.22, 1, 0.36, 1, duration: duration) }
         static func spring(_ duration: Double) -> Animation { .timingCurve(0.34, 1.36, 0.64, 1, duration: duration) }
@@ -285,6 +292,8 @@ enum Theme {
         var colors: [Color]
         /// Seconds per turn; nil = no rotation (Reduce Motion).
         var spin: Double?
+        /// Seconds per side-to-side sweep (searching) instead of a spin.
+        var sweep: Double? = nil
         /// Opacity multiplier (brightness).
         var brightness: Double
         /// Band width multiplier.
@@ -307,14 +316,17 @@ enum Theme {
             let n = CGFloat(min(1, max(0, level / 0.12)))
             s = EdgeStyle(colors: edgeListening, spin: edgeSpin,
                           brightness: 0.8 + 0.2 * Double(n), thickness: 1 + 0.6 * n)
-        case (.transcribing, false), (.thinking, _), (.searching, _):
+        case (.transcribing, false), (.thinking, _):
             s = EdgeStyle(colors: edgeListening, spin: edgeSpin * 2, brightness: 0.55, thickness: 1)
+        case (.searching, _):
+            // the HTML sweep: the light swings side to side, unlike listening's spin
+            s = EdgeStyle(colors: edgeListening, spin: nil, sweep: sweep, brightness: 0.7, thickness: 1)
         case (.speaking, _):
             let p = min(1, max(0, pulse))
             s = EdgeStyle(colors: edgeSpeaking, spin: edgeSpin,
                           brightness: 0.8 + 0.2 * p, thickness: 1 + 0.35 * CGFloat(p))
         }
-        if reduceMotion { s.spin = nil }
+        if reduceMotion { s.spin = nil; s.sweep = nil }
         return s
     }
 
@@ -408,6 +420,8 @@ enum Theme {
         var you: Bool = false
         /// Status word in blue (.pip .lst: Listening / Thinking / Searching the web).
         var status: Bool = false
+        /// SF Symbol before the line (searching).
+        var icon: String? = nil
     }
 
     /// Final design v26: the header pill lights up (`.pip.live`) while the
@@ -431,7 +445,7 @@ enum Theme {
 
     static func pipText(for state: VoiceSession.State, speakText: String,
                         partialText: String?, wake: WakeListener.Support = .ok,
-                        wakeOn: Bool = true) -> PipLine {
+                        wakeOn: Bool = true, stage: TurnStage? = nil) -> PipLine {
         switch state {
         case .ready:
             if let blocked = talkBlocker(wake: wake, wakeOn: wakeOn) {
@@ -454,7 +468,15 @@ enum Theme {
             }
             return PipLine(text: "Speaking", dots: true)
         case .searching:
-            return PipLine(text: "Searching the web", dots: true, status: true)
+            if stage?.stage == "summarizing" {
+                return PipLine(text: "Reading the results", dots: true, status: true)
+            }
+            if let q = stage?.query, !q.isEmpty {
+                // the query as sent, cut when long
+                let shown = q.count > 40 ? String(q.prefix(39)) + "…" : q
+                return PipLine(text: "Searching “\(shown)”", dots: true, status: true, icon: "magnifyingglass")
+            }
+            return PipLine(text: "Searching the web", dots: true, status: true, icon: "magnifyingglass")
         }
     }
 

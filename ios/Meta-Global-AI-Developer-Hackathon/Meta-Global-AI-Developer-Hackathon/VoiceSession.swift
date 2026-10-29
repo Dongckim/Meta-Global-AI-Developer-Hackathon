@@ -456,19 +456,54 @@ final class VoiceSession {
                 self.state = self.restState
                 self.resumeWake()
             }
+            let done: @MainActor () -> Void = { [weak self] in
+                reopen()
+                // a session that ended on this reply closes only now (fade, chime, wake)
+                if let close = self?.afterSpeech { self?.afterSpeech = nil; close() }
+            }
             if switched {
                 Task { @MainActor in
                     await MicEngine.shared.endSpeech()
-                    reopen()
+                    done()
                 }
             } else {
-                reopen()
+                done()
             }
         }
     }
 
     /// Where a turn returns to: listening while a live session is open.
-    private var restState: State { live != nil ? .listening : .ready }
+    /// Between turns: listening in a session, else ready; while the server
+    /// is still on a turn (thinking / searching), that.
+    private var restState: State { serverBusy ?? (live != nil ? .listening : .ready) }
+
+    /// The server's stage for the current turn (nil when none is running).
+    private(set) var stage: TurnStage?
+    /// The session ended on a reply ("Thanks Milo"): close after it's spoken.
+    private var closeAfterReply = false
+    private var afterSpeech: (() -> Void)?
+    private var serverBusy: State?
+
+    /// The server says where the turn is; the voice state follows it (the
+    /// app never guesses). A stage's `say` line is spoken once.
+    func applyStage(_ s: TurnStage) {
+        switch s.stage {
+        case "heard", "thinking":
+            stage = s
+            serverBusy = .thinking
+            partialText = nil
+        case "searching", "summarizing":
+            stage = s.stage == "summarizing" ? TurnStage(stage: s.stage, query: stage?.query) : s
+            serverBusy = .searching
+        default:  // done, failed: the reply (or its absence) takes it from here
+            stage = nil
+            serverBusy = nil
+            if state == .thinking || state == .searching { state = restState }
+            return
+        }
+        if state != .speaking, let busy = serverBusy { state = busy }
+        if let line = s.say, !line.isEmpty { speak(line) }
+    }
 
     // MARK: - Live conversation
 
@@ -510,10 +545,13 @@ final class VoiceSession {
             partialText = nil
             if state == .transcribing { state = .listening }
             showAside(line)
-        case .turn(let r, _):
+        case .turn(let r, let endSession):
             partialText = nil
+            closeAfterReply = endSession && !(r.speak ?? r.reply).isEmpty
             liveTurn = r
             liveTurnGen += 1
+        case .stage(let s):
+            applyStage(s)
         case .closed(let why):
             endLive(why)
         }
@@ -543,23 +581,41 @@ final class VoiceSession {
         link.end()
         partialText = nil
         edgeFade = Theme.edgeSessionFade
-        if state == .listening || state == .transcribing {
+        // "Thanks Milo": the reply is said first; the edge stays until it ends
+        let waitForReply = why == "end_session" && (closeAfterReply || state == .speaking)
+        closeAfterReply = false
+        if !waitForReply, state == .listening || state == .transcribing {
             state = .ready
             listeningSince = nil
         }
-        switch why {
-        case "error":
-            liveBackoffUntil = Date().addingTimeInterval(120)
-            showAside(Persona.live.fallbackLine)
-        case "client":
-            break // the app left (background): nothing to announce
-        default:
-            endChime()
-            if why != "end_session", closeDay(Date()), !Persona.live.firstCloseLine.isEmpty {
-                speak(Persona.live.firstCloseLine)
+        // the close line is the day's first close; a thank-you reply counts as it
+        let firstToday = why != "error" && why != "client" && closeDay(Date())
+        let close: () -> Void = { [weak self] in
+            guard let self else { return }
+            switch why {
+            case "error":
+                self.liveBackoffUntil = Date().addingTimeInterval(120)
+                self.showAside(Persona.live.fallbackLine)
+            case "client":
+                break // the app left (background): nothing to announce
+            default:
+                self.endChime()
+                if why != "end_session", firstToday, !Persona.live.firstCloseLine.isEmpty {
+                    self.speak(Persona.live.firstCloseLine)
+                }
             }
+            self.resumeWake()
         }
-        resumeWake()
+        if waitForReply {
+            afterSpeech = close
+            // the reply never got spoken (TTS off, failed): close anyway
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(20))
+                if let f = self?.afterSpeech { self?.afterSpeech = nil; f() }
+            }
+        } else {
+            close()
+        }
     }
 
     /// True the first time it's asked on a calendar day (then remembered).
@@ -798,10 +854,11 @@ struct TopHeader: View {
     var body: some View {
         let line = Theme.pipText(for: voice.state, speakText: speakText,
                                  partialText: partialText, wake: voice.wakeSupport,
-                                 wakeOn: VoiceSession.wakeEnabled)
+                                 wakeOn: VoiceSession.wakeEnabled, stage: voice.stage)
         let idle = voice.inSession && voice.state == .listening
         TopHeaderView(style: Theme.orbStyle(for: voice.state),
                       text: voice.aside ?? (idle ? Theme.sessionIdleLine : line.text),
+                      icon: voice.aside == nil && !idle ? line.icon : nil,
                       dots: voice.aside == nil && !idle && line.dots,
                       you: voice.aside == nil && line.you,
                       status: voice.aside == nil && !idle && line.status,
@@ -823,6 +880,8 @@ struct TopHeader: View {
 struct TopHeaderView: View {
     var style: Theme.OrbStyle
     var text: String
+    /// SF Symbol before the line (searching: the magnifier).
+    var icon: String? = nil
     var dots: Bool
     /// Someone is talking: "You" in gray before the quoted words.
     var you = false
@@ -863,6 +922,10 @@ struct TopHeaderView: View {
                     .onTapGesture { blocked ? onBlockedTap() : onOrbTap() }
                     .accessibilityLabel("Talk to \(Persona.current.agentName)")
                     .accessibilityAddTraits(.isButton)
+                if let icon {
+                    Image(systemName: icon).font(.system(size: px(20), weight: .semibold))
+                        .foregroundStyle(status ? Theme.blue : .primary)
+                }
                 // 22 px (design .t24) by review; the design .pip is 26
                 WordReveal(text: text, dots: dots, size: px(22), lines: 2,
                            color: muted ? Theme.mutT : (status ? Theme.blue : .primary),
@@ -926,9 +989,12 @@ struct OrbDisc: View {
                 .blur(radius: diameter * 0.075)
                 // quiet: a soft glow; hearing: a stronger one
                 .shadow(color: glow.opacity(bright ? 0.9 : 0.45), radius: diameter * (bright ? 0.3 : 0.16))
-                .scaleEffect(breathe * style.scale)
+                .scaleEffect(breathe * style.scale * sweepScale)
+                .offset(x: sweepShift)
                 .opacity(breatheOpacity)
                 .animation(breatheAnim, value: on)
+                .animation(sweeping ? Theme.Motion.ease(Theme.sweep / 2).repeatForever(autoreverses: true) : nil,
+                           value: on)
                 .animation(Theme.spring(), value: style.scale)
             if style.ring != nil {
                 Circle()
@@ -949,6 +1015,17 @@ struct OrbDisc: View {
     /// Glow tint, matched to the edge palette (violet while speaking).
     private var glow: Color {
         if case .voice = style.aurora { Theme.auroraVoice[3] } else { Theme.blue }
+    }
+
+    @Environment(\.accessibilityReduceMotion) private var reduce
+    /// Searching (HTML sweep): side to side, never a spin; Reduce Motion: still.
+    private var sweeping: Bool {
+        if case .sweep = style.aurora { return !reduce }
+        return false
+    }
+    private var sweepShift: CGFloat { sweeping ? (on ? 1 : -1) * diameter * Theme.Motion.sweepShift : 0 }
+    private var sweepScale: CGFloat {
+        sweeping ? (on ? Theme.Motion.sweepScale.upperBound : Theme.Motion.sweepScale.lowerBound) : 1
     }
 
     private var breathe: CGFloat {

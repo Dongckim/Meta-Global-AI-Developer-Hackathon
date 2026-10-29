@@ -8,8 +8,6 @@ import SwiftUI
 // ⑦ Label check (Figma 37:14014) — needs: camera capture of a tube label,
 //    label text recognition, a compare against the step's liquid and
 //    concentration (verdict, label, expected -> found).
-// ⑧ Web search answer (37:14048) — needs: web search kept per run (query,
-//    time, answer, source title and domain) and a "searches" read.
 // ⑨ Hand off: Simulate (37:14080), Export (37:14280), Files (37:14316),
 //    Where to (37:14393), Exported (37:14427) — needs: a run simulation,
 //    plate map / protocol.py export files per run, export destinations
@@ -80,31 +78,6 @@ struct LabelCheckScreen: View {
         FrameLayout(icon: "camera.viewfinder", title: check.verdict, lines: [check.label, check.change],
                     buttons: buttons, u: u, perform: perform)
             .modifier(ShakeOnce(u: u))
-    }
-}
-
-// MARK: - ⑧ Web search answer
-
-struct WebAnswer: Equatable {
-    var when: String
-    var query: String
-    var answer: String
-    var detail: String
-    var source: String
-}
-
-struct WebAnswerScreen: View {
-    var item: WebAnswer
-    var buttons: [ScreenButton]
-    var u: CGFloat
-    var perform: (ScreenButton) -> Void
-
-    var body: some View {
-        FrameLayout(icon: "globe", title: item.answer, lines: [item.detail, item.source],
-                    buttons: buttons, u: u, perform: perform) {
-            Text("\(item.when) · \(item.query)").font(.system(size: 22 * u)).foregroundStyle(Theme.text2)
-                .lineLimit(1)
-        }
     }
 }
 
@@ -214,14 +187,6 @@ private let previewButtons = [ScreenButton(say: "Continue", action: "back", args
 #Preview("⑦ Label check") {
     LabelCheckScreen(check: LabelCheck(verdict: "Mismatch", label: "Drug B working solution",
                                        change: "10 µM → 1 µM"), buttons: previewButtons, u: 0.7) { _ in }
-}
-
-#Preview("⑧ Web answer") {
-    WebAnswerScreen(item: WebAnswer(when: "Oct 27 · 15:12", query: "PBS stock concentration?",
-                                    answer: "Usually a 10× stock, used at 1×.",
-                                    detail: "Dilute it 1 to 10 in water to use at 1×.",
-                                    source: "Source title · example.org"),
-                    buttons: previewButtons, u: 0.7) { _ in }
 }
 
 #Preview("⑨ Simulate") {

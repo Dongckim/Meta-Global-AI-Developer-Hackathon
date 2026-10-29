@@ -264,6 +264,8 @@ struct ViewState: Decodable, Equatable {
     var sheet = ViewSheet()
     /// Milo's line for this screen (registry prompt, filled by the server).
     var prompt = ""
+    /// The prompt as TTS says it (server speak_text: symbols as words).
+    var promptSpeak = ""
     /// Values the screen's templated buttons fill from ("Step {step}").
     var slots: [String: String] = [:]
 
@@ -275,11 +277,12 @@ struct ViewState: Decodable, Equatable {
         tab = try c.decodeIfPresent(String.self, forKey: .tab) ?? ""
         sheet = try c.decodeIfPresent(ViewSheet.self, forKey: .sheet) ?? ViewSheet()
         prompt = try c.decodeIfPresent(String.self, forKey: .prompt) ?? ""
+        promptSpeak = try c.decodeIfPresent(String.self, forKey: .promptSpeak) ?? prompt
         slots = try c.decodeIfPresent([String: String].self, forKey: .slots) ?? [:]
     }
 
     private enum CodingKeys: String, CodingKey {
-        case current, stack, tab, sheet, prompt, slots
+        case current, stack, tab, sheet, prompt, slots, promptSpeak = "prompt_speak"
     }
 }
 
@@ -377,6 +380,56 @@ struct RunSummary: Decodable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case runId = "run_id", protocolId = "protocol_id", protocolName = "protocol_name",
              startedAt = "started_at", endedAt = "ended_at", status, summary, label, number, day, state
+    }
+}
+
+/// Where the owner's turn is on the server (live `stage` / SSE kind "stage";
+/// server api._stage): heard, thinking, searching, summarizing, done, failed.
+/// The voice state follows these; `say` is a line to speak once.
+struct TurnStage: Decodable, Equatable {
+    var stage: String
+    var text: String?
+    var query: String?
+    var searchId: String?
+    var say: String?
+    var reply: String?
+    var reason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case stage, text, query, say, reply, reason, searchId = "search_id"
+    }
+}
+
+/// One web source an answer cites (Spark url_citation).
+struct WebSource: Decodable, Equatable {
+    var title: String
+    var url: String
+    var domain: String
+}
+
+/// One answered web search (server/search.py); day/time are server labels.
+struct WebSearch: Decodable, Identifiable, Equatable {
+    var id: String
+    var ts: Double
+    var question: String
+    var answerShort: String
+    var detail: String
+    var sources: [WebSource]
+    var runId: String?
+    var day: String
+    var time: String
+    /// "cited": the answer cites its sources; "pages": only the pages searched.
+    var basis: String?
+    /// pending (searching now), ok, or why not: no_source / timeout / canceled / error.
+    var status: String?
+    /// Why not, as Milo said it (failed searches).
+    var line: String?
+
+    var cited: Bool { basis != "pages" }
+
+    enum CodingKeys: String, CodingKey {
+        case id, ts, question, detail, sources, day, time, basis, status, line
+        case answerShort = "answer_short", runId = "run_id"
     }
 }
 
