@@ -114,6 +114,18 @@ with patch("httpx.AsyncClient", FakeClient):
     assert "run_view(+target)" in perf["description"], perf["description"][:200]
     assert "Backup well: read free_wells first" in perf["description"]
     assert "REPORTED finished only" in perf["description"]
+    screen = perf["parameters"]["properties"]["screen"]
+    assert screen["enum"] == [*api.SCREEN_IDS, None], screen  # registry ids only
+    # Blank required args ask instead of failing, for every action (one gate).
+    for blank in (None, "", "null", " None "):
+        out = api._expand_perform([{"name": "perform", "call_id": "c1",
+                                    "args": {"action": "navigate", "screen": blank}}])
+        assert out == [{"name": "ask", "args": {"question": "Which screen?"}, "call_id": "c1"}], out
+    out = api._expand_perform([{"name": "perform", "args": {"action": "mark_done", "wells": "null"}}])
+    assert out[0]["args"]["question"] == "Which wells?", out
+    out = api._expand_perform([{"name": "perform", "args": {"action": "navigate", "screen": "home",
+                                                            "target": "null"}}])
+    assert out[0]["name"] == "navigate" and out[0]["args"] == {"screen": "home"}, out
     rr = next(t for t in body["tools"] if t.get("name") == "read_record")
     assert "free_wells" in rr["parameters"]["properties"]["kind"]["enum"], rr
     assert "run" not in rr["parameters"]["properties"], "scope is view.target"

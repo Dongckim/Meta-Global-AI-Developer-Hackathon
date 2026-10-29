@@ -261,6 +261,7 @@ smoke + iPad check.
   only when accepted (`onWake` returns it); a rejected one re-arms on a
   fresh task. Every capture exit releases its trigger (the wake path leaked
   it, so the 2nd "Hey Pip" was ignored as "starting").
+
 - Per-step done (API 5): `record.done` is a log of {step (1-based), well,
   source, ts}, one per (step, well), sorted by step then well; excluded
   stays per well across steps. mark_done{wells, step?} lands on the current
@@ -269,6 +270,10 @@ smoke + iPad check.
   ring); wells done only in other steps are dimmed; others are planned
   (group ring). CSV hand-off rows carry step/source/ts. API 4 bare-well
   records migrate on load as step 1 (the step was never recorded).
+- Model action gate (`_expand_perform`, one place): blank placeholders
+  (null, "", "null", "none") are dropped, and an action missing a
+  REQUIRED_ARGS entry becomes ask() ("Which screen?") instead of a failure
+  line. navigate.screen is an enum of the screen registry ids.
 
 ## Standing rules (carried over)
 

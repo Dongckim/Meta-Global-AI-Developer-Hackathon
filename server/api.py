@@ -168,8 +168,7 @@ TOOLS = [
         "open{target} (well/screen/run/original/importer); back; make_robot; "
         "edit_draft{path,value} (draft_open only); "
         "retry_sync; skip_sync (setup screen only). Never answer_card. "
-        "Screens: home, setup, protocol_detail, run_view(+target), "
-        "protocol_source(+target), protocol_review, main, well_card, robot_preview. "
+        "Screens: navigate.screen enum; run_view(+target), protocol_source(+target). "
         "Backup well: read free_wells first, then act on the first candidate at once.",
         {
             "action": {"type": "string", "enum": PERFORM_ACTIONS},
@@ -181,7 +180,7 @@ TOOLS = [
             "label": _opt({"type": "string"}),
             "note": _opt({"type": "string"}),
             "reason": _opt({"type": "string"}),
-            "screen": _opt({"type": "string"}),
+            "screen": {"type": ["string", "null"], "enum": [*SCREEN_IDS, None]},
             "step": _opt({"type": "integer"}),
             "path": _opt({"type": "string"}),
             "value": _opt({"type": "string"}),
@@ -557,12 +556,35 @@ def _answer_cards(ans: str, session: dict):
     return [], res["messages"], reply, 0, "card", res["cards"], res["info"], []
 
 
+#: Args an action can't run without. A missing one becomes ask(), never a
+#: failure line ("I couldn't open the null screen").
+REQUIRED_ARGS = {
+    "mark_done": ["wells"], "exclude_well": ["well"], "record_redo": ["wells"],
+    "add_note": ["target", "text"], "edit_note": ["text"],
+    "save_tip": ["step_id", "text"], "set_timer": ["minutes"],
+    "navigate": ["screen"], "open": ["target"], "edit_draft": ["path", "value"],
+}
+ASK_FOR = {
+    "wells": "Which wells?", "well": "Which well?", "target": "Which one?",
+    "text": "What should it say?", "step_id": "Which step?",
+    "minutes": "How many minutes?", "screen": "Which screen?",
+    "path": "Which field?", "value": "What value?",
+}
+
+
+def _blank(v) -> bool:
+    """Model placeholders for "no value": null, "", "null", "none", "undefined"."""
+    return v is None or (isinstance(v, str) and v.strip().lower() in ("", "null", "none", "undefined", "n/a"))
+
+
 def _expand_perform(calls: list) -> list:
     """perform(action, args) -> the action call the handler takes.
 
-    Unknown actions flow through (the handler drops them, as with unknown
-    tools before); answer_card from the model flows through too and is
-    rejected by the handler, so no model path can touch card state.
+    The one gate for every model action: blank placeholders are dropped,
+    and an action missing a required arg becomes ask() for it. Unknown
+    actions flow through (the handler drops them, as with unknown tools
+    before); answer_card from the model flows through too and is rejected
+    by the handler, so no model path can touch card state.
     """
     out = []
     for c in calls:
@@ -571,7 +593,15 @@ def _expand_perform(calls: list) -> list:
             continue
         a = c.get("args") or {}
         action = a.get("action")
-        rest = {k: v for k, v in a.items() if k != "action" and v is not None}
+        rest = {k: v for k, v in a.items() if k != "action" and not _blank(v)}
+        missing = [k for k in REQUIRED_ARGS.get(action, []) if k not in rest]
+        if missing:
+            _log_drop(action, a, f"ask: missing {missing[0]}")
+            ask = {"name": "ask", "args": {"question": ASK_FOR.get(missing[0], "Which one?")}}
+            if c.get("call_id"):
+                ask["call_id"] = c["call_id"]
+            out.append(ask)
+            continue
         if action not in PERFORM_ACTIONS:
             _log_drop("perform", a,
                       "rejected: answer_card" if action == "answer_card"
