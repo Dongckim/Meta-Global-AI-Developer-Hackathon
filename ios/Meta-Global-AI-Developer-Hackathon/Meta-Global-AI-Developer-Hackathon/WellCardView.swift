@@ -2,10 +2,8 @@ import SwiftUI
 
 // Well card, ver 2 (Figma ④ 37:13833): the bench's side column shows one
 // well (the plate stays, with the well ringed). Data: snapshot notes (text,
-// step), done marks per (step, well), plan steps (amounts), conditions,
+// source, step), done marks per (step, well), plan steps (amounts), conditions,
 // exclusions, redo. Button: registry well_card `Close` (= back).
-// Server to do: a note's source (voice / typed / tap) so the line under it
-// can say "Voice · step 1"; today it says the step only.
 
 struct WellCardSide: View {
     let well: String
@@ -69,10 +67,18 @@ struct WellCardSide: View {
         VStack(alignment: .leading, spacing: 18 * u) {
             Text("“\(m.text)”").font(.system(size: 28 * u)).tracking(-0.34 * u)
                 .foregroundStyle(Theme.text1).lineLimit(3)
-            let meta = [m.step.map { "Step \($0)" }, more > 0 ? "+\(more)" : nil].compactMap { $0 }
+            // "Voice · step 1": how it came in, then when
+            let meta = [m.source.map { $0.prefix(1).uppercased() + $0.dropFirst() },
+                        m.step.map { (m.source == nil ? "Step " : "step ") + "\($0)" },
+                        more > 0 ? "+\(more)" : nil].compactMap { $0 }
             if !meta.isEmpty {
-                Text(meta.joined(separator: " · ")).font(.system(size: 22 * u)).tracking(-0.13 * u)
-                    .foregroundStyle(Theme.text2)
+                HStack(spacing: 14 * u) {
+                    if let icon = m.source.flatMap({ ["voice": "mic", "tap": "hand.tap", "typed": "keyboard"][$0] }) {
+                        Image(systemName: icon).font(.system(size: 20 * u))
+                    }
+                    Text(meta.joined(separator: " · ")).font(.system(size: 22 * u)).tracking(-0.13 * u)
+                }
+                .foregroundStyle(Theme.text2)
             }
         }
         .padding(.horizontal, 36 * u).padding(.vertical, 32 * u)

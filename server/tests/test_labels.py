@@ -115,4 +115,24 @@ titles = [s["short_title"] for s in st.snapshot()["plan"]["steps"]]
 assert all(t and len(t.split()) <= 4 for t in titles), titles
 assert "short_title" not in st.r["plan"]["steps"][0], "rule fills the snapshot, never the record"
 print("LB6 ok: every step has a short screen title")
+
+# LB7. Cards carry their own title / detail (pip_voice.json `cards`), notes
+# their source, conditions their plate letters; the app never splits text.
+st = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+st.start_demo_run()
+st.r["step_index"] = 2
+sess = {}
+r = st.apply_calls([{"name": "mark_done", "args": {"wells": ["A1"]}}], "voice", "A1 done", "grammar", sess)
+card = r["cards"][0]
+assert (card["title"], card["detail"]) == ("A1 isn't in this plan", "Record anyway?"), card
+assert card["question"] != card["title"], "the spoken question stays its own sentence"
+r = st.apply_calls([{"name": "exclude_well", "args": {"well": "C3", "reason": "bubble"}}], "voice", "x", "grammar", sess)
+assert (r["cards"][0]["title"], r["cards"][0]["detail"]) == ("Exclude C3?", "Drug A · bubble"), r["cards"][0]
+st.apply_calls([{"name": "add_note", "args": {"target": "C5", "text": "cloudy"}}], "voice", "x", "grammar", sess)
+st.apply_calls([{"name": "add_note", "args": {"target": "C6", "text": "ok"}}], "tap", "x", "tap", sess)
+assert [n["source"] for n in st.r["notes"][-2:]] == ["voice", "tap"], st.r["notes"][-2:]
+abbrs = {k: c["abbr"] for k, c in st.snapshot()["plan"]["conditions"].items()}
+assert abbrs == {"ctrl": "Ct", "drug_A": "A", "drug_B": "B"}, abbrs
+assert L.condition_abbrs({"a": {"label": "Low"}, "b": {"label": "Light"}}) == {"a": "Lo", "b": "Li"}
+print("LB7 ok: card title/detail, note source, plate letters")
 print("ALL PASS")

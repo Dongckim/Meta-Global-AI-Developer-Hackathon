@@ -76,7 +76,7 @@ RAW = {
     "short_title": "Methods",
     "liquids": [{"id": "media", "name": "media", "concentration": None,
                  "prep": None, "quote": S1}],
-    "conditions": [{"id": "control", "label": "control", "treatments": ["media"],
+    "conditions": [{"id": "control", "label": "control", "abbr": "", "treatments": ["media"],
                     "replicates": 5, "wells": None,
                     "quote": "Seed cells in control, drug A, and drug B wells, 5 replicates each."}],
     "steps": [{"kind": "pipette", "text": "add media", "short_title": "", "quote": S1,

@@ -29,6 +29,48 @@ def shorten_title(title: str) -> str:
     return " ".join(t.split()[:4]) or (title or "").strip()
 
 
+#: Lab words with a usual short form; anything else follows the rule.
+_ABBR_WORDS = {"control": "Ct", "vehicle": "Vh", "blank": "Bk", "untreated": "Un"}
+
+
+def condition_abbrs(labels: dict) -> dict:
+    """Plate letters per condition (key -> label): the extracted abbr if any,
+    else a known lab word's short form ("Control" -> "Ct"), else a short
+    last word ("Drug A" -> "A"), else the first letter; letters two
+    conditions would share grow to two letters. At most 3 characters."""
+    out = {}
+    for key, c in labels.items():
+        own = ((c or {}).get("abbr") or "").strip()[:3]
+        label = ((c or {}).get("label") or key or "").strip()
+        words = label.split()
+        out[key] = own or _ABBR_WORDS.get(label.lower()) or (
+            words[-1] if words and len(words) > 1 and len(words[-1]) <= 2 else label[:1].upper())
+    for _ in range(2):  # shared letters grow: initials, then 2, then 3 letters
+        dup = {a for a in out.values() if list(out.values()).count(a) > 1}
+        for key, a in list(out.items()):
+            if a not in dup or ((labels[key] or {}).get("abbr") or "").strip():
+                continue
+            label = ((labels[key] or {}).get("label") or key).strip()
+            initials = "".join(w[:1].upper() for w in label.split())
+            flat = label.replace(" ", "")
+            out[key] = next(c for c in (initials if len(initials) > 1 else "", flat[:2].title(),
+                                        flat[:3].title()) if c and len(c) > len(a) - 1 and c != a)
+    return out
+
+
+def card_lines(kind: str, slots: dict) -> tuple[str, str]:
+    """A card's title and detail from pip_voice.json `cards` (the kind's
+    template, else `default`). An empty slot drops its " · " part."""
+    from collections import defaultdict
+    from server.tone import section
+    lines = section("cards")
+    tpl = lines.get(kind) if isinstance(lines.get(kind), dict) else lines.get("default") or {}
+    fill = lambda t: (t or "").format_map(defaultdict(str, {k: v for k, v in slots.items() if v is not None}))
+    title = fill(tpl.get("title") or "{question}").strip()
+    detail = " · ".join(p.strip() for p in fill(tpl.get("detail") or "").split(" · ") if p.strip())
+    return title or slots.get("question") or "", detail
+
+
 def step_short_title(step: dict) -> str:
     """Screen title of a plan step (<= 4 words): the extracted short_title,
     else "Add <liquid>" for a pipette step, else the step sentence through

@@ -46,8 +46,9 @@ EXTRACT_PROMPT = (
     "(e.g. Drug A/B Dosing), or empty. "
     "liquids: reagents as {id, name, concentration, prep, quote} with short "
     "lowercase ids; quote is the verbatim sentence each liquid comes from. "
-    "conditions: experimental conditions as {id, label, treatments, "
-    "replicates, wells, quote}; treatments holds liquid ids; replicates is "
+    "conditions: experimental conditions as {id, label, abbr, treatments, "
+    "replicates, wells, quote}; abbr is the plate letters, at most 3 "
+    "characters (Ct, A, B); treatments holds liquid ids; replicates is "
     "the count or null when unstated; wells holds WellRef strings (B2, "
     "B2-B8) ONLY when the document states positions, else null. "
     "steps: bench actions in document order as {kind, text, short_title, quote, "
@@ -610,6 +611,7 @@ def build_draft(raw: dict, evidence: dict, source: str) -> dict:
         if not key or key in conditions:
             continue
         conditions[key] = {"label": c.get("label") or key,
+                           "abbr": (c.get("abbr") or "").strip()[:3],
                            "treatments": [t for t in (c.get("treatments") or [])
                                           if isinstance(t, str)],
                            "replicates": c.get("replicates"),
@@ -1201,6 +1203,7 @@ def build_start_plan(plan: dict) -> dict:
         c = plan["conditions"][key] or {}
         conditions[key] = {
             "label": c.get("label") or key,
+            "abbr": c.get("abbr") or "",
             "treatments": [(liquids.get(t) or {}).get("name", t)
                            for t in (c.get("treatments") or [])],
             "replicates": c.get("replicates") if isinstance(c.get("replicates"), int)

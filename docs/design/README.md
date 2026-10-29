@@ -46,4 +46,11 @@ Status: **done** = matches ver 2 · **old** = exists in the pre-ver-2 style ·
 | — | ⑥ Learn | 37:14460 | later (out of scope) | — |
 | Private | Private variants of the above | section 43:2 | mode tokens only | per bundle |
 
+## Later
+
+- ③b checklist **"One by one"** (answer the cards one at a time): needs a card
+  mode in the server view and an answer word; the checklist shows "Yes to all"
+  only until then.
+- ⑥ Learn.
+
 Update the status column when a bundle lands.

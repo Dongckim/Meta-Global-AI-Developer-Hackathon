@@ -591,6 +591,9 @@ class RecordStore:
         snap = json.loads(json.dumps(self.r))
         for st in (snap.get("plan") or {}).get("steps") or []:
             st["short_title"] = labels.step_short_title(st)  # one rule, old plans included
+        conds = (snap.get("plan") or {}).get("conditions") or {}
+        for key, abbr in labels.condition_abbrs(conds).items():
+            conds[key]["abbr"] = abbr  # plate letters, same rule for old plans
         if snap.get("run"):  # what the app shows instead of the run id
             snap["run"]["label"] = self.run_label(self.active_run_doc() or snap["run"])["display"]
         return snap
@@ -875,7 +878,8 @@ class RecordStore:
         res.setdefault("told", []).append({"key": key, "wells": list(wells), "slots": slots,
                                            "line": line})
 
-    def _card(self, res: dict, kind: str, question: str, detail, payload: dict) -> dict:
+    def _card(self, res: dict, kind: str, question: str, detail, payload: dict,
+              slots: dict | None = None) -> dict:
         key = self._card_key(payload)
         same = {k: v for k, v in (payload or {}).items() if not k.startswith("_")}
         for c in self.r["cards"].values():
@@ -886,11 +890,23 @@ class RecordStore:
         for cid in [cid for cid, c in self.r["cards"].items()
                     if self._card_key(c.get("payload")) == key]:
             del self.r["cards"][cid]
+        p = payload or {}
+        wells = p.get("wells") or ([p["well"]] if p.get("well") else [])
+        conds = (self.r.get("plan") or {}).get("conditions") or {}
+        group = next((c.get("label") for c in conds.values() if wells and wells[0] in (c.get("wells") or [])), "")
+        target = p.get("target") if isinstance(p.get("target"), int) else None
+        title, sub = labels.card_lines(kind, {
+            "question": question, "detail": detail or "", "wells": join_wells_ranges(wells),
+            "group": group, "reason": p.get("reason"), "note": p.get("note"), "label": p.get("label"),
+            "step": target, "done": target - 1 if target else None,
+            "minutes": fmt_minutes(p["minutes"]) if p.get("minutes") is not None else None,
+            **(slots or {})})
         card = {
             "id": uuid.uuid4().hex[:8],
             "kind": kind,
-            "question": question,
-            "detail": detail,
+            "question": question,  # spoken
+            "title": title,  # shown big, and the detail small (pip_voice.json `cards`)
+            "detail": sub,
             "payload": payload,
             "ts": time.time(),
         }
@@ -966,10 +982,9 @@ class RecordStore:
                 res["messages"].append(f"I couldn't mark that: there's no step {step}.")
                 return
             if not force and good and self.unplanned(good, step):
-                self._card(res, "catch",
-                           say("catch_off_plan", session,
-                               wells=join_wells_ranges(self.unplanned(good, step))),
-                           None, {"op": "mark_done", "wells": good, "step": step})
+                off = join_wells_ranges(self.unplanned(good, step))
+                self._card(res, "catch", say("catch_off_plan", session, wells=off),
+                           None, {"op": "mark_done", "wells": good, "step": step}, slots={"wells": off})
                 return
             msg = ""
             if good:
@@ -1062,6 +1077,7 @@ class RecordStore:
                 "raw": origin,
                 "ts": now,
                 "route": route,
+                "source": {"voice": "voice", "tap": "tap"}.get(source, "typed"),
                 "step": self.current_step(),
                 "wells": parse_wellref(target),
                 "history": [],

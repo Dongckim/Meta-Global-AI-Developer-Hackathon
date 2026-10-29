@@ -51,6 +51,7 @@
             "required": ["label", "treatments", "replicates", "wells"],
             "properties": {
               "label": {"type": "string"},
+              "abbr": {"type": "string", "description": "Plate letters, <= 3 chars (labels.condition_abbrs)."},
               "treatments": {"type": "array", "items": {"type": "string"}},
               "replicates": {"type": "integer"},
               "wells": {"type": "array", "items": {"type": "string"}}
@@ -119,6 +120,7 @@
           "raw": {"type": "string"},
           "ts": {"type": "number"},
           "route": {"type": "string"},
+          "source": {"enum": ["voice", "tap", "typed"], "description": "How the note came in (absent on older notes)."},
           "step": {"type": "integer", "description": "1-based step the note was taken in (absent on older notes)."},
           "wells": {"type": "array", "items": {"type": "string"}},
           "history": {
@@ -177,8 +179,9 @@
         "properties": {
           "id": {"type": "string"},
           "kind": {"type": "string"},
-          "question": {"type": "string"},
-          "detail": {"type": ["string", "null"]},
+          "question": {"type": "string", "description": "Spoken."},
+          "title": {"type": "string", "description": "Shown big (pip_voice.json cards)."},
+          "detail": {"type": ["string", "null"], "description": "Shown small under the title."},
           "ts": {"type": "number"},
           "payload": {"type": "object"}
         }

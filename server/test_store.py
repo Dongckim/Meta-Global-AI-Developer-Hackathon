@@ -105,7 +105,7 @@ class StoreTest(unittest.TestCase):
     def test_exclude_card_roundtrip(self):
         r = self.apply([T("exclude_well", well="C3", reason="contaminated")])
         self.assertEqual(r["cards"][0]["question"], "Drop C3?")
-        self.assertEqual(r["cards"][0]["detail"], "contaminated")
+        self.assertEqual(r["cards"][0]["detail"], "Drug A · contaminated")  # group · reason
         msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
         self.assertEqual(msg, "C3 excluded (contaminated)")
         self.assertEqual(self.s.r["excluded"], {"C3": "contaminated"})

@@ -153,6 +153,15 @@
   "already_out": [
     "{wells_spoken} is already out."
   ],
+  "cards": {
+    "_note": "What a card shows: title (big line) and detail (small line) per card kind; {question} / {detail} are the spoken question and the old detail. Slots: wells, group, reason, note, step, done, minutes, label. An empty slot drops its ' · ' part.",
+    "confirm_exclude": {"title": "Exclude {wells}?", "detail": "{group} · {reason}"},
+    "confirm_redo": {"title": "Redo {wells}?", "detail": "{group} · {note}"},
+    "catch": {"title": "{wells} isn't in this plan", "detail": "Record anyway?"},
+    "next_step": {"title": "Move to step {step}?", "detail": "Step {done} done"},
+    "end_run": {"title": "Finish this run?", "detail": ""},
+    "default": {"title": "{question}", "detail": "{detail}"}
+  },
   "also_ask": [
     "Should I also {what}?",
     "Want me to {what} too?"

@@ -96,11 +96,11 @@ LIQUIDS = [
     {"id": "drug_b", "name": "drug B", "concentration": None, "prep": None, "quote": S4},
 ]
 CONDITIONS = [
-    {"id": "control", "label": "control", "treatments": ["vehicle"],
+    {"id": "control", "label": "control", "abbr": "", "treatments": ["vehicle"],
      "replicates": 5, "wells": None, "quote": SEED_Q},
-    {"id": "drug_a", "label": "drug A", "treatments": ["drug_a"],
+    {"id": "drug_a", "label": "drug A", "abbr": "", "treatments": ["drug_a"],
      "replicates": 5, "wells": None, "quote": SEED_Q},
-    {"id": "drug_b", "label": "drug B", "treatments": ["drug_b"],
+    {"id": "drug_b", "label": "drug B", "abbr": "", "treatments": ["drug_b"],
      "replicates": 5, "wells": None, "quote": SEED_Q},
 ]
 
@@ -212,7 +212,7 @@ with patch("httpx.AsyncClient", FakeClient):
 
     # P3. invented numbers and unstated wells flag, never silent.
     raw = {"liquids": [], "conditions": [
-        {"id": "control", "label": "control", "treatments": [], "replicates": 7,
+        {"id": "control", "label": "control", "abbr": "", "treatments": [], "replicates": 7,
          "wells": ["B2", "B3"], "quote": SEED_Q}], "steps": []}
     d = proto.build_draft(raw, demo_evidence(), "x.pdf")
     codes = {(i["path"], i["code"]) for i in d["review"]}
@@ -228,7 +228,7 @@ with patch("httpx.AsyncClient", FakeClient):
         "Plate: control wells are B2, B3, B4, B5, B6.\n")
     raw = {"liquids": [{"id": "x", "name": "x", "concentration": None,
                         "prep": None, "quote": "Seed cells nowhere."}],
-           "conditions": [{"id": "control", "label": "control", "treatments": [],
+           "conditions": [{"id": "control", "label": "control", "abbr": "", "treatments": [],
                            "replicates": 5, "wells": ["B2-B6"],
                            "quote": "control wells are B2, B3, B4, B5, B6."}],
            "steps": [
@@ -263,7 +263,7 @@ with patch("httpx.AsyncClient", FakeClient):
     codes = {(i["path"], i["code"]) for i in d["review"]}
     assert any(code == "no_row" for _, code in codes), d["review"]
     big = {"liquids": [], "conditions": [
-        {"id": "control", "label": "control", "treatments": [], "replicates": 11,
+        {"id": "control", "label": "control", "abbr": "", "treatments": [], "replicates": 11,
          "wells": None, "quote": SEED_Q}], "steps": []}
     d = proto.build_draft(big, demo_evidence(), "x.pdf")
     codes = {(i["path"], i["code"]) for i in d["review"]}
@@ -362,7 +362,7 @@ with patch("httpx.AsyncClient", FakeClient):
     # P4b. Start expands repeats into sequential live steps.
     wash = {"liquids": {"pbs": {"name": "PBS", "concentration": None,
                                "prep": None, "quote": "q"}},
-            "conditions": {"control": {"label": "control", "treatments": [],
+            "conditions": {"control": {"label": "control", "abbr": "", "treatments": [],
                                       "replicates": 2, "wells": ["B2", "B3"],
                                       "quote": "q"}},
             "steps": [{"kind": "wash", "text": "wash twice", "short_title": "", "quote": "q",
@@ -453,7 +453,7 @@ with patch("httpx.AsyncClient", FakeClient):
         "Experimental design\nGroup\nTreatment\nReplicates\nControl\n"
         "Vehicle (PBS)\n5\nDrug A\nDrug A, 10 uM working solution\n5\n")
     raw = {"title": "Experimental design", "short_title": "Experimental Design", "liquids": [], "conditions": [
-        {"id": "control", "label": "Control", "treatments": [], "replicates": 5,
+        {"id": "control", "label": "Control", "abbr": "", "treatments": [], "replicates": 5,
          "wells": None, "quote": "Use one row of the plate per group."}], "steps": []}
     d = proto.build_draft(raw, ev, "x.pdf")
     c = d["plan"]["conditions"]["control"]
@@ -495,7 +495,7 @@ with patch("httpx.AsyncClient", FakeClient):
         (i["path"], i["code"]) for i in d["review"]}, d["review"]
     assert d["plan"]["steps"][0]["quote_source"] == "model", d["plan"]["steps"][0]
     raw = {"liquids": [], "conditions": [
-        {"id": "control", "label": "control", "treatments": [], "replicates": 10,
+        {"id": "control", "label": "control", "abbr": "", "treatments": [], "replicates": 10,
          "wells": None, "quote": SEED_Q}], "steps": []}
     d = proto.build_draft(raw, demo_evidence(), "x.pdf")
     assert ("conditions.control.replicates", "ungrounded_value") in {

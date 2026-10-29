@@ -67,6 +67,15 @@ struct PipTests {
         lab.sync(Self.snapshot())
         #expect(lab.doneSteps("C2") == [2] && lab.doneSteps("C3").isEmpty)
         #expect(lab.stepLine(2) == "s2" && lab.stepLine(9) == "")
+        // server-made card lines, note source and plate letters decode as given
+        let card = try JSONDecoder().decode(ServerCard.self, from: Data(
+            #"{"id": "c", "kind": "catch", "question": "Wait.", "title": "A1 isn't in this plan", "detail": "Record anyway?", "ts": 1}"#.utf8))
+        #expect(card.title == "A1 isn't in this plan" && card.detail == "Record anyway?")
+        let cond = try JSONDecoder().decode(PlanCondition.self, from: Data(#"{"label": "Control", "abbr": "Ct", "wells": ["B2"]}"#.utf8))
+        #expect(cond.abbr == "Ct")
+        let memo = try JSONDecoder().decode(Memo.self, from: Data(
+            #"{"id": "m", "target": "C2", "text": "t", "ts": 1, "source": "voice", "step": 1, "history": []}"#.utf8))
+        #expect(memo.source == "voice" && memo.step == 1)
         // card buttons come from the registry, one set per card layout
         let cards = loadScreens().cards
         #expect(Set(cards.keys) == ["single", "next_step", "checklist"])

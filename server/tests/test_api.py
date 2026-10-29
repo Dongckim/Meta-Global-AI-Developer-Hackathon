@@ -270,7 +270,7 @@ with patch("httpx.AsyncClient", FakeClient):
     r = c.post("/orchestrate", json={"text": "exclude C7, contaminated", "session": "s10"})
     j = r.json()
     assert j["route"] == "grammar" and j["reply"] == "Drop C7?", j
-    assert j["cards"] and j["cards"][0]["detail"] == "contaminated", j
+    assert j["cards"] and j["cards"][0]["detail"] == "Drug A · contaminated", j  # group · reason
     assert "C7" not in api.store.r["excluded"]
     r = c.post("/orchestrate", json={"text": "note C3, I see bubbles", "session": "s10"})
     j = r.json()

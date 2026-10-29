@@ -2,10 +2,10 @@ import SwiftUI
 
 // Confirm cards, ver 2 (Figma ③ 37:13714 single, ③b 37:13742 checklist,
 // ③c 37:13777 catch, ③d 37:13804 next step): while a card waits, it takes
-// the bench. Data: snapshot `cards` (question, detail, kind, payload op /
-// wells / target), plan steps for the next-step bars, conditions for the
-// well's group. Buttons: registry `cards` (answer words, so tap = voice).
-// Server to do: "One by one" for the checklist, a catch title/prompt split.
+// the bench. Data: snapshot `cards` (title and detail made by the server
+// from pip_voice.json, kind, payload op / wells / target) and plan steps for
+// the next-step bars. Buttons: registry `cards` (answer words, so tap =
+// voice). Later: "One by one" for the checklist (docs/design/README.md).
 
 struct ConfirmScreen: View {
     @Bindable var lab: LabState
@@ -52,9 +52,8 @@ struct ConfirmScreen: View {
 
     private func single(_ c: ServerCard) -> some View {
         VStack(spacing: 0) {
-            if c.kind == "next_step" {
-                Text("Step \(max(1, (c.payload?.target ?? lab.stepIndex + 2) - 1)) done")
-                    .font(.system(size: 28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text2)
+            if c.kind == "next_step", let d = c.detail, !d.isEmpty {
+                Text(d).font(.system(size: 28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text2)
                     .padding(.bottom, 22 * u)
             } else if c.kind == "catch" {
                 Circle().fill(Theme.text1).frame(width: 69 * u, height: 69 * u)
@@ -65,7 +64,7 @@ struct ConfirmScreen: View {
                 CardWellIcon(op: c.payload?.op, well: w, lab: lab, d: 72 * u, ring: true)
                     .padding(.bottom, 20 * u)
             }
-            Text(c.question)
+            Text(c.title ?? c.question)
                 .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u)
                 .foregroundStyle(Theme.text1).multilineTextAlignment(.center)
                 .lineLimit(2).minimumScaleFactor(0.6)
@@ -74,20 +73,13 @@ struct ConfirmScreen: View {
                 StepBars(count: lab.steps.count, done: target - 1, current: target - 1,
                          rest: Theme.cardOff, u: u)
                     .padding(.top, 30 * u)
-            } else if let sub = subline(c) {
+            } else if let sub = c.detail, !sub.isEmpty {
                 Text(sub).font(.system(size: 28 * u)).tracking(-0.34 * u)
                     .foregroundStyle(Theme.text1).multilineTextAlignment(.center)
                     .lineLimit(2).padding(.top, 24 * u)
             }
         }
         .frame(maxWidth: .infinity)
-    }
-
-    /// "Drug A · bubble": the well's group, then the card's detail.
-    private func subline(_ c: ServerCard) -> String? {
-        let group = c.payload?.allWells.first.flatMap { lab.conditionLabel($0) }
-        let bits = [group, c.detail].compactMap { $0?.isEmpty == false ? $0 : nil }
-        return bits.isEmpty ? nil : bits.joined(separator: " · ")
     }
 
     private var checklist: some View {
@@ -100,7 +92,8 @@ struct ConfirmScreen: View {
                 HStack(spacing: 18 * u) {
                     CardWellIcon(op: c.payload?.op, well: c.payload?.allWells.first, lab: lab,
                                  d: 48 * u, ring: false)
-                    Text(c.question.hasSuffix("?") ? String(c.question.dropLast()) : c.question)
+                    let t = c.title ?? c.question
+                    Text(t.hasSuffix("?") ? String(t.dropLast()) : t)
                         .font(.system(size: 28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text1)
                         .lineLimit(1).minimumScaleFactor(0.6)
                     Spacer(minLength: 0)

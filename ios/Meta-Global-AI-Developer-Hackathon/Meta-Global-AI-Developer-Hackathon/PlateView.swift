@@ -154,6 +154,11 @@ struct WellDot: View {
                     } else if redo {
                         Text("↻").font(.system(size: d * 0.4, weight: .semibold))
                             .foregroundStyle(filled ? .white : Theme.text1)
+                    } else if filled || now, let abbr = lab.abbrOf(well) {
+                        // group letters: white on a filled well, blue on a remaining target
+                        Text(abbr).font(.system(size: d * 17 / 48, weight: .semibold))
+                            .foregroundStyle(now ? Theme.polishBlue : .white)
+                            .lineLimit(1).minimumScaleFactor(0.5)
                     }
                 }
                 .overlay(alignment: .topTrailing) {

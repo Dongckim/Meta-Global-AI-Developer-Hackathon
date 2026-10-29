@@ -94,17 +94,20 @@ struct PlanStep: Decodable {
 
 struct PlanCondition: Decodable {
     var label: String
+    /// Plate letters ("Ct", "A"), <= 3 chars (server labels.condition_abbrs).
+    var abbr: String
     var treatments: [String]
     var replicates: Int
     var wells: [String]
 
     enum CodingKeys: String, CodingKey {
-        case label, treatments, replicates, wells
+        case label, abbr, treatments, replicates, wells
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
+        abbr = try c.decodeIfPresent(String.self, forKey: .abbr) ?? ""
         treatments = try c.decodeIfPresent([String].self, forKey: .treatments) ?? []
         wells = try c.decodeIfPresent([String].self, forKey: .wells) ?? []
         replicates = try c.decodeIfPresent(Int.self, forKey: .replicates) ?? wells.count
@@ -130,6 +133,8 @@ struct Memo: Decodable, Equatable, Identifiable {
     var text: String
     var raw: String?
     var ts: Double
+    /// voice / tap / typed (absent on older notes).
+    var source: String?
     /// 1-based step the note was taken in (absent on older notes).
     var step: Int?
     var history: [MemoEdit]
@@ -196,7 +201,9 @@ struct HistoryEntry: Decodable, Identifiable {
 struct ServerCard: Decodable, Equatable, Identifiable {
     var id: String
     var kind: String
+    /// Spoken; the card shows `title` and `detail` (server-made, never split here).
     var question: String
+    var title: String?
     var detail: String?
     var ts: Double
     /// What a yes would do (op and its wells / step); drawn, never acted on here.
@@ -681,6 +688,11 @@ final class LabState {
     /// Current-step targets not done or excluded yet.
     var remaining: [String] {
         currentPlanned.subtracting(done).subtracting(excluded.keys).sorted()
+    }
+
+    /// Plate letters of a well's group ("Ct"), nil when it has none.
+    func abbrOf(_ well: String) -> String? {
+        conditions.first { $0.value.wells.contains(well) }.flatMap { $0.value.abbr.isEmpty ? nil : $0.value.abbr }
     }
 
     func conditionLabel(_ well: String) -> String? {
