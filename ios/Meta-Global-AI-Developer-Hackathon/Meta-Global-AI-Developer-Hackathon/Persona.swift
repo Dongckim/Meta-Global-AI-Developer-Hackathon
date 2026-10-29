@@ -39,6 +39,28 @@ struct Persona: Decodable, Equatable {
         return file.live
     }()
 
+    /// A run mode's header label and Mode-screen line (pip_voice.json `modes`).
+    struct Mode: Decodable, Equatable {
+        var label: String
+        var line: String
+    }
+
+    /// full / private (missing file: empty, logged).
+    static let modes: [String: Mode] = {
+        struct File: Decodable { var modes: [String: Mode] }
+        guard let url = Bundle.main.url(forResource: "pip_voice", withExtension: "json"),
+              let data = try? Data(contentsOf: url) else { return [:] }
+        // the section also holds a "_note" string, so decode entry by entry
+        guard let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let m = raw["modes"] as? [String: Any] else {
+            Log.voice.error("[voice] modes missing in pip_voice.json")
+            return [:]
+        }
+        return m.compactMapValues { v in
+            (v as? [String: String]).flatMap { d in d["label"].map { Mode(label: $0, line: d["line"] ?? "") } }
+        }
+    }()
+
     /// Neutral stand-in when the bundled file is missing or broken (logged).
     static let fallback = Persona(agentName: "Assistant", wakePhrase: "", voice: "", quality: "premium",
                                   language: "en-US", rate: 0.52, pitch: 0.92)

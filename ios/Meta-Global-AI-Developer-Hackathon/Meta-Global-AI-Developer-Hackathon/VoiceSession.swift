@@ -845,7 +845,7 @@ struct TopHeaderView: View {
         let px = { (v: CGFloat) in Theme.px(v, in: width) }
         ZStack(alignment: .top) {
             HStack(spacing: px(12)) {
-                Image(systemName: "cloud").font(.system(size: px(22)))
+                Image(systemName: Theme.modeIcon).font(.system(size: px(22)))
                 Text(Theme.modeLabel).font(Theme.ui(px(22))).tracking(-0.012 * px(22))
             }
             .foregroundStyle(Theme.mutSay)

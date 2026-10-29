@@ -333,12 +333,20 @@ struct ContentView: View {
                     hintsBar.padding(.horizontal)
                     inputBar.padding(.horizontal).padding(.bottom)
                 }
+            } else if ["mode", "import_choice"].contains(lab.view.current.screen) {
+                // ⑤a / ⑤b start (Figma 37:13141, 37:13167)
+                stage { u in
+                    if lab.view.current.screen == "mode" {
+                        ModeScreen(buttons: buttons("mode"), u: u, perform: performButton)
+                    } else {
+                        ImportChoiceScreen(buttons: buttons("import_choice"), u: u, perform: performButton)
+                    }
+                }
             } else if let rid = viewingRun {
-                VStack(spacing: 0) {
-                    PastRunView(runId: rid, onBack: { sendAction("back") },
-                                onSource: openSource)
-                    hintsBar.padding(.horizontal)
-                    inputBar.padding(.horizontal).padding(.bottom)
+                // ⓪b run record (Figma 37:12931)
+                stage { u in
+                    RunRecordScreen(runId: rid, runs: runs, buttons: buttons("run_view"), u: u,
+                                    perform: performButton)
                 }
             } else if let pid = selectedProtocol {
                 VStack(spacing: 0) {
@@ -352,19 +360,23 @@ struct ContentView: View {
                     inputBar.padding(.horizontal).padding(.bottom)
                 }
             } else if showHome || lab.run == nil {
+                // ⓪ protocols (Figma 37:12877); a waiting card takes it like the bench
                 VStack(spacing: 0) {
-                    HomeView(
-                        protocols: protocols, runs: runs, cards: lab.cards,
-                        onImport: { showImporter = true },
-                        onReview: { sendAction("navigate", ["screen": "protocol_review"], quiet: false) },
-                        hasDraft: lab.draft != nil,
-                        onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
-                        onRun: { sendAction("open", ["target": "run:\($0)"]) },
-                        onAnswer: answer(id:ok:), onAnswerAll: answerAll,
-                        onSetup: { openSync() },
-                        onRefresh: loadLists)
-                    hintsBar.padding(.horizontal)
-                    inputBar.padding(.horizontal).padding(.bottom)
+                    stage { u in
+                        if lab.cards.isEmpty {
+                            ProtocolsHome(protocols: protocols, runs: runs, selectedId: nil,
+                                          activeRunId: lab.run?.runId, buttons: buttons("home"), u: u,
+                                          onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
+                                          onRun: { sendAction("open", ["target": "run:\($0)"]) },
+                                          perform: performButton)
+                        } else {
+                            ConfirmScreen(lab: lab, buttons: registry.cards, u: u,
+                                          onAnswer: answer(id:ok:), onAnswerAll: answerAll)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    }
+                    // settings + voice on/off: not in the design, kept so setup stays reachable
+                    inputBar.padding(.horizontal).padding(.bottom, 8)
                 }
             } else {
                 experimentView
@@ -392,6 +404,28 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity).padding(6).background(.orange)
             }
         }
+    }
+
+    /// A registry screen's Say buttons.
+    private func buttons(_ screen: String) -> [ScreenButton] {
+        screens.first { $0.id == screen }?.buttons ?? []
+    }
+
+    /// Taps send the registry button's action, as saying it would.
+    private func performButton(_ b: ScreenButton) {
+        sendAction(b.action, b.args ?? [:])
+    }
+
+    /// A ver 2 screen's stage: design px scaled to the space under the
+    /// header, the design's side margins, the canvas glow behind.
+    private func stage<V: View>(@ViewBuilder _ content: @escaping (CGFloat) -> V) -> some View {
+        GeometryReader { g in
+            let u = min(g.size.width / 1376, g.size.height / 764)
+            content(u)
+                .padding(.horizontal, 64 * u).padding(.vertical, 32 * u)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .background { BenchCanvas() }
     }
 
     /// The run bench is on screen (no source, past run, protocol or home).

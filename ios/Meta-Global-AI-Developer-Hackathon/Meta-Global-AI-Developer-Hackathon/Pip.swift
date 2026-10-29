@@ -786,6 +786,8 @@ struct ScreenButton: Decodable, Equatable {
     var say: String
     var action: String
     var args: [String: String]?
+    /// Small line under a choice card ("PDF · Word"); plain buttons have none.
+    var line: String?
 }
 
 /// Screen registry shared with the server (the bundled screens.json): the

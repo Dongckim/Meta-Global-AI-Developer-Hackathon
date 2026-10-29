@@ -243,9 +243,13 @@ enum Theme {
     /// Largest orb size factor (listening 1.32 x breathe 1.08): the header
     /// reserves this slot so the orb never pushes or covers the line.
     static let orbMaxScale: CGFloat = 1.32 * 1.08
-
-    /// Header mode label: the app has one mode (cloud + web search = "Full").
-    static let modeLabel = "Full"
+    /// Run mode tokens (Figma Private variants, section 43:2): one screen set,
+    /// only the header label and icon change. Labels come from pip_voice.json
+    /// `modes`; there is no Private mode yet, so the app shows Full.
+    enum RunMode: String { case full, `private` }
+    static let runMode = RunMode.full
+    static var modeLabel: String { Persona.modes[runMode.rawValue]?.label ?? runMode.rawValue.capitalized }
+    static var modeIcon: String { runMode == .full ? "cloud" : "lock" }
 
     // MARK: - Voice edge glow (design `.edge`, Apple-Intelligence style)
 
