@@ -117,6 +117,14 @@ final class SpeechBus: NSObject, AVSpeechSynthesizerDelegate {
         synth.stopSpeaking(at: .immediate)
     }
 
+    /// When TTS last started a word (the edge glow pulses on it).
+    private(set) var lastWordAt = Date.distantPast
+
+    func speechSynthesizer(_ s: AVSpeechSynthesizer, willSpeakRangeOfSpeechString r: NSRange,
+                           utterance u: AVSpeechUtterance) {
+        lastWordAt = Date()
+    }
+
     func speechSynthesizer(_ s: AVSpeechSynthesizer, didFinish u: AVSpeechUtterance) {
         pendingUtterances -= 1
         if pendingUtterances <= 0 { fireCompletions() }

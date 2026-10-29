@@ -160,6 +160,65 @@ enum Theme {
     static let readyGlow: Double = 1.2
     static let spin: Double = 0.8
 
+    // MARK: - Voice edge glow (design `.edge`, Apple-Intelligence style)
+
+    /// conic-gradient(#0071E3, #1E90FF, #5AC8FA, #B9ECFF, #5AC8FA, #1E90FF, #0071E3)
+    static let edgeListening: [Color] = [
+        Color(hex: 0x0071E3), Color(hex: 0x1E90FF), Color(hex: 0x5AC8FA), Color(hex: 0xB9ECFF),
+        Color(hex: 0x5AC8FA), Color(hex: 0x1E90FF), Color(hex: 0x0071E3),
+    ]
+    /// Speaking: the ②-5 voice (violet) aurora palette, same mirrored order.
+    static let edgeSpeaking: [Color] = [
+        Color(hex: 0x8C88FF), Color(hex: 0x9C9CFF), Color(hex: 0xB4B8FF), Color(hex: 0xD7A8FF),
+        Color(hex: 0xB4B8FF), Color(hex: 0x9C9CFF), Color(hex: 0x8C88FF),
+    ]
+    /// Design px at 1376, radius 32. By iPad review the soft band is thicker
+    /// than the design's (blur 16 / band 18) and its crisp 4 px line is left out.
+    static let edgeSoftBlur: CGFloat = 20
+    static let edgeSoftBand: CGFloat = 30
+    static let edgeRadius: CGFloat = 32
+    static let edgeSpin: Double = 2.6
+    static let edgeFade: Double = 0.5
+
+    struct EdgeStyle: Equatable {
+        var colors: [Color]
+        /// Seconds per turn; nil = no rotation (Reduce Motion).
+        var spin: Double?
+        /// Opacity multiplier (brightness).
+        var brightness: Double
+        /// Band width multiplier.
+        var thickness: CGFloat
+    }
+
+    /// Edge glow from voice state only. `level` = smoothed mic RMS, `pulse`
+    /// 0...1 decaying from the last TTS word. nil = not drawn (ready).
+    static func edgeStyle(for state: VoiceSession.State, level: Float, pulse: Double,
+                          reduceMotion: Bool) -> EdgeStyle? {
+        var s: EdgeStyle
+        switch state {
+        case .ready:
+            return nil
+        case .listening:
+            let n = CGFloat(min(1, max(0, level / 0.12)))
+            s = EdgeStyle(colors: edgeListening, spin: edgeSpin,
+                          brightness: 0.8 + 0.2 * Double(n), thickness: 1 + 0.6 * n)
+        case .transcribing, .thinking, .searching:
+            s = EdgeStyle(colors: edgeListening, spin: edgeSpin * 2, brightness: 0.55, thickness: 1)
+        case .speaking:
+            let p = min(1, max(0, pulse))
+            s = EdgeStyle(colors: edgeSpeaking, spin: edgeSpin,
+                          brightness: 0.8 + 0.2 * p, thickness: 1 + 0.35 * CGFloat(p))
+        }
+        if reduceMotion { s.spin = nil }
+        return s
+    }
+
+    /// Word pulse: 1 at a TTS word boundary, decaying with a 0.18 s constant.
+    static func wordPulse(since lastWord: Date, now: Date) -> Double {
+        let dt = now.timeIntervalSince(lastWord)
+        return dt < 0 ? 0 : exp(-dt / 0.18)
+    }
+
     // MARK: - Proportionate sizing (design canvas 1376 x 1032)
 
     /// Design width in px; sizes scale linearly with the real width.

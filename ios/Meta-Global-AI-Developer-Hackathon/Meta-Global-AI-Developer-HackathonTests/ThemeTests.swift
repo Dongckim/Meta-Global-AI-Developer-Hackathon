@@ -335,3 +335,37 @@ struct PermissionMapTests {
         #expect(AppPermission.localNetwork.state(serverAllowed: true) == .allowed)
     }
 }
+
+struct EdgeGlowTests {
+    @Test func stateMapping() {
+        #expect(Theme.edgeStyle(for: .ready, level: 1, pulse: 1, reduceMotion: false) == nil)
+        let quiet = Theme.edgeStyle(for: .listening, level: 0, pulse: 0, reduceMotion: false)!
+        let loud = Theme.edgeStyle(for: .listening, level: 0.5, pulse: 0, reduceMotion: false)!
+        #expect(quiet.colors == Theme.edgeListening && quiet.spin == Theme.edgeSpin)
+        #expect(loud.thickness > quiet.thickness && loud.brightness > quiet.brightness)
+        let think = Theme.edgeStyle(for: .thinking, level: 1, pulse: 0, reduceMotion: false)!
+        #expect(think.spin == Theme.edgeSpin * 2 && think.brightness < quiet.brightness)
+        let speak = Theme.edgeStyle(for: .speaking, level: 0, pulse: 1, reduceMotion: false)!
+        #expect(speak.colors == Theme.edgeSpeaking && speak.thickness > 1)
+        // Reduce Motion: no rotation, brightness still follows the voice.
+        let still = Theme.edgeStyle(for: .listening, level: 0.5, pulse: 0, reduceMotion: true)!
+        #expect(still.spin == nil && still.brightness == loud.brightness)
+    }
+
+    @Test func levelFollowerAttacksFastReleasesSlow() {
+        var f = LevelFollower()
+        let up = f.step(1, dt: 0.05) // one attack constant
+        #expect(up > 0.6)
+        var g = LevelFollower()
+        _ = g.step(1, dt: 10)
+        let down = g.step(0, dt: 0.05) // a fraction of the release constant
+        #expect(down > 0.8)
+    }
+
+    @Test func wordPulseDecays() {
+        let t = Date(timeIntervalSince1970: 100)
+        #expect(Theme.wordPulse(since: t, now: t) == 1)
+        #expect(Theme.wordPulse(since: t, now: t.addingTimeInterval(1)) < 0.01)
+        #expect(Theme.wordPulse(since: t.addingTimeInterval(5), now: t) == 0)
+    }
+}

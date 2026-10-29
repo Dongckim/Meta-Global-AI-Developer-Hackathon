@@ -247,6 +247,8 @@ struct ContentView: View {
                 mainBody
             }
         }
+        // One voice edge above every screen (touches pass through).
+        .overlay { EdgeGlow(voice: voice).ignoresSafeArea() }
         .statusBarHidden(top.front != .main)
         .sheet(item: $selectedWell, onDismiss: {
             peekTarget = nil

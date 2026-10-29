@@ -17,6 +17,9 @@ final class MicEngine {
 
     var isRunning: Bool { engine?.isRunning ?? false }
     var sinkCount: Int { box.count }
+    /// RMS of the latest tap buffer (0 when the engine is down); read by the
+    /// voice edge glow, which smooths it. Comes from the one existing tap.
+    nonisolated var level: Float { box.level }
 
     /// Starts the engine on first use (session config + preferred input
     /// live in Recorder; this only calls them). Idempotent.
@@ -140,6 +143,7 @@ final class MicEngine {
         Log.audio.info("[audio] engine torn down (tap removed, stopped)")
         engine = nil
         hwRate = 0
+        box.clearLevel()
     }
 }
 
@@ -162,8 +166,19 @@ final class SinkBox: @unchecked Sendable {
         _ = lock.withLock { sinks.removeValue(forKey: id) }
     }
 
+    nonisolated(unsafe) private var rms: Float = 0
+    nonisolated var level: Float { lock.withLock { rms } }
+    nonisolated func clearLevel() { lock.withLock { rms = 0 } }
+
     nonisolated func consume(_ buffer: AVAudioPCMBuffer) {
+        var sum: Float = 0
+        let n = Int(buffer.frameLength)
+        if let ch = buffer.floatChannelData, n > 0 {
+            for i in 0..<n { sum += ch[0][i] * ch[0][i] }
+        }
+        let r = n > 0 ? (sum / Float(n)).squareRoot() : 0
         lock.withLock {
+            rms = r
             for s in sinks.values { s(buffer) }
         }
     }

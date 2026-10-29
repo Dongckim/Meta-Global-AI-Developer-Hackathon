@@ -285,6 +285,15 @@ smoke + iPad check.
   words whose sound key is within one edit of the name); the on-device
   recognizer gets a custom language model for the phrase when supported.
   DEBUG "Measure ×10" logs the hit rate and every heard sentence.
+- Voice edge (design `.edge`): one `EdgeGlow` overlay above the screen
+  container, touch-through, full-bleed; the soft conic band only (blur
+  20, band 30: thicker than the design's 16/18, and the crisp 4 px line
+  dropped, both by iPad review),
+  2.6 s spin, .5 s fade, all 1376-scaled.
+  `Theme.edgeStyle` maps VoiceSession state only: listening (band and
+  brightness follow the smoothed tap RMS from MicEngine's one tap),
+  transcribing/thinking/searching (half speed, dimmer), speaking (voice
+  palette, pulse per TTS word), ready (not drawn). Reduce Motion: no spin.
 - Screen registry owns when to use each screen (`use`/`not`, needs_target)
   and its spoken result line; the perform tool's screen guide and every
   navigation reply derive from it. importer is a registry sheet (ui
