@@ -220,7 +220,9 @@ smoke + iPad check.
 - No Setup page: Splash -> Glasses sync (while a permission is missing,
   or the glasses aren't ready and weren't skipped) -> main. Each app
   launch opens Home: the first snapshot navigates the saved view there
-  once (an active run stays one tap / "back" away). Voice
+  once (an active run stays one tap / "back" away). Opening the active
+  run (card tap, "open the latest run") goes to the live bench (`main`);
+  only finished runs open the read-only `run_view` snapshot. Voice
   "open setup" / "glasses sync" open the same screen (`setup` is now an
   alias of `sync` in screens.json; API 4).
 - Glasses sync rows: Bluetooth, Local network, Meta AI app, Glasses,

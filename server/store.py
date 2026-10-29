@@ -323,6 +323,12 @@ class RecordStore:
                 "No runs yet — start one from Home." if not docs
                 else "I couldn't find that run.")
             return
+        # The active run lives on the bench (live plate); run_view is the
+        # read-only snapshot for finished runs.
+        if doc["run_id"] == (self.r.get("run") or {}).get("run_id"):
+            self._push_view("main")
+            res["messages"].append("Showing the active run on the bench.")
+            return
         self._push_view("run_view", doc["run_id"])
         res["messages"].append(f"Showing run {doc['run_id']}.")
 

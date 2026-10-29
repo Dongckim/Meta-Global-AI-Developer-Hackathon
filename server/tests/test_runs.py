@@ -292,4 +292,15 @@ with patch("httpx.AsyncClient", FakeClient):
     assert api.store.r["done"] == ["C3"], j
     print("RUN9 ok: view target scopes taps")
 
+    # RUN11. opening the active run (tap or "latest") shows the live bench.
+    active = api.store.r["run"]["run_id"]
+    for target in (active, "latest"):
+        c.post("/input", json={"action": {"id": "open", "args": {"target": f"run:{target}"}},
+                               "session": "run11"})
+        assert api.store.r["view"]["current"] == {"screen": "main", "target": ""}, target
+    c.post("/input", json={"action": {"id": "open", "args": {"target": f"run:{run1}"}},
+                           "session": "run11"})
+    assert api.store.r["view"]["current"] == {"screen": "run_view", "target": run1}
+    print("RUN11 ok: active run opens on the bench")
+
 print("ALL PASS")
