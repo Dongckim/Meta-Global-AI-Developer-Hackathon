@@ -8,6 +8,7 @@ enum Log {
     static let wake = Logger(subsystem: Subsystem.id, category: "wake")
     static let voice = Logger(subsystem: Subsystem.id, category: "voice")
     static let audio = Logger(subsystem: Subsystem.id, category: "audio")
+    static let view = Logger(subsystem: Subsystem.id, category: "view")
 
     /// Session category/mode and live route, for [audio] lines.
     static func route() -> String {

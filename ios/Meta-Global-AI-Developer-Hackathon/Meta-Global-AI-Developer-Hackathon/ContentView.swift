@@ -121,6 +121,7 @@ struct ContentView: View {
     private func renderView() {
         let v = lab.view
         let cur = v.current.screen, tgt = v.current.target
+        Log.view.info("[view] render cur=\(cur, privacy: .public):\(tgt, privacy: .public) run=\(self.lab.run?.runId ?? "nil", privacy: .public) launchHomeSent=\(self.launchHomeSent) top=\(String(describing: self.top.front), privacy: .public)")
         guard !cur.isEmpty else { return }
         if !launchHomeSent {
             launchHomeSent = true
@@ -1201,6 +1202,7 @@ struct ContentView: View {
 
     /// Taps travel as Actions; the server updates view and broadcasts.
     private func sendAction(_ id: String, _ args: [String: Any] = [:], quiet: Bool = true) {
+        Log.view.info("[view] send action \(id, privacy: .public) \(String(describing: args), privacy: .public)")
         Task { @MainActor in
             do {
                 let r = try await PipClient.inputAction(id: id, args: args)
