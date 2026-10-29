@@ -70,6 +70,8 @@ struct ContentView: View {
     @State private var peekTarget: String?
     @State private var lastViewScreen = ""
     @State private var robotState = RobotState.idle
+    /// App launch opens Home; the first snapshot moves the saved view there once.
+    @State private var launchHomeSent = false
     @State private var draftState = DraftState.idle
     @State private var reviewTab = 0
     @State private var showImporter = false
@@ -120,6 +122,13 @@ struct ContentView: View {
         let cur = v.current.screen, tgt = v.current.target
         guard !cur.isEmpty else { return }
         let sheetWell = v.sheet.name == "well_card" && !v.sheet.target.isEmpty ? v.sheet.target
+        if !launchHomeSent {
+            launchHomeSent = true
+            if cur != "home" {
+                sendAction("navigate", ["screen": "home"])
+                return
+            }
+        }
             : (cur == "well_card" && !tgt.isEmpty ? tgt : nil)
         if let w = sheetWell {
             if selectedWell?.id != w { selectedWell = WellSelect(id: w) }

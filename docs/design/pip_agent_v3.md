@@ -218,7 +218,9 @@ smoke + iPad check.
   never lies. Orb + reply line only, no overlay (orb styling is a
   placeholder until Eunbi's design lands).
 - No Setup page: Splash -> Glasses sync (while a permission is missing,
-  or the glasses aren't ready and weren't skipped) -> main. Voice
+  or the glasses aren't ready and weren't skipped) -> main. Each app
+  launch opens Home: the first snapshot navigates the saved view there
+  once (an active run stays one tap / "back" away). Voice
   "open setup" / "glasses sync" open the same screen (`setup` is now an
   alias of `sync` in screens.json; API 4).
 - Glasses sync rows: Bluetooth, Local network, Meta AI app, Glasses,
