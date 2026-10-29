@@ -117,10 +117,34 @@ with patch("httpx.AsyncClient", FakeClient):
     with patch("httpx.AsyncClient", ScriptClient):
         r = c.post("/orchestrate", json={"text": "read all my notes", "session": "r3"})
     j = r.json()
-    assert j["reply"] == f"{summary} Here's the bench.", j
+    # the store result is the reply; the model's line is never glued to it
+    assert j["reply"] == "Here's the bench.", j
     assert [x["name"] for x in j["tool_calls"]] == ["read_record", "navigate"], j
     assert api.store.r["view"]["current"]["screen"] == "main", j
     print("R3 ok: notes summary + list screen")
+
+    # R3b. model says success, the store failed: only the failure is said.
+    ScriptClient.queue = [
+        {"id": "r3c", "output": [fc("read_record", '{"kind": "protocols"}', "c1")]},
+        {"id": "r3d", "output": [fc("navigate", '{"screen": "protocol_source", "target": "protocol:nope"}', "c3"),
+                                 {"type": "message", "content": [{"type": "output_text",
+                                  "text": "Nice — showing the importer so you can add a new protocol."}]}]},
+    ]
+    with patch("httpx.AsyncClient", ScriptClient):
+        r = c.post("/orchestrate", json={"text": "I want to import a new protocol", "session": "r3b"})
+    j = r.json()
+    # an unknown protocol: a store failure
+    assert j["reply"] == "I couldn't open that original: which protocol?", j
+    assert ", but" not in j["reply"] and "Nice" not in j["reply"], j
+    # importer is a registry sheet: navigate opens it as ui, no view change
+    ScriptClient.queue = [{"id": "r3e", "output": [fc("navigate", '{"screen": "importer"}', "c1")]}]
+    before = api.store.r["view"]["current"]
+    with patch("httpx.AsyncClient", ScriptClient):
+        r = c.post("/orchestrate", json={"text": "add a new protocol", "session": "r3c"})
+    j = r.json()
+    assert j["reply"] == "Opening the importer." and {"action": "import"} in (j.get("ui") or []), j
+    assert api.store.r["view"]["current"] == before, api.store.r["view"]
+    print("R3b ok: result-only replies, importer from the registry")
 
     # R4. "change C5's memo" edits that well's note, keeping history.
     c.post("/orchestrate", json={"text": "note C5, sticky edge", "session": "r4"})

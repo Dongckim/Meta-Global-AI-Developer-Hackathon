@@ -288,7 +288,9 @@ smoke + iPad check.
 - Screen registry owns when to use each screen (`use`/`not`, needs_target)
   and its spoken result line; the perform tool's screen guide and every
   navigation reply derive from it. importer is a registry sheet (ui
-  import, no view).
+  import, no view). Replies are store results only: the model's own line is
+  spoken only when the store said nothing, mixed results are separate
+  sentences, and text is cut only at sentence ends.
 
 ## Standing rules (carried over)
 

@@ -32,6 +32,7 @@ from server.grammar import (
     expand_tool_wells,
     fill_on_done,
     final_pip_line,
+    whole_sentences,
     find_well_mentions,
     grounded,
     mentioned_targets,
@@ -520,10 +521,9 @@ CONTINUE_TEXT = "Continue with the looked-up data."
 
 
 def _short_text(t: str) -> str:
-    """Model's conversational line: collapsed, first two sentences, capped."""
-    t = " ".join((t or "").split())
-    t = " ".join(re.split(r"(?<=[.!?])\s+", t, maxsplit=2)[:2])
-    return t if len(t) <= 280 else t[:277].rstrip() + "…"
+    """Model's conversational line: collapsed, at most two whole sentences
+    within 280 chars (never cut mid-sentence; a long first one stays whole)."""
+    return whole_sentences(" ".join((t or "").split()), 280, max_count=2)
 
 
 def _which_one(pool: list) -> str:
@@ -700,6 +700,7 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         has_reads and question is None
         and any(c.get("name") == "read_record" and c.get("call_id") for c in calls)
     )
+    model_line = ""  # the model's own sentence; spoken only when the store said nothing
     if fire_lookup:
         reads_text = " ".join(
             outcomes[cid] for c in calls
@@ -714,7 +715,7 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             if question is None and question2 is None and pre_all_reads and not res2["cards"]:
                 nav_only = all(c.get("name") in ("navigate", "open", "back", "show") for c in rc)
                 if t2.strip() and (not rc or nav_only):
-                    res2["messages"].insert(0, _short_text(t2))
+                    model_line = _short_text(t2)
                 elif not t2.strip() and not rc:
                     for c in calls:
                         a = c.get("args") or {}
@@ -756,7 +757,8 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         reply = q if not base else base + " " + q
         asked = {"question": q, "target": recent_target() or ""}
     else:
-        reply = _compose_reply(calls, res, store.prompt_state(session), session)
+        # Store results are the reply; the model's line never joins them.
+        reply = _compose_reply(calls, res, store.prompt_state(session), session) or model_line
         if sentence and sources and not reply:
             reply = sentence
         if not reply:

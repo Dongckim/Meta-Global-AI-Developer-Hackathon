@@ -764,15 +764,12 @@ def spell_wells(text: str) -> str:
 
 
 def speak_text(text: str, limit: int = 140) -> str:
-    """Short spoken form: spelled wells, no glyphs, word-cut at limit."""
+    """Short spoken form: spelled wells, no glyphs, whole sentences up to limit."""
     s = spell_wells(text or "")
     s = s.translate({ord(c): None for c in _SPEAK_STRIP}).replace("·", ",")
     s = re.sub(r"\s+", " ", s)
     s = re.sub(r"\s+,", ",", s).strip(" ,")
-    if len(s) <= limit:
-        return s
-    cut = s[:limit].rsplit(" ", 1)[0]
-    return cut or s[:limit]
+    return whole_sentences(s, limit)
 
 
 _SPAN_STOPWORDS = {"a", "an", "the"}
@@ -883,10 +880,21 @@ def is_failure_message(s: str) -> bool:
 
 
 def final_pip_line(successes, failures, server_reply: str) -> str:
-    """Store result wins: failures replace the reply; mixed rounds join into one line."""
+    """Store result wins: failures replace the reply; a mixed round says each
+    result as its own sentence (never comma-spliced or re-cased)."""
     if not failures:
         return server_reply
-    if not successes:
-        return " ".join(failures)
-    f = " ".join(x[:1].lower() + x[1:] for x in failures)
-    return ", ".join(successes) + ", but " + f
+    return " ".join(x if re.search(r"[.!?]$", x.strip()) else x.strip() + "."
+                    for x in successes + failures)
+
+
+def whole_sentences(text: str, limit: int, max_count: int | None = None) -> str:
+    """Leading whole sentences that fit `limit` (and `max_count`). The first
+    sentence is kept whole even when longer: text is never cut mid-sentence."""
+    parts = [p for p in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if p]
+    out: list[str] = []
+    for p in parts:
+        if out and (len(" ".join(out + [p])) > limit or (max_count and len(out) >= max_count)):
+            break
+        out.append(p)
+    return " ".join(out)

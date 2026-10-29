@@ -17,6 +17,7 @@ from server.grammar import (
     fill_on_done,
     filter_timer_calls,
     final_pip_line,
+    whole_sentences,
     mentioned_targets,
     ungrounded_targets,
     find_amounts,
@@ -702,10 +703,31 @@ class PipLineTests(unittest.TestCase):
         self.assertEqual(final_pip_line([], ["I couldn't find a wash timer."], "Timers."), "I couldn't find a wash timer.")
 
     def test_mixed_joins(self):
+        # each result is its own sentence: no ", but", no re-casing
         self.assertEqual(
             final_pip_line(["✓ C2 done"], ["That timer already finished."], "x"),
-            "✓ C2 done, but that timer already finished.",
+            "✓ C2 done. That timer already finished.",
         )
+
+    def test_reply_rules(self):
+        # success + success: the store reply as is
+        self.assertEqual(final_pip_line(["Opening the importer.", "Here's the bench."], [],
+                                        "Opening the importer. Here's the bench."),
+                         "Opening the importer. Here's the bench.")
+        # success + failure: both results, sentence by sentence
+        self.assertEqual(final_pip_line(["Opening the importer."],
+                                        ["I couldn't open that original: which protocol?"], "x"),
+                         "Opening the importer. I couldn't open that original: which protocol?")
+        # failure only
+        self.assertEqual(final_pip_line([], ["I couldn't open that original: which protocol?"], "x"),
+                         "I couldn't open that original: which protocol?")
+
+    def test_whole_sentences(self):
+        long = "First sentence here. " + "word " * 60 + "end. Third."
+        out = whole_sentences(long, 140)
+        self.assertEqual(out, "First sentence here.")  # the long second one never half-said
+        self.assertEqual(whole_sentences("x" * 200, 140), "x" * 200)  # a lone sentence stays whole
+        self.assertEqual(whole_sentences("A. B. C.", 280, max_count=2), "A. B.")
 
     def test_failures_detected(self):
         self.assertTrue(is_failure_message("Which timer should I cancel? Running: x."))
@@ -772,7 +794,7 @@ class SpeakTests(unittest.TestCase):
     def test_speak_text(self):
         self.assertEqual(speak_text("✓ C2, C3 done"), "C 2, C 3 done")
         self.assertEqual(speak_text("drug A · C2–C8 · 30 min"), "drug A, C 2 to C 8, 30 min")
-        self.assertTrue(len(speak_text("x" * 200)) <= 140)
+        self.assertEqual(speak_text("Done. " + "word " * 40 + "end."), "Done.")  # whole sentences only
         self.assertEqual(speak_text(""), "")
 
 
