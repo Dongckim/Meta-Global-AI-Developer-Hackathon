@@ -36,7 +36,7 @@ RAW = {"title": "", "short_title": "Media test", "liquids": [], "conditions": [
                  "mix": None, "repeat": None}},
     {"kind": "incubate", "text": "incubate", "short_title": "", "quote": "Incubate 30 min.", "minutes": 30,
      "temp_c": None, "caution": None, "pipette": None}]}
-TARGET = {"draft_step": "1", "draft_page": "1", "protocol_detail": ""}
+TARGET = {"draft_step": "1", "draft_page": "1", "protocol_detail": "", "web_answer": "s1"}
 
 
 def fresh(sid: str, b: dict | None = None) -> RecordStore:
@@ -47,7 +47,15 @@ def fresh(sid: str, b: dict | None = None) -> RecordStore:
     st._finish_locked("finished")
     st.start_demo_run()
     st.r["draft"] = proto.build_draft(RAW, proto.evidence_from_text(DOC), "d.pdf")
+    st.add_search({"id": "s1", "ts": 1, "question": "Max DMSO for HeLa cells?", "query": "max DMSO HeLa",
+                   "answer_short": "Up to 0.5%", "detail": "d", "status": "ok", "run_id": None, "ms": 1,
+                   "sources": [{"title": "A", "url": "https://a.org", "domain": "a.org"},
+                               {"title": "B", "url": "https://b.org", "domain": "b.org"}]})
+    st.add_search({"id": "s2", "ts": 2, "question": "PBS shelf life?", "query": "PBS shelf life",
+                   "answer_short": "", "detail": "", "status": "timeout", "run_id": None, "ms": 1, "sources": []})
     target = TARGET.get(sid, "")
+    if sid == "web_answer" and ((b or {}).get("when") or {}).get("status") == "failed":
+        target = "s2"
     if sid == "run_view":
         target = st.r["run"]["run_id"] if ((b or {}).get("when") or {}).get("status") == "active" else finished
     st.r["view"]["current"] = {"screen": sid, "target": target}  # said on its own screen
@@ -64,18 +72,26 @@ for sid, b in buttons:
     slots = st.view_slots(sid, st.r["view"]["current"]["target"])
     fb = fill_button(b, slots)
     assert fb is not None, (sid, b, slots, "a slot the button needs has no value")
-    call = button_call(f"  {fb['say'].upper()}. ", [sid], slots)
-    assert call == {"name": b["action"], "args": fb["args"]}, (sid, call)
-assert button_call("next step please", ["main"]) is None  # exact phrase only
+    for said in (fb["say"], f"  {fb['say'].upper()}. ", f"{fb['say'].lower()}.", f"okay {fb['say']}",
+                 f"{fb['say']}, Milo", f"um, so {fb['say']} please"):
+        call = button_call(said, [sid], slots)
+        assert call == {"name": b["action"], "args": fb["args"]}, (sid, said, call)
+assert button_call("next step for C3", ["main"]) is None  # the words, not a sentence holding them
 assert fill_button({"say": "Step {step}", "action": "show_step"}, {}) is None  # no hole shown
 print("BT1 ok: say == command == action")
 
 # Spoken through /input on that screen -> the same call a tap sends.
 c = TestClient(api.app)
+
+
+async def no_network_search(client, key, question, query, session):
+    return "searched", []
+
+api._run_search = no_network_search  # the search itself is test_search's
 for sid, b in buttons:
     api.store = fresh(sid, b)
     fb = fill_button(b, api.store.view_slots(sid, api.store.r["view"]["current"]["target"]))
-    j = c.post("/input", json={"text": fb["say"], "session": "bt"}).json()
+    j = c.post("/input", json={"text": f"Okay, {fb['say'].lower()}.", "session": "bt"}).json()
     names = [t["name"] for t in j["tool_calls"]]
     if (b.get("args") or {}).get("screen") in PLANNED:
         # a planned screen: saying and tapping both answer "not ready"
@@ -83,7 +99,21 @@ for sid, b in buttons:
         assert j["reply"] == tap["reply"] == "That isn't ready yet.", (sid, b, j, tap)
         continue
     assert names == [b["action"]] and j["route"] == "grammar", (sid, fb["say"], j)
-print("BT2 ok: spoken button runs its action")
+print("BT2 ok: spoken button runs its action (lead-ins and punctuation aside)")
+
+# BT2b. The iPad cases: a run in progress -> "Continue" goes to the bench;
+# a finished run -> "Start run" asks for a new run; Home -> "Continue" resumes.
+for said in ("Continue", "continue.", "okay continue"):
+    api.store = fresh("run_view", {"when": {"status": "active"}})
+    j = c.post("/input", json={"text": said, "session": "bt"}).json()
+    assert api.store.r["view"]["current"]["screen"] == "main" and j["route"] == "grammar", (said, j)
+api.store = fresh("run_view", {"when": {"status": "finished"}})
+j = c.post("/input", json={"text": "Start run", "session": "bt"}).json()
+assert j["cards"] and j["cards"][0]["kind"] == "new_run", j
+api.store = fresh("home")
+j = c.post("/input", json={"text": "Continue", "session": "bt"}).json()
+assert api.store.r["view"]["current"]["screen"] == "main", j
+print("BT2b ok: Continue / Start run on the run screens, Continue on Home")
 
 # BT3. A button's word is one of its action's registry verbs (one vocabulary).
 from server.screens import verbs  # noqa: E402

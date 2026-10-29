@@ -340,18 +340,16 @@ with patch("httpx.AsyncClient", FakeClient):
     FakeClient.spark_payload = SPARK_OK
     print("13 ok: minutes ask + pending lifecycle")
 
-    # 14. web_search answer + attach flow
+    # 14. a web answer (server/search.py keeps it in the session) + attach flow
     api.store.r["cards"].clear()
+    api.get_session("s14")["last_web"] = "Incubate 30 minutes. At room temp."
     FakeClient.spark_payload = {"id": "resp_w", "output": [
-        {"type": "web_search_call",
-         "results": [{"title": "Drug X guide", "url": "https://ex.test/x", "snippet": "Incubate 30 minutes at room temp"}]},
         {"type": "function_call", "name": "ask",
          "arguments": '{"question": "Attach to step 3?"}', "call_id": "c2", "status": "completed"},
     ]}
-    r = c.post("/orchestrate", json={"text": "usual incubation for this drug?", "session": "s14"})
+    r = c.post("/orchestrate", json={"text": "attach that to the protocol?", "session": "s14"})
     j = r.json()
     assert j["reply"] == "Attach to step 3?", j
-    assert j["sources"] == [{"title": "Drug X guide", "url": "https://ex.test/x"}], j
     asked14 = api._SESSIONS["s14"]["turns"][-1]["asked"]
     assert asked14["question"] == "Attach to step 3?", asked14
     FakeClient.spark_payload = {"id": "resp_w2", "output": [
@@ -362,16 +360,6 @@ with patch("httpx.AsyncClient", FakeClient):
     assert j["cards"] and j["cards"][0]["detail"] == "[s3] incubate 30 minutes", j
     FakeClient.spark_payload = SPARK_OK
     print("14 ok: web answer + attach pending")
-
-    # 15. web answer alone serves the sentence
-    FakeClient.spark_payload = {"id": "resp_w3", "output": [
-        {"type": "web_search_call",
-         "results": [{"title": "T", "url": "https://ex.test/t", "snippet": "shake gently before use"}]},
-    ]}
-    r = c.post("/orchestrate", json={"text": "how to mix?", "session": "s15"})
-    FakeClient.spark_payload = SPARK_OK
-    assert r.json()["reply"] == "shake gently before use. (Source: T)", r.json()
-    print("15 ok: web sentence reply")
 
     # 16. truncation short-circuits
     FakeClient.spark_payload = {"id": "resp_c", "status": "incomplete", "output": [

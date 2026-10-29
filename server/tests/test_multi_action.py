@@ -303,7 +303,7 @@ from server.screens import REGISTRY  # noqa: E402
 
 assert all(s.get("status") in ("ready", "planned") for s in REGISTRY["screens"]), "every screen has a status"
 fresh()
-for said in ("open web searches", "Show me the label check", "private mode"):
+for said in ("open export", "Show me the label check", "private mode"):
     j, _ = turn(said)
     assert j["reply"] == "That isn't ready yet." and not sent, (said, j)
 r = api.store.apply_calls([{"name": "navigate", "args": {"screen": "export"}}], "tap", "", "tap", {})

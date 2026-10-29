@@ -264,3 +264,55 @@ def which_one(candidates: list[str]) -> str:
     """Ask between two spoken labels: "Today's 2:20 PM ... run or the first ...?"."""
     a, b = candidates[0], candidates[1]
     return f"{a[:1].upper() + a[1:]} or {b}?"
+
+
+def search_label(doc: dict, now: _dt.datetime | None = None) -> dict:
+    """A web search: day "Today" / "Oct 27", time "16:05", display
+    "Oct 27 · 16:05", spoken "the 16:05 search about <question>"."""
+    d = _local(doc.get("ts"))
+    day, time_ = day_label(doc.get("ts"), now), d.strftime("%H:%M") if d else ""
+    q = " ".join((doc.get("question") or doc.get("query") or "").split()[:6]).rstrip("?")
+    # spoken: 12-hour clock, "today at 6:27 PM" / "on Oct 27 at 4:05 PM"
+    said = "" if d is None else (f"today at {_clock(d)}" if day == "Today" else f"on {day} at {_clock(d)}")
+    return {"day": day, "time": time_, "display": " · ".join(x for x in (day, time_) if x), "searched": said,
+            "spoken": " ".join(f"the {'' if day == 'Today' else day} {time_} search about {q}".split())}
+
+
+_SEARCH_STOP = {"the", "a", "an", "one", "search", "searches", "open", "show", "me", "my", "about",
+                "on", "for", "of", "latest", "last", "newest", "recent", "web", "that", "with"}
+
+
+def select_search(phrase: str, docs: list[dict], now: _dt.datetime | None = None) -> tuple[dict | None, list[dict]]:
+    """What someone said about a past search -> (doc, []) / (None, two
+    candidates) / (None, []): "the latest search", "Oct 27, 16:05", "today",
+    "the DMSO one" (words of the question or answer)."""
+    now = now or _dt.datetime.now()
+    low = (phrase or "").strip().lower()
+    pool = sorted(docs, key=lambda d: d.get("ts") or 0, reverse=True)
+    if not pool:
+        return None, []
+    exact = next((d for d in pool if d.get("id") == phrase.strip()), None)
+    if exact:
+        return exact, []
+    used = False
+    day = None
+    if re.search(r"\btoday\b", low):
+        day = now.date()
+    elif re.search(r"\byesterday\b", low):
+        day = (now - _dt.timedelta(days=1)).date()
+    elif m := re.search(r"\b(" + "|".join(_MONTHS) + r")[a-z]*\.?\s+(\d{1,2})\b", low):
+        day = _dt.date(now.year, _MONTHS[m[1]], int(m[2]))
+    if day:
+        pool, used = [d for d in pool if (x := _local(d.get("ts"))) and x.date() == day], True
+    if m := re.search(r"\b(\d{1,2}):(\d{2})\b", low):
+        pool, used = [d for d in pool if (x := _local(d.get("ts"))) and (x.hour, x.minute) == (int(m[1]), int(m[2]))], True
+    words = {w for w in re.findall(r"[a-z][a-z0-9]{2,}", low)} - _SEARCH_STOP - set(_MONTHS) - {"today", "yesterday"}
+    if words:
+        hits = [d for d in pool if words & set(re.findall(r"[a-z][a-z0-9]{2,}",
+                                                          f"{d.get('question', '')} {d.get('answer_short', '')}".lower()))]
+        pool, used = hits, True
+    if re.search(r"\b(latest|last|newest|recent)\b", low) or not used:
+        return (pool[0], []) if pool else (None, [])
+    if len(pool) == 1:
+        return pool[0], []
+    return None, pool[:2]

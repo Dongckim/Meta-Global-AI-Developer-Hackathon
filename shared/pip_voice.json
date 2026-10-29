@@ -15,7 +15,10 @@
     "ignored_line": "Another voice — ignored",
     "first_close_line": "Call me anytime.",
     "fallback_line": "Live off — one command at a time",
-    "more_on_screen": "{n} more on screen."
+    "more_on_screen": "{n} more on screen.",
+    "_keywords": "Lab words the live transcriber should expect (cell lines, reagents, assays), besides the protocol's own.",
+    "keywords": ["HeLa", "HEK293", "A549", "MCF-7", "Jurkat", "CHO", "DMSO", "PBS", "MTT", "DMEM", "FBS",
+                 "trypsin", "EDTA", "doxorubicin", "cisplatin", "ELISA", "Western blot", "qPCR", "microliter", "micromolar"]
   },
   "here": [
     "I'm here.",
@@ -23,9 +26,9 @@
     "Go ahead."
   ],
   "session_thanks": [
-    "Anytime.",
-    "Happy to help.",
-    "Sure thing."
+    "Anytime! Call me whenever you need me.",
+    "Happy to help. I'm here when you need me.",
+    "You got it. Just say {wake}."
   ],
   "mark_done": [
     "Nice, {wells_spoken} are in.",
@@ -161,6 +164,7 @@
     "next_step": {"title": "Move to step {step}?", "detail": "Step {done} done"},
     "end_run": {"title": "Finish this run?", "detail": ""},
     "new_run": {"title": "{run} is finished", "detail": "Start a new run of {name}?"},
+    "confirm_search": {"title": "Search the web?", "detail": "“{query}”"},
     "default": {"title": "{question}", "detail": "{detail}"}
   },
   "prompts": {
@@ -176,7 +180,9 @@
     "draft_steps": ["{pipetting}. Step {step} needs a look.", "{pipetting}. All look right."],
     "draft_step": ["Step {step} needs a look: {reason}.", "Step {step} of {of}. Looks right?"],
     "draft_page": ["Page {page}. Step {step} is highlighted.", "Step {step} is highlighted."],
-    "plan_check": ["Draft ready. {conditions}, {steps}."]
+    "plan_check": ["Draft ready. {conditions}, {steps}."],
+    "web_searches": ["{searches}. Which one?", "No web searches yet."],
+    "web_answer": ["{answer}. Source: {domain}, searched {searched}.", "{answer_pages}. Based on pages from {domain}, searched {searched}.", "Searching “{query}”."]
   },
   "run_started": [
     "{name} started. Step 1 of {steps}."
@@ -184,6 +190,14 @@
   "new_run": [
     "{run} is finished. Start a new run of {name}?"
   ],
+  "looking_up": ["Looking it up."],
+  "still_looking": ["Still looking…"],
+  "search_stopped": ["Okay, I stopped looking."],
+  "search_slow": ["That took too long. Try again?"],
+  "search_no_source": ["I couldn't find a solid source."],
+  "search_private": ["I'd have to send your lab details. Ask it without them?"],
+  "confirm_search": ["Search the web for '{query}'?"],
+  "no_searches": ["No web searches yet."],
   "draft_discarded": [
     "Draft discarded."
   ],
@@ -192,8 +206,8 @@
   ],
   "modes": {
     "_note": "Run modes: header label and the line under each choice on the Mode screen.",
-    "full": {"label": "Full", "line": "Cloud model · fastest answers"},
-    "private": {"label": "Private", "line": "Private model · asks before anything leaves"}
+    "full": {"label": "Full", "line": "Cloud model · fastest answers", "confirm_search": false},
+    "private": {"label": "Private", "line": "Private model · asks before anything leaves", "confirm_search": true}
   },
   "also_ask": [
     "Should I also {what}?",

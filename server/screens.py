@@ -72,6 +72,8 @@ def planned_screen(text: str) -> str | None:
 ANSWERS: dict[str, list[str]] = dict(REGISTRY.get("answers", {}))
 #: Words that carry nothing beside an answer ("um", "please").
 FILLERS: list[str] = list(REGISTRY.get("fillers", []))
+#: Words said around a button's words that don't change it ("okay continue", "continue, Milo").
+LEAD_INS: list[str] = list(REGISTRY.get("lead_ins", []))
 IDS = sorted(SCREENS)
 #: Every UI-displayable data kind, in registry order. read_record's kinds,
 #: the tool enum, and the speechless renderer all derive from this.
@@ -194,13 +196,26 @@ def buttons_for(screen_id: str, slots: dict | None = None) -> list[dict]:
     return [b for b in out if b]
 
 
+def button_words(text: str) -> str:
+    """What is said, as a button's words: lowercase, punctuation out, lead-ins
+    ("okay", "so", "please") and the agent's name off both ends."""
+    from server.tone import agent_name
+    drop = {w for w in LEAD_INS} | {agent_name().lower()}
+    words = _said(text).split()
+    while words and (words[0] in drop or " ".join(words[:2]) in drop):
+        words = words[2:] if " ".join(words[:2]) in drop else words[1:]
+    while words and words[-1] in drop:
+        words = words[:-1]
+    return " ".join(words)
+
+
 def button_call(text: str, screen_ids: list[str], slots: dict | None = None) -> dict | None:
-    """A visible screen's "Say X" button spoken exactly -> its action call,
-    the same one a tap sends (registry `buttons`)."""
-    said = _said(text)
+    """A visible screen's "Say X" button said -> its action call, the same
+    one a tap sends (registry `buttons`); lead-ins around it don't count."""
+    said = button_words(text)
     for sid in screen_ids:
         for b in buttons_for(sid, slots):
-            if _said(b["say"]) == said:
+            if said and _said(b["say"]) == said:
                 return {"name": b["action"], "args": dict(b.get("args") or {})}
     return None
 

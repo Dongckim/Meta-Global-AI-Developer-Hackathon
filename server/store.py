@@ -375,6 +375,23 @@ class RecordStore:
             lab = self.run_label(doc)
             out = {"name": lab["display"], "state": lab["state"],
                    "status": "active" if doc.get("status") == "active" else "finished"}
+        elif screen == "web_searches" and (k := len(self.answered_searches())):
+            out = {"searches": n_of(k, "web search")}
+        elif screen == "web_answer" and (doc := next((d for d in self.searches() if d["id"] == target), None)):
+            lab = labels.search_label(doc)
+            st = doc.get("status")
+            out = {"when": lab["day"], "time": lab["time"], "query": doc.get("query") or "",
+                   "status": "ok" if st == "ok" else "pending" if st == "pending" else "failed",
+                   "sources": len(doc.get("sources") or [])}
+            if st == "ok":
+                # answer, then where from, then when; cited and pages-searched never sound alike
+                srcs = doc.get("sources") or []
+                out["answer" if doc.get("basis", "cited") == "cited" else "answer_pages"] = \
+                    (doc.get("answer_short") or "").rstrip(" .")
+                out["domain"] = (srcs[0].get("domain") or "").removeprefix("www.") if srcs else ""
+                out["searched"] = lab["searched"]
+            if out["sources"] > 1:
+                out["second"] = "2"
         elif screen in self.DRAFT_SCREENS and (draft := self.r.get("draft")):
             d = proto.draft_rows(draft)
             rows = d["rows"]
@@ -688,6 +705,7 @@ class RecordStore:
         cur = v.get("current") or {}
         if cur.get("screen"):  # the screen's line and the slots its buttons fill from
             v["prompt"] = self.screen_line(cur["screen"], cur.get("target") or "")
+            v["prompt_speak"] = speak_text(v["prompt"])  # what TTS says (symbols as words)
             v["slots"] = {k: str(x) for k, x in self.view_slots(cur["screen"], cur.get("target") or "").items()}
         if snap.get("draft"):
             snap["draft"]["summary"] = proto.draft_rows(snap["draft"])
@@ -964,6 +982,8 @@ class RecordStore:
             subject = p.get("protocol_id")
         elif op == "end_run":
             subject = p.get("run_id")
+        elif op == "web_search":
+            subject = p.get("query")
         else:
             subject = None
         return (op, subject if subject != [] else None)
@@ -1058,7 +1078,12 @@ class RecordStore:
             ok = args.get("ok", True)
             if not isinstance(ok, bool):
                 ok = str(ok).strip().lower() not in ("no", "cancel", "false", "0", "dismiss")
-            message, fresh, _ = self._confirm_locked(args.get("card_id", ""), ok, source, session)
+            message, fresh, card = self._confirm_locked(args.get("card_id", ""), ok, source, session)
+            p = (card or {}).get("payload") or {}
+            if ok and p.get("op") == "web_search":
+                # the search is a network call: the api layer runs it after this turn
+                res["info"]["search"] = {"question": p.get("question", ""), "query": p.get("query", "")}
+                return
             res["messages"].append(message)
             res["cards"] += fresh
             return
@@ -1356,6 +1381,9 @@ class RecordStore:
             if low.startswith("run:"):
                 self._open_run(res, session, t[4:])
                 return
+            if low.startswith("search"):
+                self._open_search(res, session, t[7:] if low.startswith("search:") else t)
+                return
             if low.startswith("run ") or low in ("run", "runs"):
                 self._open_run(res, session, t if low.startswith("run ") else "latest")
                 return
@@ -1426,11 +1454,99 @@ class RecordStore:
                         if draft["errors"]:
                             msg += f" Heads up: {draft['errors'][0]['reason']}."
                         res["messages"].append(msg)
+        elif name == "open_source":
+            self._open_web_source(res, args)
         elif name in self.DRAFT_ACTIONS:
             self._draft_action(name, args, session, res)
         else:
             res["info"]["dropped"] += 1
             res["info"]["drop_reasons"].append({"call": name or "?", "args": args, "reason": "unknown tool"})
+
+    # --- web searches (server/search.py runs them; this keeps what was sent) ---
+
+    def searches(self) -> list[dict]:
+        """Every search sent, newest first (status ok / no_source / timeout)."""
+        try:
+            docs = json.loads((self.root / "searches.json").read_text())
+        except (OSError, ValueError):
+            docs = []
+        return sorted(docs, key=lambda d: d.get("ts") or 0, reverse=True)
+
+    def answered_searches(self) -> list[dict]:
+        return [d for d in self.searches() if d.get("status") == "ok"]
+
+    def add_search(self, rec: dict) -> None:
+        with self._lock:
+            docs = self.searches() + [rec]
+            (self.root / "searches.json").write_text(json.dumps(docs, ensure_ascii=False))
+
+    def finish_search(self, search_id: str, result: dict | None, status: str, ms: int, line: str = "") -> dict:
+        """A pending search's outcome lands on its record (⑧ fills in)."""
+        with self._lock:
+            docs = self.searches()
+            rec = next(d for d in docs if d["id"] == search_id)
+            r = result or {}
+            rec.update({"status": status, "ms": ms, "answer_short": r.get("answer_short", ""),
+                        "detail": r.get("detail", ""), "sources": r.get("sources", []),
+                        "basis": r.get("basis", ""), "line": line})  # why not, as said
+            (self.root / "searches.json").write_text(json.dumps(docs, ensure_ascii=False))
+            self._commit()  # the open ⑧ redraws from the snapshot's slots
+            return rec
+
+    def search_summaries(self) -> list[dict]:
+        """Every search sent, labeled, with its status (⓪c lists the answered ones)."""
+        return [{**d, **labels.search_label(d)} for d in self.searches()]
+
+    def search_item(self, search_id: str) -> dict | None:
+        """One search in any state (pending, answered, failed), labeled."""
+        d = next((x for x in self.searches() if x["id"] == search_id), None)
+        return {**d, **labels.search_label(d)} if d else None
+
+    def private_texts(self) -> list[str]:
+        """What a search query must never carry: note texts and run names."""
+        notes = [m.get("text") or "" for m in self.r.get("notes") or []]
+        return notes + [(self.r.get("run") or {}).get("protocol_name") or ""]
+
+    def show_search(self, search_id: str) -> str:
+        """Open a search's answer (after it ran). Returns the screen line."""
+        with self._lock:
+            self._push_view("web_answer", search_id)
+            self._commit()
+            return self.screen_line("web_answer", search_id)
+
+    def ask_search(self, question: str, query: str, line: str) -> dict:
+        """The card a mode that asks first shows: "Search the web for '<query>'?"."""
+        with self._lock:
+            res = {"messages": [], "cards": [], "ui": [], "info": {"dropped": 0, "drop_reasons": []}}
+            card = self._card(res, "confirm_search", line, None,
+                              {"op": "web_search", "query": query, "question": question}, slots={"query": query})
+            self._commit()
+            return card
+
+    def _open_search(self, res: dict, session: dict, selector: str) -> None:
+        docs = self.answered_searches()
+        doc, cands = labels.select_search(selector.strip() or "latest", docs)
+        if doc is None:
+            res["messages"].append(
+                say("no_searches", session) if not docs
+                else labels.which_one([labels.search_label(c)["spoken"] for c in cands]) if cands
+                else "I couldn't find that search.")
+            return
+        self._push_view("web_answer", doc["id"])
+        res["messages"].append(self.screen_line("web_answer", doc["id"]))
+
+    def _open_web_source(self, res: dict, args: dict) -> None:
+        v = self.r["view"]["current"]
+        doc = next((d for d in self.searches() if d["id"] == v.get("target")), None) \
+            if v.get("screen") == "web_answer" else None
+        n = int(_num(args.get("n")) or 1)
+        if doc is None or not 1 <= n <= len(doc.get("sources") or []):
+            res["messages"].append("There's no source to open here." if doc is None
+                                   else f"There's no source {n}.")
+            return
+        src = doc["sources"][n - 1]
+        res["ui"].append({"action": "web_source", "target": src["url"]})
+        res["messages"].append(f"Opening {src.get('domain') or src.get('title')}.")
 
     # --- Start: draft review (registry actions; same logic as the REST routes) ---
 
@@ -1439,16 +1555,17 @@ class RecordStore:
 
     def _draft_action(self, name: str, args: dict, session: dict, res: dict) -> None:
         draft = self.r.get("draft")
+        v = self.r["view"]["current"]
+        run = self._viewing_run()
+        if name == "start_run" and run is not None and run.get("status") != "active" \
+                and not (args.get("target") or "").strip():
+            # a finished run can't go on: offer a new run of its protocol (draft or not)
+            lab, short = self.run_label(run), self.run_short(run)
+            self._card(res, "new_run", say("new_run", session, run=lab["display"], name=short), None,
+                       {"op": "new_run", "protocol_id": run.get("protocol_id")},
+                       slots={"run": lab["display"], "name": short})
+            return  # the card's question is the reply
         if name == "start_run" and not draft:
-            v = self.r["view"]["current"]
-            run = self._viewing_run()
-            if run is not None and run.get("status") != "active" and not (args.get("target") or "").strip():
-                # a finished run can't go on: offer a new run of its protocol
-                lab, short = self.run_label(run), self.run_short(run)
-                self._card(res, "new_run", say("new_run", session, run=lab["display"], name=short), None,
-                           {"op": "new_run", "protocol_id": run.get("protocol_id")},
-                           slots={"run": lab["display"], "name": short})
-                return  # the card's question is the reply
             pid = (args.get("target") or "").strip() or (
                 v.get("target") if v.get("screen") == "protocol_detail" else (run or {}).get("protocol_id") or "")
             if not pid:
@@ -1659,6 +1776,8 @@ class RecordStore:
             # yes to "Run 1 is finished. Start a new run?": the usual start
             # (an active run still asks "finish it first?")
             self._started(*self._request_start_locked(p.get("protocol_id") or "", session), session, res)
+        elif op == "web_search":
+            res["messages"].append(say("looking_up", session))
         elif op == "end_run":
             if not self.r.get("run"):
                 res["messages"].append("No active run.")

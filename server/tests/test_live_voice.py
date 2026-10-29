@@ -19,6 +19,7 @@ import jsonschema  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import server.api as api  # noqa: E402
+from server import tone  # noqa: E402
 from server.live_session import LiveConversation, live_keywords, strip_wake  # noqa: E402
 from server.runs import done_wells  # noqa: E402
 from server.store import RecordStore  # noqa: E402
@@ -184,7 +185,7 @@ with c.websocket_connect("/voice/live") as ws:
     while got[-1]["type"] != "closed":
         got.append(check(ws.receive_json()))
 turn = next(m for m in got if m["type"] == "turn")
-assert turn["end_session"] is True and turn["reply"] in ("Anytime.", "Happy to help.", "Sure thing."), turn
+assert turn["end_session"] is True and turn["reply"] in [v.format(wake=tone.persona()["wake_phrase"]) for v in tone._data()["session_thanks"]], turn
 assert got[-1]["why"] == "end_session", got[-1]
 print("LV5 ok: explicit end")
 

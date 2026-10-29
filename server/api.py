@@ -59,12 +59,13 @@ from server.grammar import (
 )
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
-from server.screens import ask_choice, button_call, planned_screen
+from server.screens import ask_choice, button_call, button_words, buttons_for, planned_screen
 from server.screens import guide as _screen_guide
 from server.screens import READS as SCREEN_READS
 from server import library as lib
 from server import protocol as proto
 from server import runs as runlog
+from server import search
 from server.store import RecordStore, describe_well_row
 from server import live_asr
 from server import tone
@@ -72,7 +73,7 @@ from server.grammar import match_session_end
 from server.live_session import LiveConversation, live_keywords
 from server.live_session import settings as live_settings
 from server.tone import keys as tone_keys
-from server.tone import say
+from server.tone import say, section
 
 import httpx
 from dotenv import load_dotenv
@@ -84,7 +85,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 11
+API_VERSION = 13
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -100,10 +101,8 @@ WELL_KEYWORDS = [f"{r}{c}" for r in "ABCDEFGH" for c in range(1, 13)]
 KEYWORDS = WELL_KEYWORDS + ["to", "through", "done", "exclude", "redo", "note", "timer", "next", "drug A", "drug B", "pipette", "thirty", "fifteen", "minutes", "wash", "each", "every", "all"]
 LANGUAGE_BIAS = ["English"]
 TIMEOUT = httpx.Timeout(120.0)
-WEB_SEARCH_ENABLED = os.environ.get("WEB_SEARCH_ENABLED", "false").lower() == "true"
 #: Stable per-prefix cache keys (docs: never per-user/per-run) + 24h retention hint.
 CACHE_KEY = "pip-bench-spark"
-CACHE_KEY_SEARCH = "pip-bench-spark-search"
 CACHE_RETENTION = "24h"
 #: False = stateless summary mode (default); True keeps previous_response_id chaining.
 CHAIN_ENABLED = os.environ.get("CHAIN_ENABLED", "false").lower() == "true"
@@ -135,8 +134,6 @@ SYSTEM = (
     "Emit direct calls in run order; if a later step needs an earlier result, do only the first step now. "
     "For another or backup well, read free_wells first, then act on the first candidate at once (redo: exclude_well + record_redo); the server confirms via cards."
 )
-if WEB_SEARCH_ENABLED:
-    SYSTEM += " For factual questions use web_search, then ask(question) offering to attach."
 
 
 def _opt(spec: dict) -> dict:
@@ -177,7 +174,7 @@ PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "extend_timer", "next_step", "end_run", "show", "navigate",
                    "open", "back", "make_robot", "edit_draft", "retry_sync",
                    "skip_sync", "review_draft", "save_draft", "start_run", "discard_draft",
-                   "show_step", "open_source_page"]
+                   "show_step", "open_source_page", "web_search", "open_source"]
 #: Actions that aren't record writes; the coverage check counts only writes.
 VIEW_ACTIONS = frozenset(a for a in PERFORM_ACTIONS if a not in RecordStore.RUN_WRITES) \
     - {"edit_draft"} | {"read_record", "ask"}
@@ -204,6 +201,10 @@ TOOLS = [
         "edit_draft{path,value} (draft_open only); review_draft; save_draft (later); "
         "start_run{target?} (the open draft, else the protocol on screen or named); discard_draft; "
         "show_step{step} / open_source_page{step?} (a draft's pipetting step, 1-based); "
+        "web_search{query} ONLY for outside knowledge the record and protocol can't hold (reagent "
+        "limits, stability, general method facts); query = the general question, never wells, run "
+        "names or notes; record facts -> read_record instead; open{target: \"search <as said>\"} "
+        "opens a past search; open_source{n?} on a search answer; "
         "retry_sync; skip_sync (setup screen only). Never answer_card. "
         f"Screens (navigate.screen): {SCREEN_GUIDE} "
         "Backup well: read free_wells first, then act on the first candidate at once.",
@@ -224,6 +225,8 @@ TOOLS = [
             "step_id": {"type": "string"},
             "on_done": {"type": "string"},
             "view": {"type": "string"},
+            "query": {"type": "string"},
+            "n": {"type": "integer"},
         },
         # only what the action uses: a strict call spelled out all 16 props
         # (~250 output tokens each) and three of them overran the cap
@@ -249,8 +252,6 @@ TOOLS = [
         {"question": {"type": "string"}},
     ),
 ]
-if WEB_SEARCH_ENABLED:
-    TOOLS.append({"type": "web_search", "search_context_size": "low"})
 
 def prefix_hash() -> str:
     """Hash of the cache-stable request prefix (instructions head + tool defs)."""
@@ -400,7 +401,8 @@ async def _call_spark(
     model: str = SPARK_MODEL, effort: str = REASONING_EFFORT, lookup: bool = False,
     echo_calls: list | None = None, nudge: str = "",
 ) -> tuple[list, str, int, bool, dict, list]:
-    """Returns (calls, text, ms, truncated, usage, web_searches).
+    """Returns (calls, text, ms, truncated, usage). Chat calls never search
+    (web search is its own call: server/search.py).
 
     Chained turns carry function_call_outputs for the previous turn's calls.
     Lookup rounds replay round 1 inline (question, calls, outputs) so the
@@ -454,7 +456,7 @@ async def _call_spark(
             "reasoning": {"effort": effort},
             "max_output_tokens": MAX_OUTPUT_TOKENS,
             "tools": TOOLS,
-            "prompt_cache_key": CACHE_KEY_SEARCH if WEB_SEARCH_ENABLED else CACHE_KEY,
+            "prompt_cache_key": CACHE_KEY,
             "prompt_cache_retention": CACHE_RETENTION,
             **mem.params(),
         }
@@ -474,7 +476,7 @@ async def _call_spark(
             continue
         if attempt == 1 and resp.status_code >= 400:
             print(f"spark retry {resp.status_code}: {resp.text[:500]}", flush=True)
-            return [], "Sorry, say that again?", ms, True, {}, []
+            return [], "Sorry, say that again?", ms, True, {}
         _check("spark", resp)
         payload = resp.json()
         mem.note_response(payload.get("id"))
@@ -493,8 +495,8 @@ async def _call_spark(
             print(f"spark incomplete: reason={reason} attempt={attempt}", flush=True)
             if attempt == 0:
                 continue  # one retry, same effort and tools
-            return [], "Sorry, say that again?", ms, True, usage, []
-        calls, texts, searches = [], [], []
+            return [], "Sorry, say that again?", ms, True, usage
+        calls, texts = [], []
         for item in payload.get("output", []):
             if item.get("type") == "function_call":
                 try:
@@ -506,38 +508,8 @@ async def _call_spark(
                 for part in item.get("content", []):
                     if part.get("type") == "output_text":
                         texts.append(part.get("text", ""))
-            elif item.get("type") == "web_search_call":
-                searches.append(item)
-        return calls, "\n".join(texts), ms, False, usage, searches
+        return calls, "\n".join(texts), ms, False, usage
     raise HTTPException(502, "spark chain would not restart")
-
-
-def _scan_sources(node, out: list):
-    if isinstance(node, dict):
-        if isinstance(node.get("url"), str) and isinstance(node.get("title") or node.get("snippet") or node.get("text"), str):
-            out.append({
-                "title": node.get("title") or "",
-                "url": node["url"],
-                "snippet": node.get("snippet") or node.get("text") or "",
-            })
-        for v in node.values():
-            _scan_sources(v, out)
-    elif isinstance(node, list):
-        for v in node:
-            _scan_sources(v, out)
-
-
-def web_answer(searches: list) -> tuple[str, list]:
-    """One sentence from the top result plus its source. No model text involved."""
-    sources: list = []
-    _scan_sources(searches, sources)
-    if not sources:
-        return "I found nothing on the web.", []
-    first = (sources[0]["snippet"] or sources[0]["title"]).strip().split(". ")[0].strip()
-    if first and not first.endswith("."):
-        first += "."
-    src = sources[0]["title"] or sources[0]["url"]
-    return f"{first} (Source: {src})", [{"title": s["title"], "url": s["url"]} for s in sources[:3]]
 
 
 def recent_target() -> str | None:
@@ -604,6 +576,152 @@ def _resolve_cards(targets: list, session: dict):
     return [], res["messages"], reply, 0, "card", res["cards"], res["info"], []
 
 
+def search_mode() -> str:
+    """The run mode searches follow (settings: RUN_MODE; only Full exists yet)."""
+    return os.environ.get("RUN_MODE", "full")
+
+
+def _confirm_search() -> bool:
+    """Ask before a search leaves? One setting per mode (pip_voice.json
+    `modes.<mode>.confirm_search`), never a mode branch in code."""
+    return bool((section("modes").get(search_mode()) or {}).get("confirm_search"))
+
+
+async def _web_search_turn(client, key, question: str, query: str, session: dict, ms: int = 0):
+    """web_search chosen: clean the query, ask first when the mode says so,
+    else search now. Returns the run_utterance tuple."""
+    q = search.clean_query(query, store.private_texts())
+    info = {"dropped": 0, "drop_reasons": []}
+    if not q:
+        return [], [], say("search_private", session), ms, "spark", [], info, []
+    if _confirm_search():
+        card = store.ask_search(question, q, say("confirm_search", session, query=q))
+        return [], [], card["question"], ms, "spark", [card], info, []
+    reply, sources = await _run_search(client, key, question, q, session)
+    return [{"name": "web_search", "args": {"query": q}}], [], reply, ms, "spark", [], info, sources
+
+
+STILL_LOOKING_S = 6.0
+
+
+def _stage(session: dict, stage: str, **data) -> None:
+    """The one place a turn says where it is (shared/schemas/live.schema.json
+    `stage`): heard -> thinking -> searching -> summarizing -> done | failed.
+    A live session's turns go on its socket, every other turn on /events;
+    the app sets its state from these and never guesses."""
+    msg = {"type": "stage", "stage": stage, **{k: v for k, v in data.items() if v not in (None, "")}}
+    sink = session.get("stage_sink")
+    if sink is not None:
+        sink(msg)
+    else:
+        store._broadcast({"kind": "stage", **msg})
+
+
+async def _search_calls(client, key, question: str, query: str, session: dict):
+    """The search call, then the tidy call. (result | None, status)."""
+    t0 = time.perf_counter()
+    resp = await asyncio.wait_for(
+        _post(client, "search", f"{BASE_URL}/responses",
+              headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+              json=search.build_body(query, SPARK_MODEL)),
+        search.SEARCH_TIMEOUT_S)
+    _check("search", resp)
+    got = search.found(resp.json())
+    if not got:
+        return None, "no_source"
+    _stage(session, "summarizing")
+    # a no-search call tidies the answer from its text and source list only
+    left = search.SEARCH_TIMEOUT_S - (time.perf_counter() - t0)
+    tidy = await asyncio.wait_for(
+        _post(client, "search tidy", f"{BASE_URL}/responses",
+              headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+              json=search.build_summary_body(question, got, SPARK_MODEL)), max(left, 1.0))
+    return search.tidy(search.output_json(tidy.json()) if tidy.status_code == 200 else None, got), "ok"
+
+
+async def _run_search(client, key, question: str, query: str, session: dict) -> tuple[str, list]:
+    """Send one search: ⑧ opens on it at once (pending), "Looking it up."
+    now and "Still looking…" once after 6 s; "stop" cancels it. Every sent
+    search is kept. (reply, sources)."""
+    rec = search.record(question, query, None, "pending", (store.r.get("run") or {}).get("run_id"), 0)
+    store.add_search(rec)
+    store.show_search(rec["id"])
+    _stage(session, "searching", query=query, search_id=rec["id"], say=say("looking_up", session))
+
+    async def still():
+        await asyncio.sleep(STILL_LOOKING_S)
+        _stage(session, "searching", query=query, search_id=rec["id"], say=say("still_looking", session))
+
+    nudge = asyncio.create_task(still())
+    task = asyncio.ensure_future(_search_calls(client, key, question, query, session))
+    session["search_task"] = task
+    t0 = time.perf_counter()
+    result = None
+    try:
+        result, status = await task
+    except asyncio.TimeoutError:
+        status = "timeout"
+    except HTTPException:
+        status = "error"
+    except asyncio.CancelledError:
+        if not task.cancelled():
+            raise  # this turn itself was cancelled
+        status = "canceled"
+    finally:
+        nudge.cancel()
+        session.pop("search_task", None)
+    ms = int((time.perf_counter() - t0) * 1000)
+    line = "" if status == "ok" else \
+        say({"timeout": "search_slow", "canceled": "search_stopped"}.get(status, "search_no_source"), session)
+    rec = store.finish_search(rec["id"], result, status, ms, line)
+    print(f"search status={status} ms={ms} sources={len(rec['sources'])} q={query[:60]!r}", flush=True)
+    if status != "ok":
+        _stage(session, "failed", reason=status, search_id=rec["id"], reply=line)
+        return line, []
+    session["last_web"] = f"{rec['answer_short']}. {rec['detail']}"  # "attach it as a tip"
+    return store.screen_line("web_answer", rec["id"]), rec["sources"]
+
+
+def _stop_search(session: dict, text: str) -> bool:
+    """"stop" while a search runs cancels the search (not the session)."""
+    task = session.get("search_task")
+    if task is None or task.done() or task.cancelling() \
+            or match_session_end(text, tone.agent_name()) != "stop":
+        return False
+    task.cancel()
+    return True
+
+
+async def _turn_search(client, query: str, session: dict) -> tuple:
+    """Try again (a tap): the search path with its stages."""
+    out = await _web_search_turn(client, _key(), query, query, session)
+    _stage(session, "done", reply=out[2])
+    return out
+
+
+async def _turn(client, key, text: str, session: dict, source: str) -> tuple:
+    """One owner turn with its stages around it (heard ... done/failed)."""
+    _stage(session, "heard", text=text)
+    try:
+        out = await run_utterance(client, key, text, session, source)
+        out = await _finish_search(client, key, out, session)
+    except Exception as e:
+        _stage(session, "failed", reason=type(e).__name__)
+        raise
+    _stage(session, "done", reply=out[2])
+    return out
+
+
+async def _finish_search(client, key, out: tuple, session: dict) -> tuple:
+    """A yes to the search card: run the search it asked about."""
+    calls, messages, reply, ms, route, cards, info, sources = out
+    s = info.get("search")
+    if not s:
+        return out
+    reply, sources = await _run_search(client, key, s["question"], s["query"], session)
+    return calls, messages, reply, ms, route, cards, info, sources
+
+
 def _sentences(lines) -> str:
     """Reply lines joined as whole sentences: a line without an end mark gets
     a period, so two results never read as one ("C3 excluded. Drop C4?")."""
@@ -618,6 +736,7 @@ REQUIRED_ARGS = {
     "add_note": ["target", "text"], "edit_note": ["text"],
     "save_tip": ["step_id", "text"], "set_timer": ["minutes"],
     "navigate": ["screen"], "open": ["target"], "edit_draft": ["path", "value"],
+    "web_search": ["query"],
 }
 ASK_FOR = {
     "wells": "Which wells?", "well": "Which well?", "target": "Which one?",
@@ -679,6 +798,8 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     """Cards first (no model call), then grammar, else Spark with one lookup round.
     The model hears the raw transcript; normalization lives inside grammar only.
     Returns (calls, messages, reply, ms, route, cards, info, sources)."""
+    if _stop_search(session, text):
+        return [], [], "", 0, "grammar", [], {"dropped": 0, "drop_reasons": []}, []
     if store.r["cards"]:
         ans = match_card_answer(text)
         if ans is not None:
@@ -714,10 +835,19 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         return [], [], say("not_ready", session), 0, "grammar", [], {"dropped": 0, "drop_reasons": []}, []
     parts = request_parts(text, WRITE_ACTIONS)
     v = store.r["view"]
-    b = button_call(text, [x for x in ((v.get("sheet") or {}).get("name"), v["current"]["screen"]) if x],
-                    store.view_slots(v["current"]["screen"], v["current"].get("target") or ""))
+    shown = [x for x in ((v.get("sheet") or {}).get("name"), v["current"]["screen"]) if x]
+    vslots = store.view_slots(v["current"]["screen"], v["current"].get("target") or "")
+    b = button_call(text, shown, vslots)
+    # what the turn was matched against (iPad: "Continue" did nothing)
+    print(f"[turn] screen={v['current']['screen']}:{v['current'].get('target') or ''} "
+          f"buttons={[x['say'] for sid in shown for x in buttons_for(sid, vslots)]} "
+          f"said={text!r} as_button={button_words(text)!r} -> {b['name'] if b else 'none'}", flush=True)
     # grammar claims a whole turn or nothing: two requests go to the model
     g = ([b], "") if b else None if len(parts) > 1 else match_grammar(text, store.prompt_state(session))
+    if b is not None and b["name"] == "web_search":  # Try again, said
+        out = await _web_search_turn(client, key, b["args"].get("query") or text,
+                                     b["args"].get("query") or text, session)
+        return (*out[:4], "grammar", *out[5:])
     if g is not None:
         calls, gtext = g
         if not calls:
@@ -730,23 +860,27 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             reply = f"Note updated ({res['info']['edited']['target']})."
         return calls, res["messages"], reply, 0, "grammar", res["cards"], res["info"], []
     summary = evidence_summary(session.get("turns"))
-    calls, texts, ms, cut, _, searches = await _call_spark(
+    _stage(session, "thinking")
+    calls, texts, ms, cut, _ = await _call_spark(
         client, key, text, store.model_state(session), session)
     if cut:
         return [], [], say("didnt_catch", session), ms, "spark", [], {"dropped": 0, "drop_reasons": []}, []
     raw_count = len(calls)
     model_raw = [dict(c) for c in calls]
     calls = _expand_perform(calls)
-    if raw_count and not calls and not texts.strip() and not searches:
+    ws = next((c for c in calls if c.get("name") == "web_search"), None)
+    if ws is not None:
+        # outside knowledge: one separate search call (server/search.py), nothing else this turn
+        return await _web_search_turn(client, key, text, (ws.get("args") or {}).get("query") or text,
+                                      session, ms)
+    if raw_count and not calls and not texts.strip():
         # every call was unusable (no action / no name): ask, offering the
         # registry's best-matching screens instead of guessing
         q = ask_choice(text) or say("didnt_catch", session)
         print(f"spark calls unusable for {text[:60]!r}: asking", flush=True)
         asked = {"question": q, "target": ""}
         return [], [], q, ms, "spark", [], {"dropped": raw_count, "drop_reasons": [], "asked": asked}, []
-    sentence, sources = web_answer(searches) if searches else ("", [])
-    if sentence:
-        session["last_web"] = sentence
+    sources: list = []
     ordered_ids = [c.get("call_id") for c in calls]
     r1raw = [dict(c) for c in calls]
     plan_allowed = relevant_plan_numbers(
@@ -763,8 +897,6 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             asked = {"question": q, "target": recent_target() or ""}
             info = {"dropped": 0, "drop_reasons": [], "asked": asked}
             return [], [], q, ms, "spark", [], info, sources
-        if sentence:
-            return [], [], sentence, ms, "spark", [], {"dropped": 0, "drop_reasons": []}, sources
         if texts.strip():
             t = _short_text(texts)
             bad = ungrounded_targets(t)
@@ -869,7 +1001,7 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     asked: dict = {}
     if question is not None:
         reply = question
-        is_attach = bool(searches) and "attach" in question.lower() and session.get("last_web")
+        is_attach = "attach" in question.lower() and bool(session.get("last_web"))
         asked = {"question": question, "target": "" if is_attach else (recent_target() or "")}
     elif gdrop:
         base = _compose_reply(calls, res, store.prompt_state(session), session)
@@ -883,8 +1015,6 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         base = _compose_reply(calls, res, store.prompt_state(session), session)
         failed = any(is_failure_message(m) for m in res["messages"])
         reply = model_line if model_line and not failed else base or model_line
-        if sentence and sources and not reply:
-            reply = sentence
         if not reply:
             reply = _executed_reply(calls, read_lines, session)
         if not reply:
@@ -927,7 +1057,7 @@ async def _lookup_round(client, key, text, session, source, plan_numbers, reads_
     calls don't bind. The replay mirrors the chained shape without storing.
     Returns (ms, None-or-tuple).
     """
-    rc, t2, ms, cut, _, _ = await _call_spark(
+    rc, t2, ms, cut, _ = await _call_spark(
         client, key, text, store.model_state(session), session, lookup=True, echo_calls=r1raw,
         nudge=nudge)
     if cut:
@@ -1250,7 +1380,7 @@ async def _handle_text(text: str, session: dict, source: str):
     """Shared text path for /input and the /orchestrate alias."""
     key = _key()
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        out = await run_utterance(client, key, text, session, source)
+        out = await _turn(client, key, text, session, source)
     calls, messages, reply, ms, route, cards, info, sources = out
     print(f"orch route={route} calls={_call_names(calls)} reply={reply[:80]!r}", flush=True)
     session["last_asked_cards"] = [c["id"] for c in cards]
@@ -1270,6 +1400,12 @@ def _resolve_card(card_id: str, answer: str, session: dict):
 @app.post("/input")
 async def input_entry(body: InputIn):
     session = get_session(body.session)
+    if body.action is not None and body.action.id == "web_search":
+        q = str((body.action.args or {}).get("query") or "")
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            calls, messages, reply, ms, route, cards, info, sources = await _turn_search(client, q, session)
+        return _utterance_response(calls, messages, reply, {"spark": ms}, "tap", cards, info, sources,
+                                   store.r["version"])
     if body.action is not None:
         calls = [{"name": body.action.id, "args": body.action.args or {}}]
         calls = expand_tool_wells(calls)
@@ -1277,9 +1413,14 @@ async def input_entry(body: InputIn):
         reply = _compose_reply(calls, res, store.prompt_state(session), session)
         if not reply:
             reply = _executed_reply(calls, [], session)
+        sources = []
+        if res["info"].get("search"):  # tapped yes on the search card
+            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+                reply, sources = await _run_search(client, _key(), res["info"]["search"]["question"],
+                                                   res["info"]["search"]["query"], session)
         log_turn(session, f"tap:{body.action.id}", calls, [reply] if reply else [])
         return _utterance_response(calls, res["messages"], reply, {"spark": 0}, "tap",
-                                   res["cards"], res["info"], [], store.r["version"])
+                                   res["cards"], res["info"], sources, store.r["version"])
     if body.card_id:
         message, new_cards = _resolve_card(body.card_id, body.answer or "yes", session)
         log_turn(session, f"card:{body.card_id} {body.answer or 'yes'}", [], [message])
@@ -1361,7 +1502,7 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session:
                 "reply": say("didnt_catch", sess),
                 "ms": {"asr": asr_ms, "spark": 0, "total": int((time.perf_counter() - total0) * 1000)},
             }
-        out = await run_utterance(client, key, transcript, sess, "voice")
+        out = await _turn(client, key, transcript, sess, "voice")
     calls, messages, reply, spark_ms, route, cards, info, sources = out
     print(f"orch route={route} calls={_call_names(calls)} reply={reply[:80]!r}", flush=True)
     sess["last_asked_cards"] = [c["id"] for c in cards]
@@ -1404,6 +1545,8 @@ async def voice_live(ws: WebSocket):
     owner_q: asyncio.Queue = asyncio.Queue()
     ended = False
     why = ""
+    # this session's turn stages ride its socket (_stage)
+    session["stage_sink"] = lambda m: asyncio.ensure_future(ws.send_json(m))
 
     async def end_stream(reason: str):
         """endStream once; Meta flushes and closes 1000 (downlink then ends)."""
@@ -1432,6 +1575,9 @@ async def voice_live(ws: WebSocket):
     async def downlink():
         async for ev in meta.events():
             for out in conv.feed(ev, time.monotonic()):
+                if out["type"] == "owner" and _stop_search(session, out["text"]):
+                    print("live: search stopped", flush=True)
+                    continue
                 if out["type"] in ("owner", "here"):
                     owner_q.put_nowait(out)
                     continue
@@ -1453,7 +1599,8 @@ async def voice_live(ws: WebSocket):
         end = None if (store.r["cards"] and match_card_answer(text)) else \
             match_session_end(text, tone.agent_name())
         if end is not None:
-            return text, short(say("session_thanks", session) if end == "thanks" else "", "grammar"), end
+            line = say("session_thanks", session, wake=tone.persona().get("wake_phrase") or "")
+            return text, short(line if end == "thanks" else "", "grammar"), end
         return text, await _handle_text(text, session, "voice"), None
 
     async def next_owner_item(held: str) -> dict:
@@ -1507,6 +1654,7 @@ async def voice_live(ws: WebSocket):
     try:
         await downlink()  # ends when Meta closes (1000 after endStream, or an error)
     finally:
+        session.pop("stage_sink", None)
         for t in tasks:
             t.cancel()
         code, reason = meta.close
@@ -1809,6 +1957,12 @@ async def run_get(run_id: str):
 async def draft_delete(body: DraftStartIn):
     store.clear_draft()
     return {"ok": True, "record_version": store.r["version"]}
+
+
+@app.get("/searches")
+async def searches_list():
+    """Every web search sent (status: pending / ok / why not), newest first."""
+    return {"searches": store.search_summaries(), "sent": len(store.searches())}
 
 
 @app.get("/health")
