@@ -511,6 +511,9 @@ struct DiagnosticsView: View {
                     }
                     row("TTS voice", status: SpeechBus.shared.voiceInfo) { EmptyView() }
                     GlassesAudioSection()
+                    #if DEBUG
+                    SampleRecorder()
+                    #endif
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Voice check").font(.headline)
                         Text("Hold the mic and say “\(Persona.current.wakePhrase)”.").font(.callout)
@@ -612,6 +615,68 @@ struct DiagnosticsView: View {
             } catch {
                 heard = "Error: \(error.localizedDescription)"
             }
+        }
+    }
+}
+#endif
+
+#if DEBUG
+/// Records a long 16 kHz mono 16-bit WAV from the current mic route (the
+/// glasses when HFP is on) for the realtime ASR measurement, then shares it
+/// (AirDrop to the Mac). Uses the existing Recorder on the one shared tap.
+struct SampleRecorder: View {
+    @State private var recorder = Recorder()
+    @State private var recording = false
+    @State private var started: Date?
+    @State private var file: URL?
+    @State private var note = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("ASR sample (debug)").font(.headline)
+            Text("Tap Record, read the script, tap Stop, then Share the WAV.").font(.callout)
+            HStack {
+                Button(recording ? "Stop" : "Record") { recording ? stop() : start() }
+                    .buttonStyle(.borderedProminent).tint(recording ? .red : .blue)
+                if recording, let t0 = started {
+                    TimelineView(.periodic(from: t0, by: 1)) { ctx in
+                        Text(String(format: "%.0fs", ctx.date.timeIntervalSince(t0))).monospacedDigit()
+                    }
+                }
+                if let file, !recording {
+                    ShareLink(item: file) { Label("Share WAV", systemImage: "square.and.arrow.up") }
+                }
+            }
+            if !note.isEmpty { Text(note).font(.caption).foregroundStyle(.secondary) }
+        }
+    }
+
+    private func start() {
+        Task { @MainActor in
+            guard await Recorder.requestPermission() else { note = "Microphone permission needed"; return }
+            do {
+                try await recorder.start()
+                recording = true
+                started = Date()
+                note = "route: \(Log.route())"
+            } catch {
+                note = "Recording failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func stop() {
+        recording = false
+        do {
+            let url = try recorder.stop()
+            let name = "asr-sample-\(Int(Date().timeIntervalSince1970)).wav"
+            let dest = url.deletingLastPathComponent().appending(path: name)
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.moveItem(at: url, to: dest)
+            file = dest
+            note = String(format: "%.1f s · 16 kHz mono 16-bit", Recorder.duration(of: dest) ?? 0)
+        } catch {
+            note = "Couldn't save: \(error.localizedDescription)"
         }
     }
 }
