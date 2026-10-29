@@ -30,6 +30,11 @@ final class GlassesDAT {
     private(set) var deviceName: String?
     private(set) var batteryLevel: Int?
     private(set) var cameraPermission: PermissionStatus?
+    /// Camera permission call in flight (sync row shows it as pending).
+    enum CameraStep: Equatable { case checking, asking }
+    private(set) var cameraStep: CameraStep?
+    /// False until the first devicesStream event ("Searching nearby…").
+    private(set) var devicesReported = false
     private(set) var lastError: String?
     private(set) var showCameraRedirectConfirm = false
     #if DEBUG
@@ -79,6 +84,7 @@ final class GlassesDAT {
             for await ids in wearables.devicesStream() {
                 Log.dat.info("[dat] devices -> \(ids.count)")
                 self.devices = ids
+                self.devicesReported = true
                 self.monitorDevices(ids)
                 self.clearError()
             }
@@ -137,7 +143,9 @@ final class GlassesDAT {
 
     /// Stage 2 wires permission status only; no capture or streaming yet.
     func checkCameraPermission() {
+        cameraStep = .checking
         Task {
+            defer { if self.cameraStep == .checking { self.cameraStep = nil } }
             do {
                 self.cameraPermission = try await wearables.checkPermissionStatus(.camera)
             } catch {
@@ -159,7 +167,9 @@ final class GlassesDAT {
     /// Requesting switches to the Meta AI app; the sample confirms first.
     func requestCameraPermission() {
         showCameraRedirectConfirm = false
+        cameraStep = .asking
         Task {
+            defer { self.cameraStep = nil }
             do {
                 self.cameraPermission = try await wearables.requestPermission(.camera)
             } catch {

@@ -36,7 +36,8 @@ enum SyncRows {
     }
 
     static func glasses(status: GlassesDAT.LinkStatus, name: String?,
-                        battery: Int?, error: String?) -> Row {
+                        battery: Int?, error: String?,
+                        searching: Bool = false) -> Row {
         if let error {
             return Row(state: .failed, value: "Error", hint: error)
         }
@@ -48,6 +49,9 @@ enum SyncRows {
             return Row(state: .failed, value: "Not connected",
                        hint: "Found, not linked — wake the glasses.")
         case .registered:
+            if searching {
+                return Row(state: .checking, value: "Searching nearby…", hint: nil)
+            }
             return Row(state: .failed, value: "Not found",
                        hint: "Pair in the Meta AI app first.")
         case .unregistered:
@@ -66,7 +70,14 @@ enum SyncRows {
                    hint: "Pick glasses audio in Control Center.")
     }
 
-    static func camera(_ permission: PermissionStatus?) -> Row {
+    static func camera(_ permission: PermissionStatus?,
+                       step: GlassesDAT.CameraStep? = nil) -> Row {
+        if step == .asking {
+            return Row(state: .checking, value: "Asking…", hint: nil)
+        }
+        if step == .checking, permission == nil {
+            return Row(state: .checking, value: "Checking…", hint: nil)
+        }
         switch permission {
         case .granted:
             return Row(state: .ok, value: "Allowed", hint: nil)
@@ -92,14 +103,15 @@ enum SyncGate {
             glasses = SyncRows.glasses(
                 status: dat.status, name: dat.deviceName,
                 battery: dat.batteryLevel,
-                error: dat.status == .error ? dat.lastError : nil)
+                error: dat.status == .error ? dat.lastError : nil,
+                searching: !dat.devicesReported)
         } else {
             app = SyncRows.Row(state: .failed, value: "Unavailable", hint: nil)
             glasses = SyncRows.Row(state: .failed, value: "Unavailable",
                                    hint: nil)
         }
         return [app, glasses, SyncRows.audio(hfpName: hfpName),
-                SyncRows.camera(dat?.cameraPermission)]
+                SyncRows.camera(dat?.cameraPermission, step: dat?.cameraStep)]
     }
 
     static var liveHFPName: String? {
@@ -111,13 +123,19 @@ enum SyncGate {
     static func needed(rows: [SyncRows.Row], skipped: Bool) -> Bool {
         !skipped && !rows.allSatisfy { $0.state == .ok }
     }
+
+    /// Retry/Skip: only once a row failed, or a step stayed pending 10s+.
+    static func showsActions(rows: [SyncRows.Row], pendingFor: TimeInterval?) -> Bool {
+        rows.contains { $0.state == .failed } || (pendingFor ?? 0) > 10
+    }
 }
 
 
 /// Fullscreen Glasses sync step (design `data-id="sync"`): live device
 /// rows on the dark aurora canvas. Auto-advances shortly after all rows
 /// turn ok ("Glasses ready"). Failed rows are tappable where a fix
-/// exists (register, camera); Retry/Skip show only while a row failed.
+/// exists (register, camera); Retry/Skip show once a row failed or a
+/// step stays pending past 10s.
 struct GlassesSyncScreen: View {
     var dat: GlassesDAT?
     /// Bumped by voice "retry the glasses check" (server sync_retry).
@@ -133,6 +151,8 @@ struct GlassesSyncScreen: View {
     @State private var clock = FrameClock()
     /// Clock time when every row turned ok (drives readyGlow / bump).
     @State private var readyAt: Double?
+    /// When some row last started pending (for the 10s Retry/Skip rule).
+    @State private var pendingSince: Date?
 
     /// Display order: design rows 1-3, then "Live video" -> glasses audio.
     private static let titles = ["Meta AI app", "Ray-Ban Meta", "Camera", "Glasses audio"]
@@ -166,7 +186,9 @@ struct GlassesSyncScreen: View {
                 ZStack {
                     AuroraView(mode: readyAt.map { .syncReady(since: $0) } ?? .sync, t: t)
                     syncBlock(t)
-                    if rows.contains(where: { $0.state == .failed }) {
+                    if SyncGate.showsActions(
+                        rows: rows,
+                        pendingFor: pendingSince.map { ctx.date.timeIntervalSince($0) }) {
                         footer
                             .frame(maxHeight: .infinity, alignment: .bottom)
                             .padding(.bottom, 44)
@@ -189,6 +211,9 @@ struct GlassesSyncScreen: View {
             for: AVAudioSession.routeChangeNotification)) { _ in refreshAudio() }
         .onChange(of: allOk) { _, ok in
             readyAt = ok ? clock.t : nil
+        }
+        .onChange(of: rows.contains { $0.state == .checking }, initial: true) { _, pending in
+            pendingSince = pending ? (pendingSince ?? Date()) : nil
         }
         .task(id: allOk) {
             guard allOk else { return }

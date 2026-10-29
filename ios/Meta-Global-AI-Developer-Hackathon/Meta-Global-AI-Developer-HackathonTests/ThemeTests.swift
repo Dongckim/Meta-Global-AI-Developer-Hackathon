@@ -177,3 +177,50 @@ struct KeyframesTests {
         #expect(abs(Keyframes.pingPong(1, period: 6) - Keyframes.pingPong(5, period: 6)) < 1e-9)
     }
 }
+
+struct SyncPendingTests {
+    @Test func pendingStepsPerRow() {
+        let link = SyncRows.app(registration: .registering, error: nil)
+        #expect(link.state == .checking && link.value == "Linking…")
+        let search = SyncRows.glasses(status: .registered, name: nil, battery: nil,
+                                      error: nil, searching: true)
+        #expect(search.state == .checking && search.value == "Searching nearby…")
+        // after the first devices event, no devices is a failure
+        #expect(SyncRows.glasses(status: .registered, name: nil, battery: nil,
+                                 error: nil, searching: false).state == .failed)
+        let ask = SyncRows.camera(.denied, step: .asking)
+        #expect(ask.state == .checking && ask.value == "Asking…")
+        #expect(SyncRows.camera(nil, step: .checking).state == .checking)
+        // a re-check keeps a known answer instead of flickering to pending
+        #expect(SyncRows.camera(.granted, step: .checking).state == .ok)
+        #expect(SyncRows.camera(.denied, step: .checking).state == .failed)
+        // audio is checked synchronously: never pending
+        #expect(SyncRows.audio(hfpName: nil).state == .failed)
+    }
+
+    @Test func actionsOnFailureOrLongPending() {
+        let ok = SyncRows.Row(state: .ok, value: "", hint: nil)
+        let pending = SyncRows.Row(state: .checking, value: "", hint: nil)
+        let failed = SyncRows.Row(state: .failed, value: "", hint: nil)
+        #expect(!SyncGate.showsActions(rows: [ok, pending], pendingFor: 3))
+        #expect(SyncGate.showsActions(rows: [ok, pending], pendingFor: 10.5))
+        #expect(SyncGate.showsActions(rows: [ok, failed], pendingFor: nil))
+        #expect(!SyncGate.showsActions(rows: [ok, ok], pendingFor: nil))
+        // pending does not change the gate decision
+        #expect(SyncGate.needed(rows: [ok, pending], skipped: false))
+    }
+}
+
+struct FrameClockTests {
+    @Test func stallPausesInsteadOfSkipping() {
+        let c = FrameClock()
+        let t0 = Date(timeIntervalSince1970: 1000)
+        #expect(c.tick(t0) == 0) // starts at the first frame
+        #expect(abs(c.tick(t0.addingTimeInterval(1.0 / 60)) - 1.0 / 60) < 1e-6)
+        // a 300ms stall advances one capped frame, not 300ms
+        let after = c.tick(t0.addingTimeInterval(1.0 / 60 + 0.3))
+        #expect(abs(after - (1.0 / 60 + 1.0 / 30)) < 1e-6)
+        // same date again adds nothing
+        #expect(c.tick(t0.addingTimeInterval(1.0 / 60 + 0.3)) == after)
+    }
+}
