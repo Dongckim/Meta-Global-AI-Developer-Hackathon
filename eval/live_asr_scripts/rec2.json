@@ -1,0 +1,30 @@
+[
+ {
+  "who": "owner",
+  "text": "Mark C2 through C4 done."
+ },
+ {
+  "who": "other",
+  "text": "Did you already add the medium?"
+ },
+ {
+  "who": "owner",
+  "text": "Yes, the medium is in. Exclude C6."
+ },
+ {
+  "who": "other",
+  "text": "Okay, I'll get the drug A tubes."
+ },
+ {
+  "who": "owner",
+  "text": "Start a ten minute timer."
+ },
+ {
+  "who": "other",
+  "text": "Do you need the multichannel pipette?"
+ },
+ {
+  "who": "owner",
+  "text": "Show the timers."
+ }
+]
