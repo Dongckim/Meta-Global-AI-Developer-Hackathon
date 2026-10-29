@@ -390,6 +390,13 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(r["messages"], ["Here's the original."])
         self.assertEqual(self.s.r["view"]["current"], {"screen": "protocol_source", "target": pid})
 
+    def test_target_screens_ask_and_results_never_have_holes(self):
+        from server.screens import result_of
+        r = self.apply([T("navigate", screen="well_card")])  # no well given
+        self.assertEqual(r["messages"], ["I couldn't open the well card: which one?"])
+        self.assertEqual(result_of("well_card"), "Showing Well card.")
+        self.assertEqual(result_of("well_card", target="C5"), "Here's C5.")
+
     def test_navigate_open_back(self):
         r = self.apply([T("navigate", screen="robot_preview")])
         self.assertEqual(r["messages"], ["Here's the robot preview."])  # registry result line

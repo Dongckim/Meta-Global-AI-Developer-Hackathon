@@ -795,6 +795,15 @@ class SpeakTests(unittest.TestCase):
         self.assertEqual(speak_text("✓ C2, C3 done"), "C 2, C 3 done")
         self.assertEqual(speak_text("drug A · C2–C8 · 30 min"), "drug A, C 2 to C 8, 30 min")
         self.assertEqual(speak_text("Done. " + "word " * 40 + "end."), "Done.")  # whole sentences only
+        # at most two sentences; lists say the first item and a count
+        self.assertEqual(speak_text("One. Two. Three."), "One. Two.")
+        self.assertEqual(
+            speak_text("Here's what I found: C3 has big bubbles; C5 is sticky; C8 looks cloudy.", more="{n} more on screen."),
+            "Here's what I found: C 3 has big bubbles, and 2 more on screen.")
+        self.assertEqual(
+            speak_text("You have 4 notes: C3 bubbles, C5 sticky, C8 cloudy and D2 dry.", more="{n} more on screen."),
+            "You have 4 notes: C 3 bubbles, and 3 more on screen.")
+        self.assertEqual(speak_text("Got it: C2 and C3."), "Got it: C 2 and C 3.")  # two items: said whole
         self.assertEqual(speak_text(""), "")
 
 

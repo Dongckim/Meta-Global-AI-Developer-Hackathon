@@ -79,9 +79,12 @@ def title_of(screen_id: str) -> str:
 def result_of(screen_id: str, **slots) -> str:
     """User-facing line for having opened a screen (registry `result`),
     never the raw id. Slots: name, target."""
-    from collections import defaultdict
-    tmpl = SCREENS.get(screen_id, {}).get("result") or f"Showing {title_of(screen_id)}."
-    return tmpl.format_map(defaultdict(str, slots))
+    import re
+    tmpl = SCREENS.get(screen_id, {}).get("result") or ""
+    need = set(re.findall(r"{(\w+)}", tmpl))
+    if not tmpl or any(not slots.get(k) for k in need):
+        return f"Showing {title_of(screen_id)}."  # never a line with a hole in it
+    return tmpl.format(**slots)
 
 
 def ui_of(screen_id: str) -> str | None:

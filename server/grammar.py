@@ -807,13 +807,32 @@ def spell_wells(text: str) -> str:
     return _WELL_SAY_ONE.sub(lambda m: f"{m.group(1)} {m.group(2)}", s)
 
 
-def speak_text(text: str, limit: int = 140) -> str:
-    """Short spoken form: spelled wells, no glyphs, whole sentences up to limit."""
-    s = spell_wells(text or "")
+def short_list(text: str, more: str = "{n} more on screen.") -> str:
+    """A sentence listing 3+ items after a colon says the first and how many
+    more are on screen: "3 notes: C3 bubbles; C5 sticky; C8 cloudy." ->
+    "3 notes: C3 bubbles, and 2 more on screen." Other text is unchanged."""
+    out = []
+    for sent in re.split(r"(?<=[.!?])\s+", (text or "").strip()):
+        head, sep, tail = sent.partition(": ")
+        items = [x.strip(" .") for x in re.split(r";\s*|,\s*(?:and\s+)?|\s+and\s+", tail) if x.strip(" .")]
+        if sep and len(items) >= 3:
+            sent = f"{head}: {items[0]}, and " + more.format(n=len(items) - 1)
+        out.append(sent)
+    return " ".join(out)
+
+
+def speak_text(text: str, limit: int = 140, more: str | None = None) -> str:
+    """Spoken form (the one place): lists say their first item and a count
+    (pip_voice.json live.more_on_screen), at most two whole sentences within
+    limit, spelled wells, no glyphs. The full text stays on screen."""
+    if more is None:
+        from server.tone import section
+        more = section("live").get("more_on_screen") or "{n} more on screen."
+    s = spell_wells(short_list(text or "", more))
     s = s.translate({ord(c): None for c in _SPEAK_STRIP}).replace("·", ",")
     s = re.sub(r"\s+", " ", s)
     s = re.sub(r"\s+,", ",", s).strip(" ,")
-    return whole_sentences(s, limit)
+    return whole_sentences(s, limit, max_count=2)
 
 
 _SPAN_STOPWORDS = {"a", "an", "the"}

@@ -318,6 +318,9 @@ class RecordStore:
             self._push_view(screen, t)
             res["messages"].append(result_of(screen))
             return
+        if SCREENS.get(screen, {}).get("needs_target") and not t:
+            res["messages"].append(f"I couldn't open the {title_of(screen).lower()}: which one?")
+            return
         if ui_of(screen):
             # a sheet (importer), not a view: the app opens it from ui
             res["ui"].append({"action": ui_of(screen)})

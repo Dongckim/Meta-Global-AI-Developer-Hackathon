@@ -54,6 +54,9 @@ TURNS = [
     *[(t, {"must_any": ["read_record", "navigate", "open"], "fresh": True,
            "reply_not": [", but", "showing home"]}) for t in (
         "show the runs", "my past runs", "open run history")],
+    # speech stays short: at most two sentences, lists go to the screen
+    *[(t, {"must_any": ["read_record", "navigate", "open"], "fresh": True, "speak_max": 2})
+      for t in ("read all my notes", "list my runs")],
 ]
 
 
@@ -92,6 +95,10 @@ def verdict(j, exp) -> bool:
             return False
     if exp.get("reply_match") and not re.search(exp["reply_match"], j.get("reply") or ""):
         return False
+    if exp.get("speak_max") is not None:
+        said = [x for x in re.split(r"(?<=[.!?])\s+", (j.get("speak") or "").strip()) if x]
+        if len(said) > exp["speak_max"]:
+            return False
     low = (j.get("reply") or "").lower()
     if any(p in low for p in exp.get("reply_not", [])):
         return False
@@ -117,7 +124,8 @@ def main():
         ok = verdict(j, exp)
         calls = ",".join(x.get("name", "?") for x in j.get("tool_calls", [])) or "-"
         rows.append({"label": text, "total": total, "calls": calls,
-                     "reply": (j.get("reply") or "").replace("|", "/"), "ok": ok})
+                     "reply": ((j.get("reply") or "") + (f" [speak: {j.get('speak')}]" if exp.get("speak_max") else "")).replace("|", "/"),
+                     "ok": ok})
         print(f"[{'PASS' if ok else 'FAIL'} {total}ms] {text[:44]} -> {calls}")
     acc = sum(1 for r in rows if r["ok"])
     print(f"accuracy: {acc}/{len(rows)}")
