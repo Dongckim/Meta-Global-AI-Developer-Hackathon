@@ -168,6 +168,61 @@ enum Theme {
         .timingCurve(0.34, 1.56, 0.64, 1, duration: duration)
     }
 
+    /// ver 2 screen motion: the BenchTrace · Milo prototype's polish layer
+    /// (v36), the one place for durations, curves and delays. Distances are
+    /// design px (multiply by the screen's `u`). Reduce Motion: opacity only.
+    enum Motion {
+        /// --ease cubic-bezier(.22,1,.36,1) and --spring cubic-bezier(.34,1.36,.64,1).
+        static func ease(_ duration: Double) -> Animation { .timingCurve(0.22, 1, 0.36, 1, duration: duration) }
+        static func spring(_ duration: Double) -> Animation { .timingCurve(0.34, 1.36, 0.64, 1, duration: duration) }
+        static func easeCurve(_ x: Double) -> Double { Keyframes.bezier(x, 0.22, 1, 0.36, 1) }
+        static func springCurve(_ x: Double) -> Double { Keyframes.bezier(x, 0.34, 1.36, 0.64, 1) }
+
+        /// [data-a] entrances: rise .8s ease, delay 60ms + 70ms per item.
+        static let enter = 0.8
+        static let enterBase = 0.06
+        static let enterStep = 0.07
+        /// rise from +18; textIn from +12 with 6 blur; pop from +10 at .95;
+        /// fromLeft / fromRight from ∓24.
+        static let riseY: CGFloat = 18
+        static let textY: CGFloat = 12
+        static let textBlur: CGFloat = 6
+        static let popY: CGFloat = 10
+        static let popScale: CGFloat = 0.95
+        static let sideX: CGFloat = 24
+
+        /// wellIn .55s spring from scale .6; well delay 200ms + (row + col) * 22ms.
+        static let wellIn = 0.55
+        static let wellInScale = 0.6
+        static let wellBase = 0.2
+        static let wellStep = 0.022
+        /// justIn .6s spring when a well is just done: .6 → 1.12 → 1, opacity .4 → 1.
+        static let justIn = 0.6
+        /// nowGlow on remaining targets: 2.4s ease-in-out from 1.6s, outer ring
+        /// 4 → 9 px at .14 → .06 blue.
+        static let nowGlowPeriod = 2.4
+        static let nowGlowStart = 1.6
+        static let nowGlowRing: (CGFloat, CGFloat) = (4, 9)
+        static let nowGlowAlpha: (Double, Double) = (0.14, 0.06)
+        /// seg: step bars grow .5s ease, 250ms + 110ms per bar.
+        static let seg = 0.5
+        static let segBase = 0.25
+        static let segStep = 0.11
+        /// cmdIn .7s spring from +28 at .9; cue pulse 2.4s ease-out after it.
+        static let cmdIn = 0.7
+        static let cmdInY: CGFloat = 28
+        static let cmdInScale: CGFloat = 0.9
+        static let cuePeriod = 2.4
+        static let cueRing: CGFloat = 14
+        /// shake-once .55s at .9s: -10, 9, -6, 4 px.
+        static let shake = 0.55
+        static let shakeDelay = 0.9
+        static let shakeX: [CGFloat] = [0, -10, 9, -6, 4, 0]
+        /// bump .55s spring when a value changes: from .97 at .55 opacity.
+        static let bump = 0.55
+        static let bumpScale: CGFloat = 0.97
+    }
+
     /// breathe 3.2s (orb), .6s listening, 1.1s thinking.
     static let breathe: Double = 3.2
     static let breatheListening: Double = 0.6

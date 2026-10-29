@@ -136,3 +136,144 @@ struct TimerRing: View {
         .frame(width: size, height: size)
     }
 }
+
+// MARK: - Motion (values: Theme.Motion)
+
+/// One entrance from the prototype's [data-a] set, played on appear; give
+/// the view a new `.id` to replay it when its data changes. Reduce Motion:
+/// opacity only.
+struct Enter: ViewModifier {
+    enum Kind { case rise, text, pop, left, right }
+    var kind: Kind
+    /// Stagger slot (0, 1, 2, ...).
+    var order: Int = 0
+    /// Design px -> points.
+    var u: CGFloat
+    @State private var shown = false
+    @Environment(\.accessibilityReduceMotion) private var reduce
+
+    func body(content: Content) -> some View {
+        let M = Theme.Motion.self
+        let off = shown || reduce
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(x: off ? 0 : (kind == .left ? -M.sideX : kind == .right ? M.sideX : 0) * u,
+                    y: off ? 0 : (kind == .rise ? M.riseY : kind == .text ? M.textY : kind == .pop ? M.popY : 0) * u)
+            .scaleEffect(off || kind != .pop ? 1 : M.popScale)
+            .blur(radius: off || kind != .text ? 0 : M.textBlur * u)
+            .onAppear {
+                withAnimation(M.ease(M.enter).delay(M.enterBase + Double(order) * M.enterStep)) { shown = true }
+            }
+    }
+}
+
+/// cmdIn for the primary command, then the cue pulse that invites saying it.
+struct CommandIn: ViewModifier {
+    var u: CGFloat
+    var delay: Double = 0
+    @State private var shown = false
+    @State private var start = Date()
+    @Environment(\.accessibilityReduceMotion) private var reduce
+
+    func body(content: Content) -> some View {
+        let M = Theme.Motion.self
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(y: shown || reduce ? 0 : M.cmdInY * u)
+            .scaleEffect(shown || reduce ? 1 : M.cmdInScale)
+            .background {
+                if !reduce {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
+                        let t = ctx.date.timeIntervalSince(start) - delay - M.cmdIn
+                        let p = t < 0 ? 0 : t.truncatingRemainder(dividingBy: M.cuePeriod) / M.cuePeriod
+                        let e = M.easeCurve(p)
+                        Capsule().stroke(Theme.polishBlue.opacity(0.45 * (1 - e)), lineWidth: M.cueRing * u * e)
+                            .opacity(t < 0 ? 0 : 1)
+                    }
+                }
+            }
+            .onAppear {
+                start = Date()
+                withAnimation(M.spring(M.cmdIn).delay(delay)) { shown = true }
+            }
+    }
+}
+
+/// shake-once: a short no-shake for something that needs a second look.
+struct ShakeOnce: ViewModifier {
+    var u: CGFloat
+    @State private var fired = false
+    @Environment(\.accessibilityReduceMotion) private var reduce
+
+    func body(content: Content) -> some View {
+        let M = Theme.Motion.self
+        content.keyframeAnimator(initialValue: CGFloat(0), trigger: fired) { view, x in
+            view.offset(x: x * u)
+        } keyframes: { _ in
+            KeyframeTrack {
+                CubicKeyframe(0, duration: M.shakeDelay)
+                for x in M.shakeX.dropFirst() {
+                    CubicKeyframe(reduce ? 0 : x, duration: M.shake / Double(M.shakeX.count - 1))
+                }
+            }
+        }
+        .onAppear { fired = true }
+    }
+}
+
+/// bump: a value that just changed settles in.
+struct Bump<V: Equatable>: ViewModifier {
+    var value: V
+    @Environment(\.accessibilityReduceMotion) private var reduce
+
+    func body(content: Content) -> some View {
+        let M = Theme.Motion.self
+        content.keyframeAnimator(initialValue: 1.0, trigger: value) { view, k in
+            view.scaleEffect(reduce ? 1 : M.bumpScale + (1 - M.bumpScale) * k)
+                .opacity(0.55 + 0.45 * k)
+        } keyframes: { _ in
+            KeyframeTrack {
+                CubicKeyframe(0, duration: 0.001)
+                SpringKeyframe(1, duration: M.bump)
+            }
+        }
+    }
+}
+
+extension View {
+    func enter(_ kind: Enter.Kind, _ order: Int = 0, u: CGFloat) -> some View {
+        modifier(Enter(kind: kind, order: order, u: u))
+    }
+}
+
+/// One bar per step: done in ink (each grows in, seg), `current` in blue,
+/// the rest in `rest`. Give it a new `.id` to replay when the step moves.
+struct StepBars: View {
+    var count: Int
+    var done: Int
+    var current: Int
+    var rest: Color = Theme.card
+    /// Design px -> points.
+    var u: CGFloat
+    @State private var grown = false
+    @Environment(\.accessibilityReduceMotion) private var reduce
+
+    var body: some View {
+        let M = Theme.Motion.self
+        HStack(spacing: 8 * u) {
+            ForEach(0..<max(count, 0), id: \.self) { i in
+                Capsule().fill(rest)
+                    .overlay(alignment: .leading) {
+                        if i < done || i == current {
+                            Capsule().fill(i == current ? Theme.polishBlue : Theme.text1)
+                                .scaleEffect(x: grown || reduce || i == current ? 1 : 0, anchor: .leading)
+                                .opacity(grown || !reduce ? 1 : 0)
+                                .animation(M.ease(M.seg).delay(M.segBase + Double(i) * M.segStep), value: grown)
+                        }
+                    }
+                    .frame(height: 6 * u)
+            }
+        }
+        .onAppear { grown = true }
+    }
+}

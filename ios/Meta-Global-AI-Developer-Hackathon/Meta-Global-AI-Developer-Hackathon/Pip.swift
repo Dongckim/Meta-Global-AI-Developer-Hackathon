@@ -130,6 +130,8 @@ struct Memo: Decodable, Equatable, Identifiable {
     var text: String
     var raw: String?
     var ts: Double
+    /// 1-based step the note was taken in (absent on older notes).
+    var step: Int?
     var history: [MemoEdit]
 }
 
@@ -197,6 +199,34 @@ struct ServerCard: Decodable, Equatable, Identifiable {
     var question: String
     var detail: String?
     var ts: Double
+    /// What a yes would do (op and its wells / step); drawn, never acted on here.
+    var payload: CardPayload?
+}
+
+/// The parts of a card's payload the card screens draw. Lenient: payloads
+/// differ per op, and an unknown shape never breaks the snapshot.
+struct CardPayload: Decodable, Equatable {
+    var op: String?
+    var well: String?
+    var wells: [String]?
+    var step: Int?
+    var target: Int?
+    var reason: String?
+
+    enum CodingKeys: String, CodingKey { case op, well, wells, step, target, reason }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        op = try? c.decodeIfPresent(String.self, forKey: .op)
+        well = try? c.decodeIfPresent(String.self, forKey: .well)
+        wells = try? c.decodeIfPresent([String].self, forKey: .wells)
+        step = try? c.decodeIfPresent(Int.self, forKey: .step)
+        target = try? c.decodeIfPresent(Int.self, forKey: .target)
+        reason = try? c.decodeIfPresent(String.self, forKey: .reason)
+    }
+
+    /// Wells the card is about.
+    var allWells: [String] { (wells ?? []) + (well.map { [$0] } ?? []) }
 }
 
 // MARK: - Server view
@@ -581,6 +611,8 @@ final class LabState {
     var done: Set<String> = []
     /// Wells done only in other steps (dimmed on the plate).
     var doneEarlier: Set<String> = []
+    /// Every (step, well) done mark, for a well's history.
+    var doneMarks: [DoneMark] = []
     var excluded: [String: String] = [:]
     var redo: [String: String] = [:]
     var notes: [Memo] = []
@@ -615,6 +647,7 @@ final class LabState {
         let now = snap.done.filter { $0.step == stepIndex + 1 }.map(\.well)
         done = Set(now)
         doneEarlier = Set(snap.done.map(\.well)).subtracting(now)
+        doneMarks = snap.done
         excluded = snap.excluded
         redo = snap.redo
         notes = snap.notes
@@ -686,6 +719,23 @@ final class LabState {
         return Set(planSteps[stepIndex].wells)
     }
 
+    /// Steps a well was done in, latest first.
+    func doneSteps(_ well: String) -> [Int] {
+        Array(Set(doneMarks.filter { $0.well == well }.map(\.step))).sorted(by: >)
+    }
+
+    /// "100 µL culture medium" (a pipette step's amount), else the step's title.
+    func stepLine(_ step: Int) -> String {
+        guard step >= 1, step <= planSteps.count else { return "" }
+        let s = planSteps[step - 1]
+        if let p = s.pipette, let v = p.volume {
+            let unit = p.unit ?? "uL"
+            return [fmtNum(v) + " " + (unit.lowercased() == "ul" ? "µL" : unit), p.liquid]
+                .filter { !$0.isEmpty }.joined(separator: " ")
+        }
+        return s.shortTitle.flatMap { $0.isEmpty ? nil : $0 } ?? s.text
+    }
+
     func hasNote(_ well: String) -> Bool {
         notes.contains { $0.target == well }
     }
@@ -732,11 +782,14 @@ struct ScreenButton: Decodable, Equatable {
 /// app shows, never as a silent substitute list.
 struct ScreenRegistry: Decodable {
     var screens: [ScreenDef]
+    /// Card answer buttons by card layout (single / next_step / checklist):
+    /// action "answer_card", args.answer one of the registry `answers`.
+    var cards: [String: [ScreenButton]]?
 
-    static func decode(_ data: Data) throws -> [ScreenDef] {
-        let list = try JSONDecoder().decode(ScreenRegistry.self, from: data).screens
-        guard !list.isEmpty else { throw RegistryError.empty }
-        return list
+    static func decode(_ data: Data) throws -> ScreenRegistry {
+        let reg = try JSONDecoder().decode(ScreenRegistry.self, from: data)
+        guard !reg.screens.isEmpty else { throw RegistryError.empty }
+        return reg
     }
 
     enum RegistryError: Error { case missing, empty }
@@ -744,10 +797,11 @@ struct ScreenRegistry: Decodable {
 
 /// Loaded registry, or the reason it couldn't be (shown as a banner).
 func loadScreens(from url: URL? = Bundle.main.url(forResource: "screens", withExtension: "json"))
-    -> (screens: [ScreenDef], error: String?) {
+    -> (screens: [ScreenDef], cards: [String: [ScreenButton]], error: String?) {
     do {
         guard let url else { throw ScreenRegistry.RegistryError.missing }
-        return (try ScreenRegistry.decode(Data(contentsOf: url)), nil)
+        let reg = try ScreenRegistry.decode(Data(contentsOf: url))
+        return (reg.screens, reg.cards ?? [:], nil)
     } catch {
         let reason = switch error {
         case ScreenRegistry.RegistryError.missing: "screens.json not in the app bundle"
@@ -755,6 +809,6 @@ func loadScreens(from url: URL? = Bundle.main.url(forResource: "screens", withEx
         default: syncReason(error)
         }
         Log.view.error("[view] screen registry unreadable: \(reason, privacy: .public)")
-        return ([], reason)
+        return ([], [:], reason)
     }
 }

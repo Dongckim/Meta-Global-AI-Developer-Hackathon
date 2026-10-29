@@ -58,6 +58,21 @@ struct PipTests {
         #expect(lab.groupIndex("drug_A") == 0 && lab.groupIndex(nil) == nil)
     }
 
+    @Test @MainActor func cardPayloadIsLenientAndWellHistoryReads() throws {
+        // payloads differ per op; an odd field never breaks the snapshot
+        let p = try JSONDecoder().decode(CardPayload.self, from: Data(
+            #"{"op": "exclude_well", "well": "C3", "target": "run-1", "wells": [1]}"#.utf8))
+        #expect(p.op == "exclude_well" && p.allWells == ["C3"] && p.target == nil)
+        let lab = LabState()
+        lab.sync(Self.snapshot())
+        #expect(lab.doneSteps("C2") == [2] && lab.doneSteps("C3").isEmpty)
+        #expect(lab.stepLine(2) == "s2" && lab.stepLine(9) == "")
+        // card buttons come from the registry, one set per card layout
+        let cards = loadScreens().cards
+        #expect(Set(cards.keys) == ["single", "next_step", "checklist"])
+        #expect(cards.values.joined().allSatisfy { $0.action == "answer_card" && $0.args?["answer"] != nil })
+    }
+
     @Test func wellRunsJoinsRowRuns() {
         // same as the server's join_wells_ranges
         #expect(wellRuns(["D8", "D2", "D6", "D7"]) == "D2, D6–D8")
@@ -149,7 +164,7 @@ struct PipTests {
     @Test func screenRegistryReadsOnlyScreens() throws {
         // reads/use/not belong to the server and must not break the app's decode
         let ok = Data(#"{"screens": [{"id": "home", "commands": ["back"], "use": "x"}], "reads": [{"kind": "runs", "screens": [], "desc": "d"}]}"#.utf8)
-        #expect(try ScreenRegistry.decode(ok).map(\.id) == ["home"])
+        #expect(try ScreenRegistry.decode(ok).screens.map(\.id) == ["home"])
         #expect(throws: (any Error).self) { try ScreenRegistry.decode(Data(#"{"screens": []}"#.utf8)) }
         #expect(throws: (any Error).self) { try ScreenRegistry.decode(Data(#"{"screens": [{"id": 1}]}"#.utf8)) }
     }

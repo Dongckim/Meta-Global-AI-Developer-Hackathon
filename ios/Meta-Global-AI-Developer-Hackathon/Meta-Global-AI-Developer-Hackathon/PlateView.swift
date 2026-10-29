@@ -17,38 +17,89 @@ struct WellSelect: Identifiable {
 // MARK: - Plate
 
 /// 96-well plate, ver 2 (Figma 37:13521): pitch 58, well 48, axis labels
-/// 16. Sized from its frame; colors only from `Theme`.
+/// 16. Sized from its frame; colors only from `Theme`. Motion runs on one
+/// clock for all 96 wells (the wellIn wave) and one Canvas for the glow on
+/// the step's remaining wells; Theme.Motion holds the values.
 struct PlateView: View {
     @Bindable var lab: LabState
     @Binding var selected: WellSelect?
+    /// The well whose card is open: a blue focus ring.
+    var focus: String? = nil
+    @State private var start = Date()
+    @State private var introDone = false
+    @Environment(\.accessibilityReduceMotion) private var reduce
+
+    private static let introLength = Theme.Motion.wellBase + 18 * Theme.Motion.wellStep + Theme.Motion.wellIn
 
     var body: some View {
         GeometryReader { g in
             let cell = min(g.size.width / 12.8, g.size.height / 8.8)
             let d = cell * 48 / 58
             let labelFont = Font.system(size: max(9, d / 3), weight: .medium)
-            VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    Color.clear.frame(width: cell * 0.8, height: cell * 0.8)
-                    ForEach(1...12, id: \.self) { c in
-                        Text("\(c)").font(labelFont).foregroundStyle(Theme.text4)
-                            .frame(width: cell, height: cell * 0.8)
-                    }
-                }
-                ForEach(plateRows, id: \.self) { r in
+            TimelineView(.animation(paused: introDone)) { ctx in
+                let t = introDone ? .infinity : ctx.date.timeIntervalSince(start)
+                VStack(spacing: 0) {
                     HStack(spacing: 0) {
-                        Text(r).font(labelFont).foregroundStyle(Theme.text4)
-                            .frame(width: cell * 0.8, height: cell)
+                        Color.clear.frame(width: cell * 0.8, height: cell * 0.8)
                         ForEach(1...12, id: \.self) { c in
-                            WellDot(well: "\(r)\(c)", lab: lab, d: d) {
-                                selected = WellSelect(id: "\(r)\(c)")
+                            Text("\(c)").font(labelFont).foregroundStyle(Theme.text4)
+                                .frame(width: cell, height: cell * 0.8)
+                        }
+                    }
+                    ForEach(Array(plateRows.enumerated()), id: \.offset) { ri, r in
+                        HStack(spacing: 0) {
+                            Text(r).font(labelFont).foregroundStyle(Theme.text4)
+                                .frame(width: cell * 0.8, height: cell)
+                            ForEach(1...12, id: \.self) { c in
+                                WellDot(well: "\(r)\(c)", lab: lab, d: d, focused: focus == "\(r)\(c)",
+                                        intro: intro(t, row: ri, col: c - 1)) {
+                                    selected = WellSelect(id: "\(r)\(c)")
+                                }
+                                .frame(width: cell, height: cell)
                             }
-                            .frame(width: cell, height: cell)
                         }
                     }
                 }
             }
+            .overlay(alignment: .topLeading) { glow(cell: cell, d: d) }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .task {
+            try? await Task.sleep(for: .seconds(Self.introLength))
+            introDone = true
+        }
+    }
+
+    /// wellIn progress of one well (0...1, spring overshoot): delay grows
+    /// along the diagonal.
+    private func intro(_ t: Double, row: Int, col: Int) -> Double {
+        let M = Theme.Motion.self
+        let x = (t - M.wellBase - Double(row + col) * M.wellStep) / M.wellIn
+        return x >= 1 ? 1 : M.springCurve(max(0, x))
+    }
+
+    /// nowGlow: one Canvas draws the breathing outer ring of every remaining
+    /// target (the step's wells not done or excluded).
+    private func glow(cell: CGFloat, d: CGFloat) -> some View {
+        let M = Theme.Motion.self
+        let now = lab.remaining
+        return TimelineView(.animation(minimumInterval: 1.0 / 30, paused: now.isEmpty || reduce)) { ctx in
+            let t = ctx.date.timeIntervalSince(start) - M.nowGlowStart
+            let k = t < 0 || reduce ? 0 : Keyframes.pingPong(t, period: M.nowGlowPeriod)
+            let w = (M.nowGlowRing.0 + (M.nowGlowRing.1 - M.nowGlowRing.0) * k) * d / 48
+            let a = M.nowGlowAlpha.0 + (M.nowGlowAlpha.1 - M.nowGlowAlpha.0) * k
+            Canvas { gc, _ in
+                for well in now {
+                    guard let ri = plateRows.firstIndex(of: String(well.prefix(1))),
+                          let c = Int(well.dropFirst()) else { continue }
+                    let center = CGPoint(x: cell * 0.8 + (CGFloat(c) - 0.5) * cell,
+                                         y: cell * 0.8 + (CGFloat(ri) + 0.5) * cell)
+                    let r = d / 2 + w / 2
+                    let ring = Path(ellipseIn: CGRect(x: center.x - r, y: center.y - r, width: 2 * r, height: 2 * r))
+                    gc.stroke(ring, with: .color(Theme.polishBlue.opacity(a)), lineWidth: w)
+                }
+            }
+            .allowsHitTesting(false)
         }
     }
 }
@@ -57,7 +108,11 @@ struct WellDot: View {
     let well: String
     @Bindable var lab: LabState
     let d: CGFloat
+    var focused = false
+    /// wellIn progress from the plate's clock (1 = settled).
+    var intro: Double = 1
     let onTap: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduce
 
     private var excluded: Bool { lab.excluded[well] != nil }
     private var done: Bool { lab.done.contains(well) }
@@ -86,6 +141,7 @@ struct WellDot: View {
     }
 
     var body: some View {
+        let M = Theme.Motion.self
         Button(action: onTap) {
             Circle()
                 .fill(fill.shadow(.inner(color: .black.opacity(filled || now ? 0 : 0.07), radius: 1, y: 1)))
@@ -107,6 +163,24 @@ struct WellDot: View {
                             .frame(width: d * 11 / 48, height: d * 11 / 48)
                     }
                 }
+                .overlay {
+                    if focused {
+                        Circle().strokeBorder(Theme.polishBlue, lineWidth: d * 2 / 48)
+                            .frame(width: d * 66 / 48, height: d * 66 / 48)
+                    }
+                }
+                // justIn: a well just done pops (.6 -> 1.12 -> 1)
+                .keyframeAnimator(initialValue: 1.0, trigger: done) { view, k in
+                    view.scaleEffect(reduce || !done ? 1 : k)
+                } keyframes: { _ in
+                    KeyframeTrack {
+                        CubicKeyframe(M.wellInScale, duration: 0.001)
+                        CubicKeyframe(1.12, duration: M.justIn * 0.6)
+                        CubicKeyframe(1, duration: M.justIn * 0.4)
+                    }
+                }
+                .scaleEffect(reduce ? 1 : M.wellInScale + (1 - M.wellInScale) * intro)
+                .opacity(min(1, max(0, intro)))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(well)
@@ -268,16 +342,12 @@ struct StepCard: View {
                 .buttonStyle(.plain).disabled(onSource == nil)
                 .padding(.top, 10 * u)
             }
-            HStack(spacing: 8 * u) {
-                ForEach(lab.steps.indices, id: \.self) { i in
-                    Capsule().fill(i < lab.stepIndex ? Theme.text1
-                                   : i == lab.stepIndex ? Theme.polishBlue : Theme.card)
-                        .frame(height: 6 * u)
-                }
-            }
-            .padding(.top, 22 * u)
+            StepBars(count: lab.steps.count, done: lab.stepIndex, current: lab.stepIndex, u: u)
+                .padding(.top, 22 * u)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .enter(.rise, u: u)
+        .id(lab.stepIndex)  // a new step rises in and regrows its bars
     }
 
     /// The step's short title ("Add Drug B"), else its sentence.
@@ -390,6 +460,7 @@ struct RemainingCard: View {
                 Circle().fill(Theme.polishBlue.opacity(0.5)).frame(width: 14 * u, height: 14 * u)
                 Text("\(left.count) left").font(.system(size: 40 * u, weight: .semibold))
                     .tracking(-0.88 * u).foregroundStyle(Theme.text1)
+                    .modifier(Bump(value: left.count))
             }
             if !left.isEmpty {
                 Text(wellRuns(left)).font(.system(size: 28 * u)).tracking(-0.34 * u)

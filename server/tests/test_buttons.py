@@ -65,4 +65,15 @@ r = api.store.apply_calls([{"name": "show", "args": {"view": "well_card", "targe
                           "voice", "show C5", "spark", {})
 assert r["messages"] == ["Here's C5."], r["messages"]
 print("BT4 ok: every screen has a label; show says it")
+
+# BT5. Card answer buttons (registry `cards`) say a registry answer word for
+# their answer, so a tap and saying the label do the same thing.
+from server.grammar import match_card_answer  # noqa: E402
+from server.screens import REGISTRY  # noqa: E402
+
+for layout, bs in REGISTRY.get("cards", {}).items():
+    for b in bs:
+        assert b["action"] == "answer_card", (layout, b)
+        assert match_card_answer(b["say"]) == b["args"]["answer"], (layout, b)
+print("BT5 ok: card buttons say their answer")
 print("ALL PASS")

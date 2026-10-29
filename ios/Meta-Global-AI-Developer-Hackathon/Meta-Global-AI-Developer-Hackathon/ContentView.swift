@@ -250,10 +250,6 @@ struct ContentView: View {
         // One voice edge above every screen (touches pass through).
         .overlay { EdgeGlow(voice: voice).ignoresSafeArea() }
         .statusBarHidden(top.front != .main)
-        .sheet(item: $selectedWell, onDismiss: {
-            peekTarget = nil
-            if lab.view.sheet.name == "well_card" { sendAction("back") }
-        }) { sel in WellSheet(well: sel.id, lab: lab) { say($0) } }
         .sheet(isPresented: robotSheet) { robotPanel }
         .sheet(isPresented: draftSheet) { draftPanel }
         .sheet(isPresented: $showSettings) {
@@ -318,7 +314,8 @@ struct ContentView: View {
         VStack(spacing: 0) {
             contractBanners
             TopHeader(voice: voice, speakText: lastReply, partialText: voice.partialText,
-                      timers: showsBench ? [] : lab.timers,  // the bench lists its own timers
+                      // the plain bench lists its own timers; cards and the well card show the chip
+                      timers: showsBench && lab.cards.isEmpty && selectedWell == nil ? [] : lab.timers,
                       onBlockedTap: openSync)
             Group {
                 if let src = viewingSource {
@@ -415,7 +412,12 @@ struct ContentView: View {
             // design px: landscape 1376 wide x (32 + 700 + 32) tall; portrait 928 x 1410
             let u = wide ? min(w / 1376, h / 764) : min(w / 928, h / 1410)
             Group {
-                if wide {
+                if !lab.cards.isEmpty {
+                    // ③ a waiting card takes the bench (Figma 37:13714...)
+                    ConfirmScreen(lab: lab, buttons: registry.cards, u: u,
+                                  onAnswer: answer(id:ok:), onAnswerAll: answerAll)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if wide {
                     // the side column takes what the margins, plate and gap leave
                     let side = max(0, w - 2 * 64 * u - 800 * u - 36 * u)
                     HStack(alignment: .top, spacing: 36 * u) {
@@ -431,8 +433,8 @@ struct ContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(.top, 32 * u)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.top, lab.cards.isEmpty ? 32 * u : 0)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: lab.cards.isEmpty ? .top : .center)
         }
         .background { BenchCanvas() }
     }
@@ -442,7 +444,7 @@ struct ContentView: View {
             PlateView(lab: lab, selected: Binding(
                 get: { selectedWell },
                 set: { if let id = $0?.id { sendAction("open", ["target": id]) } }
-            ))
+            ), focus: selectedWell?.id)
             .padding(28 * u)
             .frame(width: 800 * u, height: 566 * u)
             .benchCard(radius: 44 * u)
@@ -452,27 +454,35 @@ struct ContentView: View {
         .frame(width: 800 * u)
     }
 
-    private func benchSide(_ u: CGFloat) -> some View {
+    @ViewBuilder private func benchSide(_ u: CGFloat) -> some View {
+        if let w = selectedWell?.id {
+            // ④ the well card takes the side column; the plate rings the well
+            WellCardSide(well: w, lab: lab,
+                         buttons: screens.first { $0.id == "well_card" }?.buttons ?? [], u: u) { b in
+                if lab.view.sheet.name == "well_card" {
+                    sendAction(b.action, b.args ?? [:])
+                } else {  // a peek the server never opened: close it here
+                    selectedWell = nil
+                    peekTarget = nil
+                }
+            }
+        } else {
+            mainSide(u)
+        }
+    }
+
+    private func mainSide(_ u: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             StepCard(lab: lab, u: u, onSource: openCurrentSource)
             Spacer(minLength: 24 * u)
             TimerList(lab: lab, u: u)
-            Group {
-                if lab.cards.isEmpty {
-                    RemainingCard(lab: lab, u: u)
-                } else {
-                    // shortcut: the old card panel inside a ver 2 card, until the
-                    // confirm-card screens (Figma 37:13714...) are built
-                    CardPanel(cards: lab.cards, onAnswer: answer(id:ok:), onAnswerAll: answerAll)
-                        .padding(20 * u)
-                        .frame(maxHeight: 260 * u)
-                        .benchCard(radius: 32 * u)
-                }
-            }
-            .padding(.top, 10 * u)
-            if let b = screens.first(where: { $0.id == currentScreen })?.buttons?.first {
+            RemainingCard(lab: lab, u: u)
+                .padding(.top, 10 * u)
+                .enter(.pop, 2, u: u)
+            if let b = screens.first(where: { $0.id == "main" })?.buttons?.first {
                 SayButton(button: b, size: 34 * u) { sendAction($0.action, $0.args ?? [:]) }
                     .padding(.top, 36 * u)
+                    .modifier(CommandIn(u: u, delay: Theme.Motion.enterStep * 3))
             }
         }
     }
