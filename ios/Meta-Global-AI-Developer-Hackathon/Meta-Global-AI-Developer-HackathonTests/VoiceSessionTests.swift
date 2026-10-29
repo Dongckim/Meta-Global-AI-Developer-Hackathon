@@ -408,17 +408,21 @@ struct VoiceSessionTests {
             for starting in [false, true] {
                 let wake = V.admission(state: s, trigger: .wakeWord, starting: starting)
                 let manual = V.admission(state: s, trigger: .manual, starting: starting)
+                let tap = V.admission(state: s, trigger: .orbTap, starting: starting)
                 let label = Comment(rawValue: "\(s) starting=\(starting)")
                 switch s {
                 case .ready:
                     #expect(wake == (starting ? .ignore : .accept), label)
                     #expect(manual == (starting ? .ignore : .accept), label)
+                    #expect(tap == (starting ? .ignore : .accept), label)
                 case .speaking:
                     #expect(wake == .ignore, label)
                     #expect(manual == .bargeIn, label)
+                    #expect(tap == .interrupt, label)
                 default:
                     #expect(wake == .ignore, label)
                     #expect(manual == .ignore, label)
+                    #expect(tap == .ignore, label)
                 }
             }
         }
@@ -582,6 +586,44 @@ struct VoiceSessionTests {
         #expect(voice.state == .listening && voice.aside == "Another voice — ignored" && voice.partialText == nil)
         #expect(voice.liveTurnGen == 0)
         #expect(await settle(timeout: 3) { voice.aside == nil }) // ~1.5 s
+    }
+
+    @Test func orbTapOpensSessionInterruptsSpeechAndIgnoresIdle() async {
+        let wake = FakeWake(), speaker = FakeSpeaker(), live = FakeLive(), chimed = Flag()
+        let voice = makeSession(wake: wake, speaker: speaker, chimed: chimed, live: live)
+        voice.activate()
+        #expect(await settle { wake.running })
+        #expect(voice.open(trigger: .orbTap)) // like the wake word
+        #expect(await settle { voice.inSession && voice.state == .listening })
+        #expect(chimed.value && live.starts == 1)
+        #expect(!voice.open(trigger: .orbTap)) // session idle: already listening
+        voice.speak("A long answer.")
+        #expect(voice.open(trigger: .orbTap)) // tap while speaking: stop talking
+        #expect(speaker.stops == 1 && voice.state == .listening && voice.inSession && !live.muted)
+        speaker.complete() // a late TTS done changes nothing
+        #expect(voice.state == .listening && live.starts == 1)
+    }
+
+    @Test func orbTapFallsBackToOneUtterance() async {
+        let wake = FakeWake(), capture = FakeCapture(), live = FakeLive()
+        live.fail = true
+        capture.script = [0.5, 0.5, 0, 0, 0, 0]
+        let voice = makeSession(wake: wake, capture: capture, live: live)
+        voice.activate()
+        #expect(await settle { wake.running })
+        voice.open(trigger: .orbTap)
+        #expect(await settle { voice.state == .transcribing }) // auto-ended, not held
+        #expect(!voice.inSession && capture.starts == 1)
+    }
+
+    @Test func orbTapOutsideSessionInterruptsToReady() async {
+        let wake = FakeWake(), speaker = FakeSpeaker()
+        let voice = makeSession(wake: wake, speaker: speaker)
+        voice.activate()
+        voice.speak("talking")
+        #expect(voice.open(trigger: .orbTap))
+        #expect(voice.state == .ready && speaker.stops == 1)
+        #expect(await settle { wake.running })
     }
 
     @Test func liveStartFailureFallsBackToCapture() async {

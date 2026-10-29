@@ -287,6 +287,11 @@ struct ContentView: View {
         .onChange(of: voice.liveTurnGen) { _, _ in
             if let r = voice.liveTurn { applyVoice(r) }
         }
+        #if DEBUG
+        .onChange(of: voice.typedGen) { _, _ in
+            if let t = voice.typed { say("> \(t)"); Task { await sendText(t) } }
+        }
+        #endif
         .onChange(of: voice.noticeGen) { _, _ in
             if !voice.notice.isEmpty { say(voice.notice) }
         }
@@ -1228,6 +1233,25 @@ struct ContentView: View {
             sendAction("answer_card", ["card_id": id, "ok": true], quiet: false)
         }
     }
+
+    #if DEBUG
+    @MainActor
+    private func sendText(_ text: String) async {
+        busy = true
+        defer { busy = false }
+        do {
+            let r = try await PipClient.orchestrate(text: text)
+            voice.didRespond(hasSources: !r.sources.isEmpty)
+            handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
+                   route: r.route, input: text, sources: r.sources,
+                   dropped: r.dropped ?? 0,
+                   ui: r.ui, speak: r.speak, recordVersion: r.record_version)
+        } catch {
+            voice.didFail()
+            say("Error: \(error.localizedDescription)")
+        }
+    }
+    #endif
 
     @MainActor
     private func sendVoice(_ url: URL) async {

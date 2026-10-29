@@ -491,6 +491,7 @@ struct DiagnosticsView: View {
     @State private var recorder = Recorder()
     @State private var recording = false
     @State private var busy = false
+    @State private var command = ""
 
     var body: some View {
         NavigationStack {
@@ -510,6 +511,17 @@ struct DiagnosticsView: View {
                         #endif
                     }
                     row("TTS voice", status: SpeechBus.shared.voiceInfo) { EmptyView() }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Text command").font(.headline)
+                        TextField("Type a command (sent like speech)", text: $command)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit {
+                                let t = command.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !t.isEmpty else { return }
+                                command = ""
+                                voice?.type(t)
+                            }
+                    }
                     GlassesAudioSection()
                     #if DEBUG
                     SampleRecorder()

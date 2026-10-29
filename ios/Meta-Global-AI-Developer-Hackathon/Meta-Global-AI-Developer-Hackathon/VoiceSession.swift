@@ -8,7 +8,12 @@ import SwiftUI
 /// fires the same event; the machine doesn't care which input woke it).
 enum VoiceTrigger {
     case wakeWord
+    /// Tapping the header orb: opens like the wake word, interrupts speech.
+    case orbTap
     case manual
+
+    /// Opens a live session (or one auto-ended utterance), not a held capture.
+    var handsFree: Bool { self != .manual }
 }
 
 /// Seams for tests; real types conform below.
@@ -96,6 +101,15 @@ final class VoiceSession {
     /// Owner turn result from the live link; the owner view applies it like /voice.
     private(set) var liveTurn: VoiceResponse?
     private(set) var liveTurnGen = 0
+    #if DEBUG
+    /// Typed command from Diagnostics (voice-down check); the owner sends it.
+    private(set) var typed: String?
+    private(set) var typedGen = 0
+    func type(_ text: String) {
+        typed = text
+        typedGen += 1
+    }
+    #endif
     var inSession: Bool { live != nil }
     /// Edge fade for the next disappearance: 1 s when a session closes.
     private(set) var edgeFade: Double = Theme.edgeFade
@@ -117,24 +131,26 @@ final class VoiceSession {
         }
     }
 
-    enum Admission: Equatable { case accept, ignore, bargeIn }
+    enum Admission: Equatable { case accept, ignore, bargeIn, interrupt }
 
     /// The one table for state x trigger. `starting`: a capture was
     /// accepted and is spinning up (state still ready, wake still attached).
     ///
-    /// | state                         | wake word | manual  |
-    /// |-------------------------------|-----------|---------|
-    /// | ready                         | accept    | accept  |
-    /// | ready + starting              | ignore    | ignore  |
-    /// | listening                     | ignore    | ignore  |
-    /// | transcribing/thinking/searching | ignore  | ignore  |
-    /// | speaking                      | ignore    | bargeIn |
+    /// | state                         | wake word | orb tap   | manual  |
+    /// |-------------------------------|-----------|-----------|---------|
+    /// | ready                         | accept    | accept    | accept  |
+    /// | ready + starting              | ignore    | ignore    | ignore  |
+    /// | listening (session idle too)  | ignore    | ignore    | ignore  |
+    /// | transcribing/thinking/searching | ignore  | ignore    | ignore  |
+    /// | speaking                      | ignore    | interrupt | bargeIn |
     ///
     /// Wake never barges in: TTS through the speaker would wake itself.
+    /// Interrupt only stops the voice (a session keeps listening).
     static func admission(state: State, trigger: VoiceTrigger, starting: Bool) -> Admission {
         switch (state, trigger) {
         case (.ready, _): starting ? .ignore : .accept
         case (.speaking, .manual): .bargeIn
+        case (.speaking, .orbTap): .interrupt
         default: .ignore
         }
     }
@@ -300,6 +316,13 @@ final class VoiceSession {
         case .ignore: return false
         case .bargeIn: speaker.stop()
         case .accept: break
+        case .interrupt:
+            gen += 1
+            speaker.stop()
+            live?.muted = false
+            state = restState
+            resumeWake()
+            return true
         }
         gen += 1
         let g = gen
@@ -307,9 +330,9 @@ final class VoiceSession {
         activeTrigger = trigger
         // Wake keeps running until capture is attached (beginCapture): the
         // shared engine stays up, so no route re-switch eats the press.
-        if trigger == .wakeWord { chime() }
-        if trigger == .wakeWord, let make = liveFactory, Date() >= liveBackoffUntil {
-            Task { await beginLive(make, gen: g, press: press) }
+        if trigger.handsFree { chime() }
+        if trigger.handsFree, let make = liveFactory, Date() >= liveBackoffUntil {
+            Task { await beginLive(make, trigger: trigger, gen: g, press: press) }
         } else {
             Task { await beginCapture(trigger: trigger, gen: g, press: press) }
         }
@@ -422,7 +445,8 @@ final class VoiceSession {
     /// Wake accepted: open the live link (the wake listener stays on the
     /// shared engine until the link's mic sink is attached). Falls back to
     /// the per-utterance capture when the link can't start.
-    private func beginLive(_ make: @MainActor () -> LiveControlling, gen g: Int, press p: Int) async {
+    private func beginLive(_ make: @MainActor () -> LiveControlling, trigger: VoiceTrigger,
+                           gen g: Int, press p: Int) async {
         let link = make()
         link.onEvent = { [weak self, weak link] ev in
             guard let self, let link, self.live === link else { return }
@@ -436,7 +460,7 @@ final class VoiceSession {
             Log.voice.error("[voice] live start failed: \(error.localizedDescription, privacy: .public) -> per-utterance capture")
             live = nil
             guard g == gen else { return }
-            await beginCapture(trigger: .wakeWord, gen: g, press: p)
+            await beginCapture(trigger: trigger, gen: g, press: p)
             return
         }
         guard g == gen, live === link else { link.end(); return }
@@ -557,7 +581,7 @@ final class VoiceSession {
         wake.stop()
         state = .listening
         listeningSince = Date()
-        if trigger == .wakeWord {
+        if trigger.handsFree {
             await runAutoCapture(gen: g)
         }
     }
@@ -754,7 +778,8 @@ struct TopHeader: View {
                       muted: voice.aside != nil || idle,
                       blocked: voice.state == .ready
                           && Theme.talkBlocker(wake: voice.wakeSupport, wakeOn: true) != nil,
-                      onBlockedTap: onBlockedTap)
+                      onBlockedTap: onBlockedTap,
+                      onOrbTap: { voice.open(trigger: .orbTap) })
     }
 }
 
@@ -778,6 +803,8 @@ struct TopHeaderView: View {
     var muted = false
     var blocked = false
     var onBlockedTap: () -> Void = {}
+    /// Orb tap: talk (VoiceSession.admission decides what it does).
+    var onOrbTap: () -> Void = {}
     @State private var width: CGFloat = 0
 
     var body: some View {
@@ -794,6 +821,10 @@ struct TopHeaderView: View {
             HStack(spacing: px(16)) {
                 OrbDisc(style: style, diameter: px(52), bright: hearing)
                     .frame(width: px(52) * Theme.orbMaxScale)
+                    .contentShape(Circle())
+                    .onTapGesture { blocked ? onBlockedTap() : onOrbTap() }
+                    .accessibilityLabel("Talk to \(Persona.current.agentName)")
+                    .accessibilityAddTraits(.isButton)
                 // 22 px (design .t24) by review; the design .pip is 26
                 WordReveal(text: text, dots: dots, size: px(22), lines: 2,
                            color: muted ? Theme.mutT : (status ? Theme.blue : .primary),
