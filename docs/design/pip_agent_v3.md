@@ -313,6 +313,52 @@ smoke + iPad check.
   "Screen registry unreadable" banner (it silently fell back before,
   because the whole file was decoded as screen lists and `reads` broke it).
 
+## Live conversation (Meta realtime ASR, DIARIZATION) — fixed design
+
+Docs: dev.meta.ai/docs/speech-to-text, api-reference/voice/{realtime,schemas},
+pricing-rate-limits. App ↔ our server (WS) ↔ wss://api.meta.ai/v1/asr/realtime;
+the key stays on the server (handshake `authorization.accessToken`).
+
+- Session: "Hey Milo" (on-device) opens one stream (PCM_16KHZ, mode
+  DIARIZATION, languageBias English, keywords = wake phrase, agent name,
+  current protocol reagents/conditions, well examples). On-device wake
+  detection pauses while a session is open.
+- Owner = the session's first `speaker` label; `speaker` has no turnId,
+  so it labels the turn of the latest `speechStart`. Owner `speechComplete`
+  text goes into the one orchestrator path. Other-speaker turns: no reply,
+  sound or window extension; the top line shows "Another voice — ignored"
+  (pip_voice.json) in gray for ~1.5 s; log `[voice] ignored speaker=B`.
+- not_addressed: a perform action (no args) chosen in the same call;
+  left out of the candidates for the first turn after the wake phrase;
+  grammar-path commands run as before.
+- Window: 60 s (pip_voice.json) after the owner's last turn; other
+  speakers and not_addressed don't extend it; Milo speaking doesn't count
+  (the clock restarts when TTS ends). Card yes/no works inside it without
+  the wake phrase. Expiry: endStream, read to 1000, edge fades ~1 s with a
+  small sound, silent; only the day's first close says "Call me anytime."
+- Explicit end (server grammar, `end_session` in the response): "thanks /
+  that's all" -> short reply then close; "stop / never mind" -> close now.
+- While Milo speaks the app sends PCM silence instead of the mic (no voice
+  barge-in; the mic button still interrupts). Silence is processed audio.
+- Max 60 min (docs): at 55 min close at the next turn boundary (no hand-off).
+- Partials go to the app as WS messages (not snapshots) -> top line.
+- Edge "session idle": dim, slow while open and quiet; listening when the
+  owner talks; gone when the session ends. Top line a quiet "Listening…".
+- Fallback: stream failure or drop -> per-utterance /voice, shown on screen.
+- Private mode (no Meta streaming) is out of scope. API version 7 (new WS
+  messages, end_session / not_addressed).
+- Plan first, run when confirmed (direction; decided after real recordings):
+  the server detects end of speech from ~0.8 s silence (setting) and starts
+  the orchestrator on the partial, planning tool calls (reads allowed)
+  without `_apply_call`. On speechComplete + speaker: owner -> run the plan;
+  other speaker -> drop it (record untouched); a final text that differs
+  after normalization -> plan again. Today plan and run are interleaved
+  (round 1 writes apply before the lookup round; session memory/tone state
+  change during the model call), so this needs a pure planning step.
+- Piece 1 (server only): server/live_asr.py relay + eval/live_asr_measure.py
+  (real-time WAV playback, per-turn latency vs file VAD, label accuracy,
+  `--simulate` plan-first estimate with real model time).
+
 ## Standing rules (carried over)
 
 - Bug-judged behavior changes need a question first (AGENTS.md).
