@@ -83,6 +83,18 @@ final class VoiceSession {
     private(set) var wakeSupport: WakeListener.Support = .ok
     /// Capture output for the owner to send; cleared when it responds.
     private(set) var pendingAudio: URL?
+    /// Live conversation (wake opens it; the server closes it). nil = none.
+    private var live: LiveControlling?
+    private let liveFactory: (@MainActor () -> LiveControlling)?
+    /// Running transcript of the current live turn (top line).
+    private(set) var partialText: String?
+    /// Brief gray top line (another voice ignored), nil when none.
+    private(set) var aside: String?
+    private var asideGen = 0
+    /// Owner turn result from the live link; the owner view applies it like /voice.
+    private(set) var liveTurn: VoiceResponse?
+    private(set) var liveTurnGen = 0
+    var inSession: Bool { live != nil }
     private(set) var notice = ""
     private(set) var noticeGen = 0
 
@@ -147,7 +159,8 @@ final class VoiceSession {
     private var wakeBroken = false
 
     convenience init() {
-        self.init(wake: WakeListener(), capture: Recorder(), speaker: SpeechBus.shared)
+        self.init(wake: WakeListener(), capture: Recorder(), speaker: SpeechBus.shared,
+                  liveFactory: { LiveLink() })
         MicEngine.shared.onLost = { [weak self] in self?.audioLost() }
     }
 
@@ -173,7 +186,8 @@ final class VoiceSession {
          maxCapture: TimeInterval = 20,
          awaitSpeech: TimeInterval = 4,
          stuckTimeout: TimeInterval = 45,
-         speakMargin: TimeInterval = 5) {
+         speakMargin: TimeInterval = 5,
+         liveFactory: (@MainActor () -> LiveControlling)? = nil) {
         self.wake = wake
         self.capture = capture
         self.speaker = speaker
@@ -186,6 +200,7 @@ final class VoiceSession {
         self.awaitSpeech = awaitSpeech
         self.stuckTimeout = stuckTimeout
         self.speakMargin = speakMargin
+        self.liveFactory = liveFactory
         self.wake.onWake = { @MainActor [weak self] in self?.open(trigger: .wakeWord) ?? false }
         self.wake.onFailed = { @MainActor [weak self] in
             self?.wakeBroken = true
@@ -211,6 +226,7 @@ final class VoiceSession {
     func deactivate() {
         Log.voice.info("[voice] deactivate state=\(self.state.rawValue, privacy: .public)")
         activated = false
+        if live != nil { endLive("app inactive") }
         wake.stop()
         gen += 1
         if state == .listening {
@@ -275,7 +291,11 @@ final class VoiceSession {
         // Wake keeps running until capture is attached (beginCapture): the
         // shared engine stays up, so no route re-switch eats the press.
         if trigger == .wakeWord { chime() }
-        Task { await beginCapture(trigger: trigger, gen: g, press: press) }
+        if trigger == .wakeWord, let make = liveFactory {
+            Task { await beginLive(make, gen: g, press: press) }
+        } else {
+            Task { await beginCapture(trigger: trigger, gen: g, press: press) }
+        }
         return true
     }
 
@@ -323,6 +343,7 @@ final class VoiceSession {
 
     /// Any state -> ready (errors, teardown). Owner already logged if needed.
     func close() {
+        if live != nil { endLive("closed") }
         gen += 1
         activeTrigger = nil
         if state == .listening { try? capture.stop() }
@@ -337,7 +358,8 @@ final class VoiceSession {
     /// Owner received the reply: thinking, or searching when Pip searched.
     func didRespond(hasSources: Bool) {
         pendingAudio = nil
-        guard state == .transcribing || state == .thinking || state == .ready else { return }
+        guard state == .transcribing || state == .thinking || state == .ready
+            || (live != nil && state == .listening) else { return }
         state = hasSources ? .searching : .thinking
     }
 
@@ -346,7 +368,7 @@ final class VoiceSession {
         gen += 1
         pendingAudio = nil
         activeTrigger = nil
-        state = .ready
+        state = restState
         listeningSince = nil
         resumeWake()
     }
@@ -355,7 +377,7 @@ final class VoiceSession {
     /// TTS runs, then ready. Refused mid-listening (no self-feedback).
     func speak(_ text: String?) {
         Log.voice.info("[voice] speak len=\(text?.count ?? -1) state=\(self.state.rawValue, privacy: .public) activated=\(self.activated)")
-        guard state != .listening else { return }
+        guard state != .listening || live != nil else { return }
         guard activated else { state = .ready; return }
         gen += 1
         let g = gen
@@ -364,13 +386,92 @@ final class VoiceSession {
         // watchdog ends speaking even if TTS never reports done.
         speakLimit = Double(text?.count ?? 0) / 12 + speakMargin
         state = .speaking
+        live?.muted = true // the mic would hear the agent: stream silence
         speaker.speak(text) { @MainActor [weak self] in
             guard let self else { return }
             Log.voice.info("[voice] tts done gen=\(g)/\(self.gen) state=\(self.state.rawValue, privacy: .public)")
+            self.live?.muted = false
             guard g == self.gen, self.state == .speaking else { return }
-            self.state = .ready
+            self.state = self.restState
             self.resumeWake()
         }
+    }
+
+    /// Where a turn returns to: listening while a live session is open.
+    private var restState: State { live != nil ? .listening : .ready }
+
+    // MARK: - Live conversation
+
+    /// Wake accepted: open the live link (the wake listener stays on the
+    /// shared engine until the link's mic sink is attached). Falls back to
+    /// the per-utterance capture when the link can't start.
+    private func beginLive(_ make: @MainActor () -> LiveControlling, gen g: Int, press p: Int) async {
+        let link = make()
+        link.onEvent = { [weak self, weak link] ev in
+            guard let self, let link, self.live === link else { return }
+            self.liveEvent(ev)
+        }
+        live = link
+        do {
+            try await link.start(session: "bench")
+        } catch {
+            Log.voice.error("[voice] live start failed: \(error.localizedDescription, privacy: .public) -> per-utterance capture")
+            live = nil
+            guard g == gen else { return }
+            await beginCapture(trigger: .wakeWord, gen: g, press: p)
+            return
+        }
+        guard g == gen, live === link else { link.end(); return }
+        release(g)
+        wake.stop()
+        state = .listening
+        listeningSince = Date()
+        Log.voice.info("[voice] live session open")
+    }
+
+    private func liveEvent(_ ev: LiveEvent) {
+        switch ev {
+        case .partial(let text):
+            partialText = text
+            if state == .listening { state = .transcribing }
+        case .ignored(let line):
+            partialText = nil
+            if state == .transcribing { state = .listening }
+            showAside(line)
+        case .turn(let r, _):
+            partialText = nil
+            liveTurn = r
+            liveTurnGen += 1
+        case .closed(let reason):
+            endLive(reason)
+        }
+    }
+
+    private func showAside(_ line: String) {
+        asideGen += 1
+        let g = asideGen
+        aside = line
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard let self, self.asideGen == g else { return }
+            self.aside = nil
+        }
+    }
+
+    /// Session over (server closed, error, app inactive): back to ready and
+    /// wake detection resumes. A reply still speaking finishes first.
+    private func endLive(_ reason: String) {
+        guard let link = live else { return }
+        Log.voice.info("[voice] live session end: \(reason, privacy: .public)")
+        live = nil
+        link.onEvent = nil
+        link.end()
+        partialText = nil
+        if state == .listening || state == .transcribing {
+            state = .ready
+            listeningSince = nil
+        }
+        resumeWake()
     }
 
     // MARK: - Private
@@ -476,7 +577,7 @@ final class VoiceSession {
         guard state != .ready else { return }
         let s = state, g = gen
         let limit = switch s {
-        case .listening: maxCapture
+        case .listening: live != nil ? 600 : maxCapture // the server closes a quiet session
         case .speaking: speakLimit
         default: stuckTimeout
         }
@@ -497,7 +598,7 @@ final class VoiceSession {
     }
 
     private func resumeWake() {
-        guard activated, Self.wakeEnabled, state == .ready, !wakeBroken,
+        guard activated, Self.wakeEnabled, state == .ready, live == nil, !wakeBroken,
               support() == .ok, !wake.running, !startingWake else {
             Log.wake.info("[wake] resume skipped activated=\(self.activated) enabled=\(Self.wakeEnabled) state=\(self.state.rawValue, privacy: .public) broken=\(self.wakeBroken) support=\(String(describing: self.support()), privacy: .public) running=\(self.wake.running) starting=\(self.startingWake)")
             return
@@ -576,7 +677,8 @@ struct TopHeader: View {
         let line = Theme.pipText(for: voice.state, speakText: speakText,
                                  partialText: partialText, wake: voice.wakeSupport,
                                  wakeOn: VoiceSession.wakeEnabled)
-        TopHeaderView(style: Theme.orbStyle(for: voice.state), text: line.text, dots: line.dots,
+        TopHeaderView(style: Theme.orbStyle(for: voice.state), text: voice.aside ?? line.text,
+                      dots: voice.aside == nil && line.dots, muted: voice.aside != nil,
                       blocked: voice.state == .ready
                           && Theme.talkBlocker(wake: voice.wakeSupport, wakeOn: true) != nil,
                       onBlockedTap: onBlockedTap)
@@ -591,6 +693,8 @@ struct TopHeaderView: View {
     var style: Theme.OrbStyle
     var text: String
     var dots: Bool
+    /// Gray line (another voice ignored).
+    var muted = false
     var blocked = false
     var onBlockedTap: () -> Void = {}
     @State private var width: CGFloat = 0
@@ -610,7 +714,8 @@ struct TopHeaderView: View {
                 OrbDisc(style: style, diameter: px(52))
                     .frame(width: px(52) * Theme.orbMaxScale)
                 // 22 px (design .t24) by review; the design .pip is 26
-                WordReveal(text: text, dots: dots, size: px(22), lines: 2)
+                WordReveal(text: text, dots: dots, size: px(22), lines: 2,
+                           color: muted ? Theme.mutT : .primary)
             }
             .frame(minHeight: px(64))
             // keep clear of the mode label on both sides so the group stays centered
@@ -696,6 +801,7 @@ struct WordReveal: View {
     var size: CGFloat = 17
     /// Lines before truncating (header: 2).
     var lines: Int = 1
+    var color: Color = .primary
     @State private var shown = false
 
     var body: some View {
@@ -714,7 +820,7 @@ struct WordReveal: View {
         Text(text)
             .font(Theme.ui(size))
             .tracking(-0.012 * size)
-            .foregroundStyle(.primary)
+            .foregroundStyle(color)
             .lineLimit(lines)
             .multilineTextAlignment(.leading)
             .truncationMode(.tail)

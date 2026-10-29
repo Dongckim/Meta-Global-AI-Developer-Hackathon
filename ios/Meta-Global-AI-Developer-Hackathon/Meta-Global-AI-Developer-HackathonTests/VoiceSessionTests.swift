@@ -79,6 +79,21 @@ final class FakeSpeaker: SpeakerControlling {
 }
 
 @MainActor
+final class FakeLive: LiveControlling {
+    var onEvent: ((LiveEvent) -> Void)?
+    var muted = false
+    var fail = false
+    var starts = 0
+    var ends = 0
+    func start(session: String) async throws {
+        starts += 1
+        if fail { throw LiveError.refused("test") }
+    }
+    func end() { ends += 1 }
+    func send(_ ev: LiveEvent) { onEvent?(ev) }
+}
+
+@MainActor
 final class Flag {
     var value = false
 }
@@ -91,7 +106,8 @@ struct VoiceSessionTests {
                              chimed: Flag? = nil,
                              mic: (() async -> Bool)? = nil,
                              stuck: TimeInterval = 45,
-                             speakMargin: TimeInterval = 5) -> VoiceSession {
+                             speakMargin: TimeInterval = 5,
+                             live: FakeLive? = nil) -> VoiceSession {
         VoiceSession.sharedWakeOn()
         let flag = chimed ?? Flag()
         return VoiceSession(wake: wake ?? FakeWake(), capture: capture ?? FakeCapture(),
@@ -101,7 +117,8 @@ struct VoiceSessionTests {
                             micRequest: mic,
                             silenceTimeout: 0.05, minCapture: 0.02,
                             maxCapture: 5, awaitSpeech: 0.1, stuckTimeout: stuck,
-                            speakMargin: speakMargin)
+                            speakMargin: speakMargin,
+                            liveFactory: live.map { l in { l } })
     }
 
     private func settle(until: @escaping () -> Bool, timeout: Double = 3) async -> Bool {
@@ -450,6 +467,74 @@ struct VoiceSessionTests {
         let s = p.note("hey mylo", hit: true)
         #expect(s?.hasPrefix("measure done: 2/3 (66%)") == true)
         #expect(s?.contains("✗ \"hey my lab\"") == true)
+    }
+
+    @Test func liveSessionTurnFlow() async throws {
+        let wake = FakeWake(), speaker = FakeSpeaker(), live = FakeLive()
+        let voice = makeSession(wake: wake, speaker: speaker, live: live)
+        voice.activate()
+        #expect(await settle { wake.running })
+        #expect(wake.fire()) // wake opens a live session, not a capture
+        #expect(await settle { voice.inSession && voice.state == .listening })
+        #expect(!wake.running && live.starts == 1)
+        live.send(.partial("mark C2"))
+        #expect(voice.state == .transcribing && voice.partialText == "mark C2")
+        let r = try JSONDecoder().decode(VoiceResponse.self, from: Data(#"""
+            {"transcript": "mark C2 done", "tool_calls": [], "messages": [], "reply": "Nice.",
+             "ms": {}, "cards": [], "record_version": 1, "sources": [], "speak": "Nice."}
+            """#.utf8))
+        live.send(.turn(r, endSession: false))
+        #expect(voice.liveTurnGen == 1 && voice.liveTurn?.transcript == "mark C2 done" && voice.partialText == nil)
+        voice.didRespond(hasSources: false)
+        voice.speak("Nice.")
+        #expect(voice.state == .speaking && live.muted) // silence while the agent talks
+        speaker.complete()
+        #expect(voice.state == .listening && !live.muted) // back to the open session
+        #expect(!wake.running) // wake stays off during the session
+        live.send(.closed("window"))
+        #expect(voice.state == .ready && !voice.inSession)
+        #expect(await settle { wake.running }) // wake resumes after the session
+    }
+
+    @Test func liveIgnoredShowsAsideAndKeepsListening() async {
+        let wake = FakeWake(), live = FakeLive()
+        let voice = makeSession(wake: wake, live: live)
+        voice.activate()
+        #expect(await settle { wake.running })
+        wake.fire()
+        #expect(await settle { voice.inSession })
+        live.send(.partial("are we meeting"))
+        live.send(.ignored(line: "Another voice — ignored"))
+        #expect(voice.state == .listening && voice.aside == "Another voice — ignored" && voice.partialText == nil)
+        #expect(voice.liveTurnGen == 0)
+        #expect(await settle(timeout: 3) { voice.aside == nil }) // ~1.5 s
+    }
+
+    @Test func liveStartFailureFallsBackToCapture() async {
+        let wake = FakeWake(), capture = FakeCapture(), live = FakeLive()
+        live.fail = true
+        capture.script = [0.5, 0.5, 0, 0, 0, 0]
+        let voice = makeSession(wake: wake, capture: capture, live: live)
+        voice.activate()
+        #expect(await settle { wake.running })
+        wake.fire()
+        #expect(await settle { voice.state == .transcribing }) // per-utterance path ran
+        #expect(!voice.inSession && capture.starts == 1)
+    }
+
+    @Test func pcmFramerMakes80msFrames() {
+        var f = PCMFramer()
+        let samples: [Float] = Array(repeating: 0.5, count: 1280 + 100) + [2, -2]
+        let out = samples.withUnsafeBufferPointer { f.append($0, muted: false) }
+        #expect(out.count == 1 && out[0].count == 2560)
+        let v = out[0].withUnsafeBytes { $0.load(as: Int16.self) }
+        #expect(Int16(littleEndian: v) == 16383)
+        let more: [Float] = Array(repeating: 1, count: 1280)
+        let quiet = more.withUnsafeBufferPointer { f.append($0, muted: true) }
+        #expect(quiet.count == 1)
+        // the carried-over 102 samples (clamped to ±1) come first, then silence
+        let first = quiet[0].withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
+        #expect(first[100] == 32767 && first[101] == -32767 && first[102] == 0 && first.last == 0)
     }
 
     @Test func stuckStateReturnsToReady() async {

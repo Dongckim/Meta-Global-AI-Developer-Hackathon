@@ -280,6 +280,9 @@ struct ContentView: View {
         .onChange(of: voice.pendingAudio) { _, url in
             if let url { Task { await sendVoice(url) } }
         }
+        .onChange(of: voice.liveTurnGen) { _, _ in
+            if let r = voice.liveTurn { applyVoice(r) }
+        }
         .onChange(of: voice.noticeGen) { _, _ in
             if !voice.notice.isEmpty { say(voice.notice) }
         }
@@ -303,7 +306,8 @@ struct ContentView: View {
     private var mainBody: some View {
         VStack(spacing: 0) {
             contractBanners
-            TopHeader(voice: voice, speakText: lastReply, onBlockedTap: openSync)
+            TopHeader(voice: voice, speakText: lastReply, partialText: voice.partialText,
+                      onBlockedTap: openSync)
             Group {
                 if let src = viewingSource {
                 VStack(spacing: 8) {
@@ -1288,15 +1292,7 @@ struct ContentView: View {
             }
             let r = try await PipClient.voice(wav: data)
             Log.voice.info("[voice] /voice ok ignored=\(r.ignored ?? false) transcript=\"\(r.transcript, privacy: .public)\" speak=\(r.speak?.count ?? -1)")
-            guard r.ignored != true else { voice.didFail(); return }
-            if r.setup_done == true { dismissSyncOrSetup() }
-            if r.sync_retry == true { retrySync() }
-            say("🎙 \(r.transcript)")
-            voice.didRespond(hasSources: !r.sources.isEmpty)
-            handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
-                   route: r.route, input: r.transcript, sources: r.sources,
-                   dropped: r.dropped ?? 0,
-                   ui: r.ui, speak: r.speak, recordVersion: r.record_version)
+            applyVoice(r)
         } catch let e as PipClient.VoiceError {
             Log.voice.info("[voice] not sent: \(String(describing: e), privacy: .public)")
             voice.didFail()
@@ -1310,6 +1306,19 @@ struct ContentView: View {
             voice.didFail()
             say("Error: \(error.localizedDescription)")
         }
+    }
+
+    /// One path for a spoken turn's result: /voice replies and live turns.
+    private func applyVoice(_ r: VoiceResponse) {
+        guard r.ignored != true else { voice.didFail(); return }
+        if r.setup_done == true { dismissSyncOrSetup() }
+        if r.sync_retry == true { retrySync() }
+        say("🎙 \(r.transcript)")
+        voice.didRespond(hasSources: !r.sources.isEmpty)
+        handle(calls: r.tool_calls, messages: r.messages, reply: r.reply, ms: r.ms,
+               route: r.route, input: r.transcript, sources: r.sources,
+               dropped: r.dropped ?? 0,
+               ui: r.ui, speak: r.speak, recordVersion: r.record_version)
     }
 
     private func handle(calls: [ToolCall], messages: [String], reply: String, ms: [String: Int],

@@ -210,7 +210,14 @@ enum PipError: Error, LocalizedError {
 
 enum PipClient {
     /// Must match server API_VERSION (test_snapshot_schema pins both sides).
-    static let EXPECTED_API_VERSION = 6
+    static let EXPECTED_API_VERSION = 7
+
+    /// /voice/live on the same server (http -> ws, https -> wss).
+    static var liveURL: URL {
+        var c = URLComponents(url: Config.baseURL.appending(path: "voice/live"), resolvingAgainstBaseURL: false)!
+        c.scheme = c.scheme == "https" ? "wss" : "ws"
+        return c.url!
+    }
 
     /// Below this clip length nothing is sent (single choke point for all
     /// mic buttons; the server additionally ignores zero-frame audio).
