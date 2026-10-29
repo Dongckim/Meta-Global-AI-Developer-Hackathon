@@ -76,5 +76,32 @@ def title_of(screen_id: str) -> str:
     return SCREENS.get(screen_id, {}).get("title", screen_id)
 
 
+def result_of(screen_id: str, **slots) -> str:
+    """User-facing line for having opened a screen (registry `result`),
+    never the raw id. Slots: name, target."""
+    from collections import defaultdict
+    tmpl = SCREENS.get(screen_id, {}).get("result") or f"Showing {title_of(screen_id)}."
+    return tmpl.format_map(defaultdict(str, slots))
+
+
+def ui_of(screen_id: str) -> str | None:
+    """App-side UI action for registry entries that are sheets, not views."""
+    return SCREENS.get(screen_id, {}).get("ui")
+
+
+def guide() -> str:
+    """When to use each screen, for the model (registry `use`/`not`)."""
+    parts = []
+    for sid in IDS:
+        s = SCREENS[sid]
+        if not s.get("use"):
+            continue
+        line = f"{sid}{'(+target)' if s.get('needs_target') else ''}: {s['use']}"
+        if s.get("not"):
+            line += f"; not for {s['not']}"
+        parts.append(line)
+    return ". ".join(parts) + "."
+
+
 def commands_for(screen_id: str) -> list[str]:
     return list(SCREENS.get(screen_id, {}).get("commands", []))

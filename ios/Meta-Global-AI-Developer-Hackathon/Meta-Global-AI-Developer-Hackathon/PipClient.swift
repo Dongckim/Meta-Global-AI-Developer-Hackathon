@@ -210,7 +210,7 @@ enum PipError: Error, LocalizedError {
 
 enum PipClient {
     /// Must match server API_VERSION (test_snapshot_schema pins both sides).
-    static let EXPECTED_API_VERSION = 5
+    static let EXPECTED_API_VERSION = 6
 
     /// Below this clip length nothing is sent (single choke point for all
     /// mic buttons; the server additionally ignores zero-frame audio).

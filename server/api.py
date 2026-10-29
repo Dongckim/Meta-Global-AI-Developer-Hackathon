@@ -51,6 +51,7 @@ from server.grammar import (
 )
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
+from server.screens import guide as _screen_guide
 from server.screens import READS as SCREEN_READS
 from server import library as lib
 from server import protocol as proto
@@ -70,7 +71,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 5
+API_VERSION = 6
 
 BASE_URL = "https://api.meta.ai/v1"
 SPARK_MODEL = "muse-spark-1.3"
@@ -143,6 +144,8 @@ def _tool(name: str, desc: str, props: dict) -> dict:
     }
 
 
+SCREEN_GUIDE = _screen_guide()
+
 WELLREF = {"type": "string", "description": 'WellRef: "C5" | "C2-C8" | "C2,C5,C7"'}
 
 #: Actions the model may perform. answer_card is deliberately absent: only
@@ -169,7 +172,7 @@ TOOLS = [
         "open{target} (well/screen/run/original/importer); back; make_robot; "
         "edit_draft{path,value} (draft_open only); "
         "retry_sync; skip_sync (setup screen only). Never answer_card. "
-        "Screens: navigate.screen enum; run_view(+target), protocol_source(+target). "
+        f"Screens (navigate.screen): {SCREEN_GUIDE} "
         "Backup well: read free_wells first, then act on the first candidate at once.",
         {
             "action": {"type": "string", "enum": PERFORM_ACTIONS},

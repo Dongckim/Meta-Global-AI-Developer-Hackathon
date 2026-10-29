@@ -285,6 +285,10 @@ smoke + iPad check.
   words whose sound key is within one edit of the name); the on-device
   recognizer gets a custom language model for the phrase when supported.
   DEBUG "Measure ×10" logs the hit rate and every heard sentence.
+- Screen registry owns when to use each screen (`use`/`not`, needs_target)
+  and its spoken result line; the perform tool's screen guide and every
+  navigation reply derive from it. importer is a registry sheet (ui
+  import, no view).
 
 ## Standing rules (carried over)
 

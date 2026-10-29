@@ -41,11 +41,42 @@ TURNS = [
                                   "must_kind": {"read_record": "runs"}}),
     ("What time is right now?", {"must_not": sorted(WRITES),
                                  "reply_match": r"\d{1,2}:\d{2}"}),
+    # importer (new protocol) vs protocol_source (an existing one's original);
+    # each in its own session so earlier turns don't steer the choice.
+    *[(t, {"target": "importer", "fresh": True}) for t in (
+        "import a new protocol", "I want to import a new protocol",
+        "let's bring in a new protocol", "upload a protocol", "add a new protocol",
+        "I have a new protocol PDF to load")],
+    *[(t, {"target": "source", "fresh": True}) for t in (
+        "show me the original PDF", "open the source for this protocol",
+        "where does this step come from in the original", "let me see the original protocol document")],
+    # run history: reply comes from the result, never model line + result glued
+    *[(t, {"must_any": ["read_record", "navigate", "open"], "fresh": True,
+           "reply_not": [", but", "showing home"]}) for t in (
+        "show the runs", "my past runs", "open run history")],
 ]
+
+
+def _picked(j) -> set[str]:
+    """importer / source by the calls made (any route, any spelling)."""
+    out = set()
+    for x in j.get("tool_calls", []):
+        a = x.get("args") or {}
+        what = f"{a.get('screen') or ''} {a.get('target') or ''}".lower()
+        if x.get("name") in ("open", "navigate"):
+            if "importer" in what:
+                out.add("importer")
+            if "protocol_source" in what or "original" in what or "source" in what:
+                out.add("source")
+    if any(u.get("action") == "import" for u in j.get("ui") or []):
+        out.add("importer")
+    return out
 
 
 def verdict(j, exp) -> bool:
     names = [x.get("name", "?") for x in j.get("tool_calls", [])]
+    if exp.get("target") and _picked(j) != {exp["target"]}:
+        return False
     for m in exp.get("must", []):
         if m not in names:
             return False
@@ -75,17 +106,18 @@ def main():
     api._SESSIONS.clear()
     c = TestClient(api.app)
     rows = []
-    for text, exp in TURNS:
+    for i, (text, exp) in enumerate(TURNS):
         buf = io.StringIO()
         t0 = time.perf_counter()
+        session = f"eval-{i}" if exp.get("fresh") else "eval"
         with contextlib.redirect_stdout(buf):
-            r = c.post("/orchestrate", json={"text": text, "session": "eval"})
+            r = c.post("/orchestrate", json={"text": text, "session": session})
         total = int((time.perf_counter() - t0) * 1000)
         j = r.json()
         ok = verdict(j, exp)
         calls = ",".join(x.get("name", "?") for x in j.get("tool_calls", [])) or "-"
         rows.append({"label": text, "total": total, "calls": calls,
-                     "reply": (j.get("reply") or "")[:70], "ok": ok})
+                     "reply": (j.get("reply") or "").replace("|", "/"), "ok": ok})
         print(f"[{'PASS' if ok else 'FAIL'} {total}ms] {text[:44]} -> {calls}")
     acc = sum(1 for r in rows if r["ok"])
     print(f"accuracy: {acc}/{len(rows)}")

@@ -29,7 +29,7 @@ from server.grammar import (
     where_am_i_reply,
 )
 from server.screens import READ_KINDS as SCREEN_READ_KINDS
-from server.screens import SCREENS, canonical, parent_of, title_of
+from server.screens import SCREENS, canonical, parent_of, result_of, title_of, ui_of
 from server.tone import say
 from server import library as lib
 from server import protocol as proto
@@ -302,19 +302,29 @@ class RecordStore:
                     else f"I couldn't find the {t} protocol.")
                 return
             self._push_view(screen, doc["id"])
-            res["messages"].append(f"Showing {doc.get('name')}.")
+            res["messages"].append(result_of(screen, name=doc.get("name") or "the protocol"))
             return
         if screen == "protocol_source":
+            if not t:
+                # "this protocol" = the one being viewed, else the active run's
+                v = (self.r.get("view") or {}).get("current") or {}
+                pid = v.get("target") if v.get("screen") == "protocol_detail" else None
+                t = pid or (self.r.get("run") or {}).get("protocol_id") or ""
             base = t.split("#", 1)[0]
             pid = (base[len("protocol:"):] if base.startswith("protocol:") else base).strip()
             if not pid or lib.get(pid, self.root) is None:
                 res["messages"].append("I couldn't open that original: which protocol?")
                 return
             self._push_view(screen, t)
-            res["messages"].append("Showing the original.")
+            res["messages"].append(result_of(screen))
+            return
+        if ui_of(screen):
+            # a sheet (importer), not a view: the app opens it from ui
+            res["ui"].append({"action": ui_of(screen)})
+            res["messages"].append(result_of(screen))
             return
         self._push_view(screen)
-        res["messages"].append(f"Showing {title_of(screen)}.")
+        res["messages"].append(result_of(screen))
 
     def _open_protocol(self, res: dict, session: dict, selector: str) -> None:
         doc = lib.get(selector.strip(), self.root) or lib.find_by_name(selector, self.root)
@@ -335,10 +345,10 @@ class RecordStore:
         # read-only snapshot for finished runs.
         if doc["run_id"] == (self.r.get("run") or {}).get("run_id"):
             self._push_view("main")
-            res["messages"].append("Showing the active run on the bench.")
+            res["messages"].append(result_of("main"))
             return
         self._push_view("run_view", doc["run_id"])
-        res["messages"].append(f"Showing run {doc['run_id']}.")
+        res["messages"].append(result_of("run_view", target=doc["run_id"]))
 
     def _open_source(self, res: dict, session: dict, t: str) -> None:
         """'The original' for the current (or named) step of the viewing run."""
@@ -1156,10 +1166,6 @@ class RecordStore:
                 return
             if "original" in low or low.startswith("source"):
                 self._open_source(res, session, t)
-                return
-            if low == "importer":
-                res["ui"].append({"action": "import"})
-                res["messages"].append("Opening the importer.")
                 return
             if is_well(t):
                 self.r["view"]["sheet"] = {"name": "well_card", "target": t.upper()}

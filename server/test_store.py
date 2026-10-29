@@ -384,9 +384,15 @@ class StoreTest(unittest.TestCase):
         r = self.apply([T("read_record", kind="wells", filter="C6")])
         self.assertEqual(r["messages"], [])
 
+    def test_source_defaults_to_this_protocol(self):
+        pid = self.s.r["run"]["protocol_id"]
+        r = self.apply([T("navigate", screen="protocol_source")])  # "open the original"
+        self.assertEqual(r["messages"], ["Here's the original."])
+        self.assertEqual(self.s.r["view"]["current"], {"screen": "protocol_source", "target": pid})
+
     def test_navigate_open_back(self):
         r = self.apply([T("navigate", screen="robot_preview")])
-        self.assertEqual(r["messages"], ["Showing Robot preview."])
+        self.assertEqual(r["messages"], ["Here's the robot preview."])  # registry result line
         self.assertEqual(r["ui"], [])
         self.assertEqual(self.s.r["view"]["current"],
                          {"screen": "robot_preview", "target": ""})

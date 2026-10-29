@@ -117,7 +117,7 @@ with patch("httpx.AsyncClient", FakeClient):
     with patch("httpx.AsyncClient", ScriptClient):
         r = c.post("/orchestrate", json={"text": "read all my notes", "session": "r3"})
     j = r.json()
-    assert j["reply"] == f"{summary} Showing Bench.", j
+    assert j["reply"] == f"{summary} Here's the bench.", j
     assert [x["name"] for x in j["tool_calls"]] == ["read_record", "navigate"], j
     assert api.store.r["view"]["current"]["screen"] == "main", j
     print("R3 ok: notes summary + list screen")
