@@ -6,6 +6,10 @@
       "type": "string",
       "description": "Document title (first heading), verbatim. Empty when none."
     },
+    "short_title": {
+      "type": "string",
+      "description": "At most 4 words taken from the title, for people to say (e.g. 'Drug A/B Dosing'). Empty when there is no title."
+    },
     "liquids": {
       "type": "array",
       "description": "Reagents and solutions named by the document.",
@@ -155,6 +159,6 @@
       }
     }
   },
-  "required": ["title", "liquids", "conditions", "steps"],
+  "required": ["title", "short_title", "liquids", "conditions", "steps"],
   "additionalProperties": false
 }

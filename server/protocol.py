@@ -42,6 +42,8 @@ EXTRACT_PROMPT = (
     "Extract the bench run plan from this protocol document. "
     "Output ONLY what the document states. "
     "title: the document title (first heading), verbatim, or empty. "
+    "short_title: at most 4 words taken from the title, for people to say "
+    "(e.g. Drug A/B Dosing), or empty. "
     "liquids: reagents as {id, name, concentration, prep, quote} with short "
     "lowercase ids; quote is the verbatim sentence each liquid comes from. "
     "conditions: experimental conditions as {id, label, treatments, "
@@ -565,6 +567,14 @@ def assign_quote_pages(plan: dict, evidence: dict) -> None:
         (node or {})["quote_page"] = page_of((node or {}).get("quote") or "")
 
 
+def resolve_short_title(draft: dict) -> str:
+    """Spoken/display short title: the model's (<= 4 words), else a rule
+    over the library name."""
+    from server.labels import shorten_title
+    short = " ".join((((draft or {}).get("plan") or {}).get("short_title") or "").split()[:4])
+    return short or shorten_title(resolve_name(draft))
+
+
 def resolve_name(draft: dict) -> str:
     """Library name: grounded title, else the source filename stem."""
     plan = (draft or {}).get("plan") or {}
@@ -620,7 +630,8 @@ def build_draft(raw: dict, evidence: dict, source: str) -> dict:
                          "mix": p.get("mix"), "repeat": p.get("repeat")} if p else None),
             "wells": [],
         })
-    draft = {"plan": {"title": (raw.get("title") or "").strip(), "liquids": liquids,
+    draft = {"plan": {"title": (raw.get("title") or "").strip(),
+                      "short_title": (raw.get("short_title") or "").strip(), "liquids": liquids,
                       "conditions": conditions, "steps": steps, "backups": []},
              "review": [], "errors": [],
              "meta": {"source": source, "evidence_chars": len(evidence.get("text", "")),

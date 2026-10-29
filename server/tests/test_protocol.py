@@ -142,7 +142,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert proto.strict_subset_ok(proto.PROTOCOL_SCHEMA)
     assert not proto.strict_subset_ok({"type": "object", "properties": {"a": {"type": "string"}},
                                              "required": ["a"]}), "additionalProperties missing"
-    good = {"title": "Methods", "liquids": LIQUIDS, "conditions": CONDITIONS, "steps": STEPS}
+    good = {"title": "Methods", "short_title": "Methods", "liquids": LIQUIDS, "conditions": CONDITIONS, "steps": STEPS}
     assert proto.validate_against_schema(good, proto.PROTOCOL_SCHEMA) == []
     bad = {"liquids": [], "conditions": [{"id": "x"}], "steps": []}
     assert proto.validate_against_schema(bad, proto.PROTOCOL_SCHEMA), "label required"
@@ -452,7 +452,7 @@ with patch("httpx.AsyncClient", FakeClient):
     ev = proto.evidence_from_text(
         "Experimental design\nGroup\nTreatment\nReplicates\nControl\n"
         "Vehicle (PBS)\n5\nDrug A\nDrug A, 10 uM working solution\n5\n")
-    raw = {"title": "Experimental design", "liquids": [], "conditions": [
+    raw = {"title": "Experimental design", "short_title": "Experimental Design", "liquids": [], "conditions": [
         {"id": "control", "label": "Control", "treatments": [], "replicates": 5,
          "wells": None, "quote": "Use one row of the plate per group."}], "steps": []}
     d = proto.build_draft(raw, ev, "x.pdf")

@@ -70,8 +70,10 @@ def ensure_demo_seed(root: Path | None = None) -> dict | None:
     return save(plan, name="Demo protocol", source_filename="plan_demo.json", root=root)
 
 
-def save(plan: dict, name: str, source_filename: str, root: Path | None = None) -> dict:
-    """Store a confirmed plan; same content returns the existing protocol."""
+def save(plan: dict, name: str, source_filename: str, root: Path | None = None,
+         short_title: str = "") -> dict:
+    """Store a confirmed plan; same content returns the existing protocol
+    (its first import time and labels stay)."""
     d = _dir(root)
     d.mkdir(parents=True, exist_ok=True)
     h, pid = plan_hash(plan), protocol_id(plan)
@@ -79,7 +81,8 @@ def save(plan: dict, name: str, source_filename: str, root: Path | None = None) 
     existing = _read(path)
     if existing and existing.get("plan_hash") == h:
         return existing
-    doc = {"id": pid, "name": name or pid, "source_filename": source_filename or "",
+    doc = {"id": pid, "name": name or pid, "short_title": short_title or "",
+           "source_filename": source_filename or "",
            "imported_at": time.time(), "plan_hash": h, "plan": plan}
     path.write_text(json.dumps(doc, ensure_ascii=False, indent=1))
     return doc
@@ -107,12 +110,23 @@ def find_by_name(name: str, root: Path | None = None) -> dict | None:
 
 
 def summarize(doc: dict) -> dict:
+    from server.labels import protocol_label, protocol_short
     plan = (doc or {}).get("plan") or {}
+    label = protocol_label(doc)
     return {"id": doc.get("id"), "name": doc.get("name"),
+            "short_title": protocol_short(doc), "label": label["display"], "spoken": label["spoken"],
             "source_filename": doc.get("source_filename"),
             "imported_at": doc.get("imported_at"),
             "conditions": len(plan.get("conditions") or {}),
             "steps": len(plan.get("steps") or [])}
+
+
+def all_docs(root: Path | None = None) -> list[dict]:
+    """Every protocol doc (full), newest import first."""
+    ensure_demo_seed(root)
+    docs = [d for p in _dir(root).glob("*.json") if (d := _read(p))]
+    docs.sort(key=lambda d: d.get("imported_at") or 0, reverse=True)
+    return docs
 
 
 def list_all(root: Path | None = None) -> list[dict]:

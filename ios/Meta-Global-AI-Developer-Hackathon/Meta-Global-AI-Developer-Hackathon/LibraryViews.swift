@@ -106,12 +106,11 @@ struct HomeView: View {
                 Button { onProtocol(p.id) } label: {
                     HStack {
                         VStack(alignment: .leading) {
-                            Text(p.name).font(.callout.bold())
+                            Text(p.label ?? p.name).font(.callout.bold())
                             Text("\(p.conditions) conditions · \(p.steps) steps")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Text(fmtDate(p.importedAt)).font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -123,11 +122,10 @@ struct HomeView: View {
                         Circle().fill(r.status == "active" ? .green : .secondary)
                             .frame(width: 8, height: 8)
                         VStack(alignment: .leading) {
-                            Text(r.protocolName ?? r.runId).font(.callout.bold())
+                            Text(r.label ?? r.protocolName ?? "Run").font(.callout.bold())
                             Text(runCounts(r)).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Text(fmtDate(r.startedAt)).font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -199,7 +197,7 @@ struct ProtocolDetailView: View {
                                 HStack {
                                     Circle().fill(r.status == "active" ? .green : .secondary)
                                         .frame(width: 8, height: 8)
-                                    Text(fmtDate(r.startedAt)).font(.callout)
+                                    Text(r.label ?? fmtDate(r.startedAt)).font(.callout)
                                     Spacer()
                                     Text(r.status).font(.caption).foregroundStyle(.secondary)
                                 }
@@ -247,6 +245,7 @@ struct PastRunView: View {
     var onBack: () -> Void
     var onSource: (_ target: String, _ page: Int?, _ phrase: String?) -> Void
     @State private var doc: RunDoc?
+    @State private var title: String?
     @State private var error = ""
     @State private var rlab = LabState()
     @State private var selected: WellSelect?
@@ -258,9 +257,9 @@ struct PastRunView: View {
                     Image(systemName: "chevron.left").font(.headline)
                 }
                 .buttonStyle(.borderless)
-                Text(doc?.protocolName ?? "Past run").font(.title2.bold())
+                Text(title ?? doc?.protocolName ?? "Past run").font(.title2.bold())
                 Spacer()
-                Text("VIEWING past run \(runId) (read-only)").font(.caption2).foregroundStyle(.orange)
+                Text("VIEWING past run (read-only)").font(.caption2).foregroundStyle(.orange)
                     .padding(4).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
             }
             if !error.isEmpty {
@@ -333,9 +332,10 @@ struct PastRunView: View {
     private func load() async {
         error = ""
         do {
-            let d = try await PipClient.runDetail(id: runId)
-            doc = d
-            rlab.sync(d.record)
+            let r = try await PipClient.runDetail(id: runId)
+            doc = r.run
+            title = r.label
+            rlab.sync(r.run.record)
         } catch {
             self.error = error.localizedDescription
         }

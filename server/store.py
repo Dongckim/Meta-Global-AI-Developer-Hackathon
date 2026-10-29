@@ -33,6 +33,7 @@ from server.screens import SCREENS, canonical, parent_of, result_of, title_of, u
 from server.tone import say
 from server import library as lib
 from server import protocol as proto
+from server import labels
 from server import runs as runlog
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -330,20 +331,46 @@ class RecordStore:
         res["messages"].append(result_of(screen))
 
     def _open_protocol(self, res: dict, session: dict, selector: str) -> None:
-        doc = lib.get(selector.strip(), self.root) or lib.find_by_name(selector, self.root)
+        doc, cands = labels.select_protocol(selector, lib.all_docs(self.root))
         if doc is None:
-            res["messages"].append(f"I couldn't find the {selector.strip()} protocol.")
+            res["messages"].append(
+                labels.which_one([labels.protocol_label(c)["spoken"] for c in cands]) if cands
+                else "I couldn't find that protocol.")
             return
         self._navigate_locked(res, session, "protocol_detail", doc["id"])
 
+    # --- labels (server/labels.py is the one place) ---
+
+    def run_short(self, doc: dict) -> str:
+        return labels.protocol_short(lib.get(doc.get("protocol_id") or "", self.root),
+                                     doc.get("protocol_name") or "")
+
+    def run_label(self, doc: dict, docs: list[dict] | None = None) -> dict:
+        docs = self.all_run_docs() if docs is None else docs
+        return labels.run_label(doc, docs, self.run_short, (self.r.get("run") or {}).get("run_id"))
+
+    def run_summaries(self, docs: list[dict]) -> list[dict]:
+        everything = self.all_run_docs()
+        out = []
+        for d in docs:
+            lab = self.run_label(d, everything)
+            out.append({**runlog.summarize(d), "label": lab["display"], "spoken": lab["spoken"]})
+        return out
+
+    def select_run(self, phrase: str) -> tuple[dict | None, list[dict]]:
+        return labels.select_run(phrase, self.all_run_docs(), self.run_short,
+                                 (self.r.get("run") or {}).get("run_id"))
+
     def _open_run(self, res: dict, session: dict, selector: str) -> None:
         docs = self.all_run_docs()
-        doc = runlog.resolve(selector.strip() or "latest", docs)
+        doc, cands = self.select_run(selector.strip() or "latest")
         if doc is None:
             res["messages"].append(
                 "No runs yet — start one from Home." if not docs
+                else labels.which_one([self.run_label(c, docs)["spoken"] for c in cands]) if cands
                 else "I couldn't find that run.")
             return
+        print(f"open run: {self.run_label(doc, docs)['display']}", flush=True)
         # The active run lives on the bench (live plate); run_view is the
         # read-only snapshot for finished runs.
         if doc["run_id"] == (self.r.get("run") or {}).get("run_id"):
@@ -351,7 +378,7 @@ class RecordStore:
             res["messages"].append(result_of("main"))
             return
         self._push_view("run_view", doc["run_id"])
-        res["messages"].append(result_of("run_view", target=doc["run_id"]))
+        res["messages"].append(result_of("run_view", name=self.run_label(doc, docs)["spoken"]))
 
     def _open_source(self, res: dict, session: dict, t: str) -> None:
         """'The original' for the current (or named) step of the viewing run."""
@@ -438,7 +465,8 @@ class RecordStore:
                 return False, {"errors": draft["errors"]}
             plan = proto.build_start_plan(draft["plan"])
             doc = lib.save(plan, proto.resolve_name(draft),
-                           (draft.get("meta") or {}).get("source") or "", self.root)
+                           (draft.get("meta") or {}).get("source") or "", self.root,
+                           short_title=proto.resolve_short_title(draft))
             self.r.pop("draft", None)
             self._pop_view()
             self._commit()
@@ -511,7 +539,8 @@ class RecordStore:
                 return False, {"errors": draft["errors"]}
             plan = proto.build_start_plan(draft["plan"])
             doc = lib.save(plan, proto.resolve_name(draft),
-                           (draft.get("meta") or {}).get("source") or "", self.root)
+                           (draft.get("meta") or {}).get("source") or "", self.root,
+                           short_title=proto.resolve_short_title(draft))
             review_n = len(draft["review"])
             self.r.pop("draft", None)
             ok, info = self._request_start_locked(doc["id"], session)
@@ -545,7 +574,10 @@ class RecordStore:
         self._broadcast({"kind": "snapshot", **self.snapshot()})
 
     def snapshot(self) -> dict:
-        return json.loads(json.dumps(self.r))
+        snap = json.loads(json.dumps(self.r))
+        if snap.get("run"):  # what the app shows instead of the run id
+            snap["run"]["label"] = self.run_label(self.active_run_doc() or snap["run"])["display"]
+        return snap
 
     # --- plan helpers ---
 
@@ -1444,17 +1476,17 @@ class RecordStore:
             return {"error": f"unknown kind: {kind}. Use {', '.join(self.READ_KINDS)}."}
         if kind == "protocols":
             if f:
-                hit = lib.find_by_name(f, self.root)
-                docs = [lib.summarize(hit)] if hit else []
+                hit, cands = labels.select_protocol(f, lib.all_docs(self.root))
+                docs = [lib.summarize(x) for x in ([hit] if hit else cands)]
             else:
                 docs = lib.list_all(self.root)[:n]
             return {"protocols": docs}
         if kind == "runs":
             docs = self.all_run_docs()
             if f:
-                hit = runlog.resolve(f, docs)
-                docs = [hit] if hit else []
-            return {"runs": [runlog.summarize(d) for d in docs[:n]]}
+                hit, cands = self.select_run(f)
+                docs = [hit] if hit else cands
+            return {"runs": self.run_summaries(docs[:n])}
         rec, rid = self._read_scope()
         rec = rec or {}
         if kind == "free_wells":

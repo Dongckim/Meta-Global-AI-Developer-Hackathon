@@ -73,6 +73,7 @@ def spark(*calls):
 S1 = "Step 1: add 100 uL media to all wells; pipette slowly down the wall."
 RAW = {
     "title": "Methods",
+    "short_title": "Methods",
     "liquids": [{"id": "media", "name": "media", "concentration": None,
                  "prep": None, "quote": S1}],
     "conditions": [{"id": "control", "label": "control", "treatments": ["media"],
@@ -126,7 +127,7 @@ with patch("httpx.AsyncClient", FakeClient):
     print("LIB2 ok: save + dedup + quote_page")
 
     # LIB3. missing title falls back to the filename stem.
-    raw = {"title": "", "liquids": [], "conditions": [], "steps": []}
+    raw = {"title": "", "short_title": "", "liquids": [], "conditions": [], "steps": []}
     FakeClient.spark_payload = extraction(raw)
     c.post("/protocols/import",
            files={"file": ("mylib.txt", b"Seed control wells.", "text/plain")})

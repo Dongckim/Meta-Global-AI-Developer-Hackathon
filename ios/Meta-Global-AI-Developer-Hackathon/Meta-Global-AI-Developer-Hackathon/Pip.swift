@@ -235,10 +235,12 @@ struct RunBlock: Decodable, Equatable {
     var protocolId: String?
     var protocolName: String?
     var startedAt: Double
+    /// Server display label for the active run.
+    var label: String?
 
     enum CodingKeys: String, CodingKey {
         case runId = "run_id", protocolId = "protocol_id",
-             protocolName = "protocol_name", startedAt = "started_at"
+             protocolName = "protocol_name", startedAt = "started_at", label
     }
 }
 
@@ -249,10 +251,12 @@ struct ProtocolSummary: Decodable, Identifiable {
     var importedAt: Double?
     var conditions: Int
     var steps: Int
+    /// Server label (server/labels.py): "Oct 29 · 12:51 AM · Drug A/B Dosing".
+    var label: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, sourceFilename = "source_filename", importedAt = "imported_at",
-             conditions, steps
+             conditions, steps, label
     }
 }
 
@@ -290,12 +294,14 @@ struct RunSummary: Decodable, Identifiable {
     var endedAt: Double?
     var status: String
     var summary: RunCounts?
+    /// Server label: "Oct 29 · 2:20 PM · Drug A/B Dosing" (never the run id).
+    var label: String?
 
     var id: String { runId }
 
     enum CodingKeys: String, CodingKey {
         case runId = "run_id", protocolId = "protocol_id", protocolName = "protocol_name",
-             startedAt = "started_at", endedAt = "ended_at", status, summary
+             startedAt = "started_at", endedAt = "ended_at", status, summary, label
     }
 }
 

@@ -162,6 +162,7 @@ struct RunListResponse: Decodable {
 
 struct RunDetailResponse: Decodable {
     let run: RunDoc
+    let label: String?
 }
 
 struct RobotCheck: Decodable {
@@ -210,7 +211,7 @@ enum PipError: Error, LocalizedError {
 
 enum PipClient {
     /// Must match server API_VERSION (test_snapshot_schema pins both sides).
-    static let EXPECTED_API_VERSION = 7
+    static let EXPECTED_API_VERSION = 8
 
     /// /voice/live on the same server (http -> ws, https -> wss).
     static var liveURL: URL {
@@ -344,9 +345,8 @@ enum PipClient {
         return try JSONDecoder().decode(RunListResponse.self, from: data).runs
     }
 
-    static func runDetail(id: String) async throws -> RunDoc {
-        let r: RunDetailResponse = try await get("runs/\(id)")
-        return r.run
+    static func runDetail(id: String) async throws -> RunDetailResponse {
+        try await get("runs/\(id)")
     }
 
     static func health() async throws -> HealthInfo {

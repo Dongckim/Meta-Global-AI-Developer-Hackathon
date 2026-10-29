@@ -36,7 +36,8 @@
         "run_id": {"type": "string"},
         "protocol_id": {"type": ["string", "null"]},
         "protocol_name": {"type": ["string", "null"]},
-        "started_at": {"type": "number"}
+        "started_at": {"type": "number"},
+        "label": {"type": "string", "description": "Display label (server/labels.py); never the run id."}
       }
     },
     "plan": {

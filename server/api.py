@@ -77,7 +77,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 7
+API_VERSION = 8
 
 BASE_URL = "https://api.meta.ai/v1"
 SPARK_MODEL = "muse-spark-1.3"
@@ -999,10 +999,10 @@ def _render_record(kind: str, data: dict) -> list[str]:
             return []
         return [f"Free near {data.get('near', '')}: {', '.join(free[:4])}"]
     if kind == "protocols":
-        return [f"{p.get('name', '?')} ({p.get('steps', '?')} steps)"
+        return [f"{p.get('spoken') or p.get('name', '?')} ({p.get('steps', '?')} steps)"
                 for p in (data.get("protocols") or [])[:3]]
     if kind == "runs":
-        return [f"{r.get('run_id', '?')} {r.get('protocol_name') or ''} ({r.get('status', '?')})"
+        return [f"{r.get('spoken') or 'a run'} ({r.get('status', '?')})"
                 for r in (data.get("runs") or [])[:3]]
     return []
 
@@ -1597,7 +1597,7 @@ async def runs_list(protocol_id: str = ""):
     docs = store.all_run_docs()
     if protocol_id:
         docs = [d for d in docs if d.get("protocol_id") == protocol_id]
-    return {"runs": [runlog.summarize(d) for d in docs]}
+    return {"runs": store.run_summaries(docs)}
 
 
 @app.get("/runs/{run_id}")
@@ -1605,7 +1605,8 @@ async def run_get(run_id: str):
     doc = runlog.resolve(run_id, store.all_run_docs())
     if doc is None:
         raise HTTPException(404, "unknown run")
-    return {"run": doc}
+    lab = store.run_label(doc)
+    return {"run": doc, "label": lab["display"], "spoken": lab["spoken"]}
 
 
 @app.delete("/protocols/draft")

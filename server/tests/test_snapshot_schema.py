@@ -62,7 +62,7 @@ class SchemaTest(unittest.TestCase):
 
     def test_draft_present(self):
         self.s.start_demo_run()
-        raw = {"title": "T", "liquids": [], "conditions": [], "steps": []}
+        raw = {"title": "T", "short_title": "T", "liquids": [], "conditions": [], "steps": []}
         self.s.r["draft"] = proto.build_draft(raw, proto.evidence_from_text("Seed it."), "t.txt")
         self.check()
 

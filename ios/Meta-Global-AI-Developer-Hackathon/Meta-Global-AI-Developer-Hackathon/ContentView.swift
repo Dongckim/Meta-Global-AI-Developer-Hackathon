@@ -398,7 +398,7 @@ struct ContentView: View {
                 VStack(spacing: 8) {
                     HStack(spacing: 6) {
                         Circle().fill(.green).frame(width: 8, height: 8)
-                        Text("LIVE · run \(lab.run?.runId ?? "–") · v\(lab.version)")
+                        Text("LIVE · \(lab.run?.label ?? lab.run?.protocolName ?? "–") · v\(lab.version)")
                             .font(.caption2).foregroundStyle(.secondary)
                         Spacer()
                     }
