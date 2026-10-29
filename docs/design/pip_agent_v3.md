@@ -225,8 +225,8 @@ smoke + iPad check.
   only finished runs open the read-only `run_view` snapshot. Voice
   "open setup" / "glasses sync" open the same screen (`setup` is now an
   alias of `sync` in screens.json; API 4).
-- Glasses sync rows: Bluetooth, Local network, Meta AI app, Glasses,
-  Glasses audio, Camera. A row tap is its one action; permissions are
+- Glasses sync rows (superseded below): Bluetooth, Local network, Meta AI
+  app, Glasses, Glasses audio, Camera. A row tap is its one action; permissions are
   asked only there (denied opens Settings). Glasses shows the device name
   and battery when connected. Glasses audio asks the mic (iOS needs it for
   the glasses' HFP mic too; speech recognition for "Hey Pip" is asked in
@@ -361,8 +361,59 @@ the key stays on the server (handshake `authorization.accessToken`).
   sends silence while the agent speaks. Server `LiveConversation` keeps the
   owner (first label), strips a leading wake phrase, runs owner turns through
   `_handle_text`, reports others as `ignored`; partials as they come.
-  Messages: shared/schemas/live.schema.json. Temporary close: 60 s quiet
-  after the last owner reply (or after opening). API 7.
+  Messages: shared/schemas/live.schema.json. API 7.
+- Checkpoint 2 (built): window clock restarts on owner turns and when the
+  agent stops talking (app `tts` messages pause it); closes only at a turn
+  boundary; 55 min (`live.max_s`) closes at the next boundary. "thanks /
+  that's all" -> `session_thanks` reply + end_session; "stop / never mind"
+  -> end_session with no reply (grammar `match_session_end`; a pending
+  card's answer wins). `closed.why` tells window / max_duration /
+  end_session / client / server / error. App: normal close -> 1 s edge fade
+  + small sound, the day's first window close says `live.first_close_line`;
+  error -> `live.fallback_line` and per-utterance capture for 2 min. Edge
+  "session idle" (dim, slow) and a quiet "Listening…" while open and quiet.
+- Live fixes: the perform gate drops calls without a name or action (the
+  strict schema doesn't constrain model output); if every call dropped,
+  the user is asked between the registry's best-matching screens (names
+  weigh twice the `use` text, `choice` phrases the options). Reply assembly
+  skips None/blank. A live turn that fails says `didnt_catch` and the
+  session stays. Session-end grammar normalizes first (punctuation out,
+  repeated phrases folded). A turn that is only the wake phrase answers
+  `here` without a model call and restarts the window.
+- Sessions close only on the window, an explicit end, the max duration, a
+  broken stream, or the app going to background. Timeouts recover to
+  listening; an engine rebuild re-attaches the live mic; inactive (Control
+  Center) keeps the session. Speaking ends on a stalled voice (no word
+  boundary for `speakMargin` s), so long replies at any rate are never cut.
+  While muted, an audio-queue timer sends 80 ms of silence on its own clock.
+- Speech is short (`speak_text`, the one place): at most two sentences; a
+  sentence listing 3+ items says the first and "N more on screen"
+  (`live.more_on_screen`). Model guide: lists -> count + top one + navigate.
+  Registry results never keep an empty slot; screens that need a target
+  ask "which one?" when opened without one.
+- Labels (server/labels.py, the one place): protocols "Oct 29 · 12:51 AM ·
+  <short_title>" / "the <short_title> protocol"; runs "Oct 29 · 2:20 PM ·
+  <short_title>" / "the active run", "today's 2:20 PM <short> run",
+  "yesterday's <short> run", "the second <short> run today". short_title
+  comes from import extraction (plan.schema.json, <= 4 words) or a rule over
+  the title. Spoken run/protocol phrases resolve by label facts (active,
+  latest, day, time, short title, ordinal); ambiguous -> ask between two.
+  Lists, results, reads, run detail, the snapshot run and server logs use
+  them; user text never carries ids (test). API 8.
+- Header look (final design "BenchTrace · Milo", v26 block): the orb is a
+  hollow blue ring with a soft glow (white core + stronger glow while
+  hearing; 1.18x while answering). The pill lights (`.pip.live`: white .94,
+  blue-tinted shadow, padding 0 30 0 8) while the agent listens, thinks
+  and answers; quiet otherwise (and while a live session idles). Status
+  words are blue `.lst`: Listening / Thinking / Searching the web, with
+  blue dots while listening; a person's words show as gray "You" + quoted
+  text; the agent's words are quoted.
+- Glasses sync rows: Bluetooth, Local network, Connect Glasses (Meta AI
+  link, then the glasses: model · battery), Audio (mic permission, then a
+  live level meter once the glasses mic is on the route), Camera.
+- UI by iPad review: no typed command field and no hold-to-talk mic button
+  at the bottom (voice is wake + live session); all six Glasses sync rows
+  are the same white (no .38 dim for pending/failed).
 - Piece 1 (server only): server/live_asr.py relay + eval/live_asr_measure.py
   (real-time WAV playback, per-turn latency vs file VAD, label accuracy,
   `--simulate` plan-first estimate with real model time).
