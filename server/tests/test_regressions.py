@@ -146,6 +146,21 @@ with patch("httpx.AsyncClient", FakeClient):
     assert api.store.r["view"]["current"] == before, api.store.r["view"]
     print("R3b ok: result-only replies, importer from the registry")
 
+    # R3c. unusable model calls (perform without action, a tool without a
+    # name) never crash the turn: they drop at the gate and the user is asked,
+    # with the registry's best-matching screens as the choices.
+    ScriptClient.queue = [{"id": "r3f", "output": [
+        {"type": "function_call", "name": "perform", "arguments": "{}", "call_id": "c1"},
+        {"type": "function_call", "name": None, "arguments": "{}", "call_id": "c2"}]}]
+    with patch("httpx.AsyncClient", ScriptClient):
+        r = c.post("/orchestrate", json={"text": "let's move on to the recent run.", "session": "r3f"})
+    j = r.json()
+    assert r.status_code == 200 and j["reply"] == "A past run or the active run?", j
+    assert j["tool_calls"] == [], j
+    assert api._compose_reply([], {"messages": [None, "", "Ok."], "cards": [],
+                                   "info": {"drop_reasons": []}}, {}, {}) == "Ok."
+    print("R3c ok: unusable calls ask; assembly is None-safe")
+
     # R4. "change C5's memo" edits that well's note, keeping history.
     c.post("/orchestrate", json={"text": "note C5, sticky edge", "session": "r4"})
     FakeClient.spark_payload = {"id": "r4a", "output": [

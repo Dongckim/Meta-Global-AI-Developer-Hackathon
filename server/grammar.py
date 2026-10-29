@@ -228,6 +228,50 @@ _CARD_CANCEL = {"cancel", "never mind", "nevermind", "forget it"}
 _CARD_ALL = {"yes to all", "yes all", "approve all"}
 
 
+_SESSION_THANKS = re.compile(
+    r"(?:(?:ok(?:ay)?|great|perfect|cool)[\s,]+)?(?:thanks?|thank you|that'?s all|that is all|that'?s it)"
+    r"(?: so much| very much| a lot)?"
+    r"(?:[\s,]+(?:that'?s all|that'?s it|that is all|for now))?(?:[\s,]+\w+)?")
+_SESSION_STOP = re.compile(r"(?:stop(?: listening)?|never ?mind|forget it)(?:[\s,]+\w+)?")
+
+
+def collapse_repeats(text: str) -> str:
+    """Words with immediate repeats of 1-3 word phrases folded once:
+    "thanks thanks" -> "thanks", "thank you thank you milo" -> "thank you milo"."""
+    w = text.split()
+    changed = True
+    while changed:
+        changed = False
+        for n in (3, 2, 1):
+            i = 0
+            while i + 2 * n <= len(w):
+                if w[i:i + n] == w[i + n:i + 2 * n]:
+                    del w[i + n:i + 2 * n]
+                    changed = True
+                else:
+                    i += 1
+    return " ".join(w)
+
+
+def match_session_end(text: str, name: str = "") -> str | None:
+    """Live session end said as the whole turn: "thanks" (reply, then close)
+    or "stop" (close now). A trailing word is allowed only when it is the
+    agent's name ("thanks Milo"); anything longer is a command."""
+    t = collapse_repeats(re.sub(r"[^\w\s']+", " ", (text or "").lower()))
+    for kind, pat in (("thanks", _SESSION_THANKS), ("stop", _SESSION_STOP)):
+        m = pat.fullmatch(t)
+        if not m:
+            continue
+        tail = re.search(r"[\s,]+(\w+)$", t)
+        last = tail.group(1) if tail else ""
+        known = {"all", "it", "now", "you", "thanks", "thank", "listening", "mind", "nevermind", "stop",
+                 "much", "lot"}
+        if last and last not in known and last != (name or "").lower():
+            return None
+        return kind
+    return None
+
+
 def match_card_answer(text: str) -> str | None:
     """Bare card answers only: yes/no/cancel/all. Anything else is a new command."""
     t = re.sub(r"\s+", " ", (text or "").lower()).strip(" \t.,!?;:")

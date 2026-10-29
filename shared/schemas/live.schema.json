@@ -1,10 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Live conversation WebSocket messages (/voice/live)",
-  "description": "App -> server: a `start` text frame, then binary PCM16 LE mono 16 kHz frames (silence while the agent speaks), then optionally `end`. Server -> app: the messages below. Bump api_version on any change here.",
+  "description": "App -> server: a `start` text frame, binary PCM16 LE mono 16 kHz frames (silence while the agent speaks), `tts` {speaking} when the agent starts/stops talking (window clock pause), and optionally `end`. Server -> app: the messages below. Bump api_version on any change here.",
   "$defs": {
     "start": {"type": "object", "required": ["type"], "properties": {"type": {"const": "start"}, "session": {"type": "string"}}},
     "end": {"type": "object", "required": ["type"], "properties": {"type": {"const": "end"}}},
+    "tts": {"type": "object", "required": ["type", "speaking"], "properties": {"type": {"const": "tts"}, "speaking": {"type": "boolean"}}},
     "ready": {"type": "object", "required": ["type", "session_id"], "properties": {"type": {"const": "ready"}, "session_id": {"type": ["string", "null"]}}},
     "partial": {"type": "object", "required": ["type", "text"], "properties": {"type": {"const": "partial"}, "text": {"type": "string"}}},
     "ignored": {"type": "object", "required": ["type", "speaker", "text", "line"], "properties": {"type": {"const": "ignored"}, "speaker": {"type": "string"}, "text": {"type": "string"}, "line": {"type": "string"}}},
@@ -13,7 +14,7 @@
              "properties": {"type": {"const": "turn"}, "transcript": {"type": "string"}, "reply": {"type": "string"}, "speak": {"type": "string"},
                             "end_session": {"type": "boolean"}, "tool_calls": {"type": "array"}, "messages": {"type": "array"}, "cards": {"type": "array"}, "record_version": {"type": "integer"}}},
     "error": {"type": "object", "required": ["type", "message"], "properties": {"type": {"const": "error"}, "message": {"type": "string"}}},
-    "closed": {"type": "object", "required": ["type", "code", "reason"], "properties": {"type": {"const": "closed"}, "code": {"type": ["integer", "null"]}, "reason": {"type": "string"}}}
+    "closed": {"type": "object", "required": ["type", "code", "reason", "why"], "properties": {"type": {"const": "closed"}, "code": {"type": ["integer", "null"]}, "reason": {"type": "string"}, "why": {"enum": ["window", "max_duration", "end_session", "client", "server", "error"]}}}
   },
   "oneOf": [{"$ref": "#/$defs/ready"}, {"$ref": "#/$defs/partial"}, {"$ref": "#/$defs/ignored"}, {"$ref": "#/$defs/turn"}, {"$ref": "#/$defs/error"}, {"$ref": "#/$defs/closed"}]
 }

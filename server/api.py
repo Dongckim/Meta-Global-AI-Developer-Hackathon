@@ -52,6 +52,7 @@ from server.grammar import (
 )
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
+from server.screens import ask_choice
 from server.screens import guide as _screen_guide
 from server.screens import READS as SCREEN_READS
 from server import library as lib
@@ -60,6 +61,7 @@ from server import runs as runlog
 from server.store import RecordStore, describe_well_row
 from server import live_asr
 from server import tone
+from server.grammar import match_session_end
 from server.live_session import LiveConversation, live_keywords
 from server.live_session import settings as live_settings
 from server.tone import keys as tone_keys
@@ -251,7 +253,7 @@ def log_turn(session: dict, text: str, calls, messages, asked=None) -> None:
     bits = []
     for c in calls or []:
         w = ",".join(call_wells(c))
-        bits.append(f"{c.get('name', '?')}[{w}]" if w else c.get("name", "?"))
+        bits.append(f"{c.get('name') or '?'}[{w}]" if w else (c.get("name") or "?"))
     turns = session.setdefault("turns", [])
     turns.append({"text": (text or "")[:120], "calls": bits,
                   "messages": [m[:100] for m in (messages or [])[:4]],
@@ -595,11 +597,18 @@ def _expand_perform(calls: list) -> list:
     """
     out = []
     for c in calls:
-        if c.get("name") != "perform":
+        name = c.get("name")
+        if not isinstance(name, str) or not name.strip():
+            _log_drop("?", c.get("args"), "dropped: tool without a name")
+            continue
+        if name != "perform":
             out.append(c)
             continue
         a = c.get("args") or {}
         action = a.get("action")
+        if not isinstance(action, str) or not action.strip():
+            _log_drop("perform", a, "dropped: no action")
+            continue
         rest = {k: v for k, v in a.items() if k != "action" and not _blank(v)}
         missing = [k for k in REQUIRED_ARGS.get(action, []) if k not in rest]
         if missing:
@@ -645,7 +654,15 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         client, key, text, store.model_state(session), session)
     if cut:
         return [], [], say("didnt_catch", session), ms, "spark", [], {"dropped": 0, "drop_reasons": []}, []
+    raw_count = len(calls)
     calls = _expand_perform(calls)
+    if raw_count and not calls and not texts.strip() and not searches:
+        # every call was unusable (no action / no name): ask, offering the
+        # registry's best-matching screens instead of guessing
+        q = ask_choice(text) or say("didnt_catch", session)
+        print(f"spark calls unusable for {text[:60]!r}: asking", flush=True)
+        asked = {"question": q, "target": ""}
+        return [], [], q, ms, "spark", [], {"dropped": raw_count, "drop_reasons": [], "asked": asked}, []
     sentence, sources = web_answer(searches) if searches else ("", [])
     if sentence:
         session["last_web"] = sentence
@@ -1024,7 +1041,7 @@ def _executed_reply(calls: list, read_lines: list, session: dict) -> str:
 def _compose_reply(calls, res, state, session) -> str:
     """Reply purely from store results: messages, card questions, drop reasons.
     Empty when nothing resulted; run_utterance resolves via _executed_reply."""
-    msgs = res["messages"]
+    msgs = [m for m in res["messages"] if isinstance(m, str) and m]  # None/blank never joins
     fails = [m for m in msgs if is_failure_message(m)]
     if fails:
         ok = [m for m in msgs if not is_failure_message(m)]
@@ -1033,7 +1050,8 @@ def _compose_reply(calls, res, state, session) -> str:
         r = timer_set_reply(calls, state)
         if r is not None:
             return r
-    parts = list(msgs) + [c["question"] for c in res["cards"]]
+    parts = [m for m in msgs if isinstance(m, str) and m] + \
+        [c["question"] for c in res["cards"] if isinstance(c.get("question"), str)]
     for d in res["info"].get("drop_reasons", []):
         _log_drop(d["call"], d.get("args"), d["reason"])
         parts.append(_couldnt(d["call"], d["reason"]))
@@ -1056,7 +1074,7 @@ def _couldnt(name, reason):
 
 
 def _call_names(calls) -> str:
-    return ",".join(c.get("name", "?") for c in calls) or "-"
+    return ",".join(str(c.get("name") or "?") for c in calls) or "-"
 
 
 def _utterance_response(calls, messages, reply, ms, route, cards, info, sources, version, extra=None):
@@ -1237,14 +1255,18 @@ async def voice_live(ws: WebSocket):
     await ws.send_json({"type": "ready", "session_id": meta.session_id})
     conv = LiveConversation(opened_at=time.monotonic(),
                             window_s=float(live_settings().get("window_s") or 60),
+                            max_s=float(live_settings().get("max_s") or 55 * 60),
                             wake_phrase=tone.persona().get("wake_phrase") or "")
     owner_q: asyncio.Queue = asyncio.Queue()
     ended = False
+    why = ""
 
-    async def end_stream():
-        nonlocal ended
+    async def end_stream(reason: str):
+        """endStream once; Meta flushes and closes 1000 (downlink then ends)."""
+        nonlocal ended, why
         if not ended:
-            ended = True
+            ended, why = True, reason
+            print(f"live end: {reason}", flush=True)
             await meta.end()
 
     async def uplink():
@@ -1255,39 +1277,60 @@ async def voice_live(ws: WebSocket):
             if msg.get("bytes"):
                 if not ended:
                     await meta.send_audio(msg["bytes"])
-            elif msg.get("text") and json.loads(msg["text"]).get("type") == "end":
+                continue
+            body = json.loads(msg.get("text") or "{}")
+            if body.get("type") == "tts":
+                conv.tts(bool(body.get("speaking")), time.monotonic())
+            elif body.get("type") == "end":
                 break
-        await end_stream()
+        await end_stream("client")
 
     async def downlink():
         async for ev in meta.events():
             for out in conv.feed(ev, time.monotonic()):
-                if out["type"] == "owner":
-                    owner_q.put_nowait(out["text"])
+                if out["type"] in ("owner", "here"):
+                    owner_q.put_nowait(out)
                     continue
                 if out["type"] == "ignored":
                     print(f'[voice] ignored speaker={out["speaker"]} text="{out["text"]}"', flush=True)
                 await ws.send_json(out)
 
+    def short(reply: str, route: str) -> dict:
+        """A turn answered without the model (grammar / here / sorry)."""
+        return _utterance_response([], [], reply, {}, route, [],
+                                   {"dropped": 0, "drop_reasons": []}, [], store.r["version"])
+
+    async def owner_turn(item: dict) -> tuple[str, dict, str | None]:
+        if item["type"] == "here":
+            return "", short(say("here", session), "grammar"), None
+        text = item["text"]
+        print(f'live owner turn: "{text}"', flush=True)
+        # Session end is a grammar decision; a pending card's answer wins.
+        end = None if (store.r["cards"] and match_card_answer(text)) else \
+            match_session_end(text, tone.agent_name())
+        if end is not None:
+            return text, short(say("session_thanks", session) if end == "thanks" else "", "grammar"), end
+        return text, await _handle_text(text, session, "voice"), None
+
     async def worker():
         while True:
-            text = await owner_q.get()
-            print(f'live owner turn: "{text}"', flush=True)
+            item = await owner_q.get()
             try:
-                resp = await _handle_text(text, session, "voice")
-            except Exception as e:  # keep the session; this turn says sorry
+                text, resp, end = await owner_turn(item)
+            except Exception as e:  # any failure: the session stays, the turn says sorry
                 print(f"live turn failed: {type(e).__name__}: {e}", flush=True)
-                resp = _utterance_response([], [], say("didnt_catch", session), {}, "error", [],
-                                           {"dropped": 0, "drop_reasons": []}, [], store.r["version"])
-            await ws.send_json({"type": "turn", "transcript": text, "end_session": False, **resp})
+                text, resp, end = item.get("text", ""), short(say("didnt_catch", session), "error"), None
+            await ws.send_json({"type": "turn", "transcript": text, "end_session": end is not None, **resp})
             conv.owner_replied(time.monotonic())
+            if end is not None:
+                await end_stream("end_session")
 
     async def watchdog():
         while not ended:
             await asyncio.sleep(1)
-            if owner_q.empty() and conv.should_close(time.monotonic()):
-                print("live window over: endStream", flush=True)
-                await end_stream()
+            reason = conv.should_close(time.monotonic()) if owner_q.empty() else None
+            if reason:
+                await end_stream(reason)
 
     tasks = [asyncio.create_task(c()) for c in (uplink, worker, watchdog)]
     try:
@@ -1296,9 +1339,11 @@ async def voice_live(ws: WebSocket):
         for t in tasks:
             t.cancel()
         code, reason = meta.close
-        print(f"live closed {code} {reason!r}", flush=True)
+        # why: window / max_duration / end_session / client, else the stream broke
+        why = why or ("error" if code != 1000 or meta.error else "server")
+        print(f"live closed {code} {reason!r} why={why}", flush=True)
         try:
-            await ws.send_json({"type": "closed", "code": code, "reason": reason})
+            await ws.send_json({"type": "closed", "code": code, "reason": reason, "why": why})
             await ws.close()
         except Exception:
             pass  # the app already left

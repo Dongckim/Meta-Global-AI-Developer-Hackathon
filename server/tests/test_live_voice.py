@@ -55,10 +55,45 @@ for ev in [
 assert [o["type"] for o in outs] == ["partial", "owner", "ignored"], outs
 assert outs[1]["text"] == "Mark C2 done." and outs[2]["speaker"] == "B", outs
 assert outs[2]["line"] == "Another voice — ignored"
-assert not conv.should_close(59) and conv.should_close(60)  # nobody spoke since opening
-conv.owner_replied(100)
-assert not conv.should_close(159) and conv.should_close(160)  # quiet after the last owner reply
-print("LV2 ok: owner, ignored, window")
+# the owner's turn (at t=1) restarted the window; the other speaker didn't
+assert conv.should_close(60.9) is None and conv.should_close(61) == "window"
+conv.owner_replied(5)
+conv.tts(True, 5)
+assert conv.should_close(500) is None  # paused while the agent speaks
+conv.tts(False, 20)
+assert conv.should_close(79.9) is None and conv.should_close(80) == "window"  # restarts at speech end
+conv.feed({"type": "speechStart", "turnId": 3, "audioProcessedMs": 9000}, 81)
+assert conv.should_close(200) is None  # never mid-turn
+conv.feed({"type": "speaker", "label": "B", "audioProcessedMs": 9500}, 82)
+conv.feed({"type": "speechComplete", "turnId": 3, "transcript": "lunch?", "audioProcessedMs": 9600}, 83)
+assert conv.should_close(200) == "window"  # another voice doesn't extend
+long = LiveConversation(opened_at=0, window_s=60, max_s=3300)
+long.tts(False, 3290)
+assert long.should_close(3300) == "max_duration"
+print("LV2 ok: owner, ignored, window pause/restart, turn boundary, max")
+
+from server.grammar import match_session_end  # noqa: E402
+for t, want in [("Thanks.", "thanks"), ("thank you Milo", "thanks"), ("That's all.", "thanks"),
+                ("Stop.", "stop"), ("Never mind.", "stop"), ("thanks for the help with C2", None),
+                ("stop the timer", None), ("never mind the timer", None), ("Thanks Bob", None),
+                # normalized: punctuation dropped, repeats folded
+                ("Thanks. Thanks.", "thanks"), ("thanks thanks", "thanks"),
+                ("thank you, thank you Milo", "thanks"), ("okay thanks", "thanks"),
+                ("Okay. Thanks.", "thanks"), ("Thank you so much.", "thanks"),
+                ("Stop. Stop.", "stop"), ("never mind, never mind", "stop"),
+                ("thanks thanks for the help", None), ("stop stop the timer", None)]:
+    assert match_session_end(t, "Milo") == want, (t, match_session_end(t, "Milo"))
+print("LV2b ok: session-end grammar")
+
+# Only the wake phrase: a "here" turn, and the owner spoke, so the clock restarts.
+hw = LiveConversation(opened_at=0, window_s=60, wake_phrase="Hey Milo")
+for ev in [{"type": "speechStart", "turnId": 1, "audioProcessedMs": 0},
+           {"type": "speaker", "label": "A", "audioProcessedMs": 400}]:
+    hw.feed(ev, 30)
+out = hw.feed({"type": "speechComplete", "turnId": 1, "transcript": "Hey, Milo.", "audioProcessedMs": 500}, 40)
+assert out == [{"type": "here", "turn": 1}], out
+assert hw.should_close(99) is None and hw.should_close(100) == "window"
+print("LV2c ok: wake-only turn")
 
 st = RecordStore(path=tempfile.mkdtemp() + "/r.json")
 st.start_demo_run()
@@ -126,6 +161,7 @@ with c.websocket_connect("/voice/live") as ws:
     ws.send_json({"type": "end"})
     while got[-1]["type"] != "closed":
         got.append(check(ws.receive_json()))
+assert got[-1]["why"] == "client", got[-1]
 types = [m["type"] for m in got]
 turn = next(m for m in got if m["type"] == "turn")
 assert types[0] == "partial" and types[-1] == "closed", types
@@ -134,4 +170,63 @@ assert "B2" in done_wells(api.store.r) and "B3" not in done_wells(api.store.r), 
 assert FakeMeta.last.sent == [b"\x00" * 2560], "app PCM relayed as is"
 assert FakeMeta.last.kw["mode"] == "DIARIZATION" and FakeMeta.last.kw["language_bias"] == ["English"]
 print("LV4 ok: endpoint relays, owner turn runs, other speaker ignored")
+
+# "thanks" ends the session: a short reply, end_session, then closed(end_session)
+FakeMeta.script = [
+    {"type": "speechStart", "turnId": 1, "audioProcessedMs": 0},
+    {"type": "speaker", "label": "A", "audioProcessedMs": 500},
+    {"type": "speechComplete", "turnId": 1, "transcript": "Thanks, Milo.", "audioProcessedMs": 600},
+]
+with c.websocket_connect("/voice/live") as ws:
+    ws.send_json({"type": "start", "session": "live-end"})
+    assert check(ws.receive_json())["type"] == "ready"
+    got = [check(ws.receive_json())]
+    while got[-1]["type"] != "closed":
+        got.append(check(ws.receive_json()))
+turn = next(m for m in got if m["type"] == "turn")
+assert turn["end_session"] is True and turn["reply"] in ("Anytime.", "Happy to help.", "Sure thing."), turn
+assert got[-1]["why"] == "end_session", got[-1]
+print("LV5 ok: explicit end")
+
+# A failing turn keeps the session: sorry, then the next turn still runs; a
+# wake-only turn answers "here" with no model call.
+real_handle = api._handle_text
+calls = {"n": 0}
+
+
+async def flaky(text, session, source):
+    calls["n"] += 1
+    if calls["n"] == 1:
+        raise TypeError("sequence item 0: expected str instance, NoneType found")
+    return await real_handle(text, session, source)
+
+api._handle_text = flaky
+FakeMeta.script = [
+    {"type": "speechStart", "turnId": 1, "audioProcessedMs": 0},
+    {"type": "speaker", "label": "A", "audioProcessedMs": 500},
+    {"type": "speechComplete", "turnId": 1, "transcript": "let's move on to the recent run.", "audioProcessedMs": 600},
+    {"type": "speechStart", "turnId": 2, "audioProcessedMs": 1000},
+    {"type": "speaker", "label": "A", "audioProcessedMs": 1500},
+    {"type": "speechComplete", "turnId": 2, "transcript": "Hey Milo.", "audioProcessedMs": 1600},
+    {"type": "speechStart", "turnId": 3, "audioProcessedMs": 2000},
+    {"type": "speaker", "label": "A", "audioProcessedMs": 2500},
+    {"type": "speechComplete", "turnId": 3, "transcript": "C4 done.", "audioProcessedMs": 2600},
+]
+with c.websocket_connect("/voice/live") as ws:
+    ws.send_json({"type": "start", "session": "live-flaky"})
+    assert check(ws.receive_json())["type"] == "ready"
+    turns = []
+    while len(turns) < 3:
+        m = check(ws.receive_json())
+        if m["type"] == "turn":
+            turns.append(m)
+    ws.send_json({"type": "end"})
+    while check(ws.receive_json())["type"] != "closed":
+        pass
+api._handle_text = real_handle
+assert turns[0]["reply"] in ("Sorry, say that again?", "Didn't catch that — once more?"), turns[0]
+assert turns[1]["reply"] in ("I'm here.", "Yes?", "Go ahead.") and turns[1]["route"] == "grammar", turns[1]
+assert "C4" in done_wells(api.store.r), turns[2]
+assert calls["n"] == 2, calls  # "here" never reached the text path
+print("LV6 ok: failing turn keeps the session; wake-only says here")
 print("ALL PASS")

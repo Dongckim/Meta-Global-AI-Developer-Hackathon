@@ -11,8 +11,21 @@
   },
   "live": {
     "window_s": 60,
-    "ignored_line": "Another voice — ignored"
+    "max_s": 3300,
+    "ignored_line": "Another voice — ignored",
+    "first_close_line": "Call me anytime.",
+    "fallback_line": "Live off — one command at a time"
   },
+  "here": [
+    "I'm here.",
+    "Yes?",
+    "Go ahead."
+  ],
+  "session_thanks": [
+    "Anytime.",
+    "Happy to help.",
+    "Sure thing."
+  ],
   "mark_done": [
     "Nice, {wells_spoken} are in.",
     "Got it — {wells_spoken} done.",

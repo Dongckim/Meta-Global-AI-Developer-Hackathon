@@ -89,6 +89,33 @@ def ui_of(screen_id: str) -> str | None:
     return SCREENS.get(screen_id, {}).get("ui")
 
 
+def _stems(text: str) -> set[str]:
+    import re
+    stop = {"the", "a", "an", "to", "on", "of", "my", "me", "let", "lets", "s", "and", "or",
+            "for", "this", "that", "is", "it", "go", "move", "show", "open", "please", "i", "want"}
+    return {w.rstrip("s") for w in re.findall(r"[a-z]+", (text or "").lower())} - stop
+
+
+def ask_choice(text: str) -> str | None:
+    """When the model's calls were unusable: ask between the two screens whose
+    registry words (title, aliases, use, choice) best match what was said,
+    e.g. "The active run or a past run?". None when nothing matches."""
+    said = _stems(text)
+    scored = []
+    for i, sid in enumerate(SCREENS):
+        s = SCREENS[sid]
+        # names (title, aliases, choice) weigh twice the `use` description
+        named = _stems(" ".join([s.get("title", ""), s.get("choice", ""), *s.get("aliases", [])]))
+        hit = 2 * len(said & named) + len(said & (_stems(s.get("use", "")) - named))
+        if hit and s.get("choice"):
+            scored.append((-hit, i, s["choice"]))
+    if not scored:
+        return None
+    picks = [c for _, _, c in sorted(scored)[:2]]
+    q = picks[0][:1].upper() + picks[0][1:]
+    return f"{q} or {picks[1]}?" if len(picks) > 1 else f"{q}?"
+
+
 def guide() -> str:
     """When to use each screen, for the model (registry `use`/`not`)."""
     parts = []
