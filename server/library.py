@@ -1,8 +1,11 @@
 """Protocol library: confirmed plans on disk, deduped by content hash.
 
-<root>/protocols/<hash16>.json: {id, name, source_filename, imported_at,
-plan_hash, plan}. Same hash re-imports the same protocol. PDF bytes are never
-stored (originals live on the device only). root follows the RecordStore path
+<root>/protocols/<hash16>.json: {id, name, source_filename, origin (pdf |
+text | photo), source_text, original_id (the device's file key), imported_at,
+plan_hash, plan}. Same hash re-imports
+the same protocol. PDF and photo bytes are never stored (they live on the
+device only); a text or photo import keeps its text (the photo transcript),
+the original its quotes were checked against. root follows the RecordStore path
 so tests stay isolated; production uses server/data.
 """
 
@@ -71,7 +74,8 @@ def ensure_demo_seed(root: Path | None = None) -> dict | None:
 
 
 def save(plan: dict, name: str, source_filename: str, root: Path | None = None,
-         short_title: str = "") -> dict:
+         short_title: str = "", origin: str = "pdf", source_text: str = "",
+         original_id: str = "") -> dict:
     """Store a confirmed plan; same content returns the existing protocol
     (its first import time and labels stay)."""
     d = _dir(root)
@@ -82,7 +86,8 @@ def save(plan: dict, name: str, source_filename: str, root: Path | None = None,
     if existing and existing.get("plan_hash") == h:
         return existing
     doc = {"id": pid, "name": name or pid, "short_title": short_title or "",
-           "source_filename": source_filename or "",
+           "source_filename": source_filename or "", "origin": origin,
+           "source_text": source_text if origin != "pdf" else "", "original_id": original_id,
            "imported_at": time.time(), "plan_hash": h, "plan": plan}
     path.write_text(json.dumps(doc, ensure_ascii=False, indent=1))
     return doc
@@ -116,9 +121,17 @@ def summarize(doc: dict) -> dict:
     return {"id": doc.get("id"), "name": doc.get("name"),
             "short_title": protocol_short(doc), "label": label["display"], "spoken": label["spoken"],
             "source_filename": doc.get("source_filename"),
+            "origin": doc.get("origin") or "pdf", "original_id": doc.get("original_id") or "",
             "imported_at": doc.get("imported_at"),
             "conditions": len(plan.get("conditions") or {}),
-            "steps": len(plan.get("steps") or [])}
+            "steps": len(plan.get("steps") or []),
+            "wells": len(plan_wells(plan))}
+
+
+def plan_wells(plan: dict) -> set[str]:
+    """Every well the plan uses: its conditions' wells, else its steps'."""
+    conds = {w for c in (plan.get("conditions") or {}).values() for w in (c or {}).get("wells") or []}
+    return conds or {w for s in plan.get("steps") or [] for w in (s or {}).get("wells") or []}
 
 
 def all_docs(root: Path | None = None) -> list[dict]:

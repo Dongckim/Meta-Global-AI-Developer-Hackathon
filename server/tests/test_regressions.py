@@ -120,7 +120,7 @@ with patch("httpx.AsyncClient", FakeClient):
     # a read answer: the summary alone is the reply. The move's "Here's ..."
     # line is left out (the screen shows it) and never glued to the summary.
     assert j["reply"] == summary, j
-    assert "Here's the bench." in j["messages"], j  # the move still happened
+    assert api.store.screen_line("main") in j["messages"], j  # the move still happened (the bench's line)
     assert [x["name"] for x in j["tool_calls"]] == ["read_record", "navigate"], j
     assert api.store.r["view"]["current"]["screen"] == "main", j
     # same without the model's line: the read itself is said, not the move
@@ -130,7 +130,7 @@ with patch("httpx.AsyncClient", FakeClient):
     ]
     with patch("httpx.AsyncClient", ScriptClient):
         j = c.post("/orchestrate", json={"text": "read all my notes", "session": "r3"}).json()
-    assert "C3" in j["reply"] and "Here's the bench." not in j["reply"], j
+    assert "C3" in j["reply"] and api.store.screen_line("main") not in j["reply"], j
     # a model line that names nothing it read isn't a summary: the read is said
     ScriptClient.queue = [
         {"id": "r3g", "output": [fc("read_record", '{"kind": "notes"}', "c1")]},

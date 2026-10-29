@@ -49,6 +49,9 @@ def load() -> dict:
 
 
 REGISTRY = load()
+for _s in REGISTRY.get("screens", []):  # "buttons_from": the same buttons as another screen
+    if _s.get("buttons_from"):
+        _s["buttons"] = next((x.get("buttons", []) for x in REGISTRY["screens"] if x["id"] == _s["buttons_from"]), [])
 #: Built screens. `planned` ones (registry only, not in the app yet) are
 #: never navigable, offered to the model, or resolved by alias.
 SCREENS: dict[str, dict] = {s["id"]: s for s in REGISTRY.get("screens", []) if s.get("status") != "planned"}
@@ -163,12 +166,40 @@ def _said(text: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9' ]+", " ", (text or "").lower()).split())
 
 
-def button_call(text: str, screen_ids: list[str]) -> dict | None:
+def fill_button(b: dict, slots: dict) -> dict | None:
+    """A templated button ("Step {step}", args {"step": "{step}"}) filled from
+    the screen's slots; None while a slot it needs has no value or its `when`
+    state doesn't hold (not shown). `look` ("disabled") is how it's drawn
+    only: a tap or the words still run its action."""
+    import re
+    if any(slots.get(k) != v for k, v in (b.get("when") or {}).items()):
+        return None  # shown only in that state ("when": {"status": "finished"})
+    def fill(v):
+        if not isinstance(v, str):
+            return v
+        need = re.findall(r"{(\w+)}", v)
+        if any(k not in slots for k in need):
+            raise KeyError
+        return v.format(**{k: slots[k] for k in need})
+    try:
+        return {**b, "say": fill(b["say"]), "args": {k: fill(v) for k, v in (b.get("args") or {}).items()}}
+    except KeyError:
+        return None
+
+
+def buttons_for(screen_id: str, slots: dict | None = None) -> list[dict]:
+    """A screen's registry buttons with their templates filled (app and voice
+    see the same words)."""
+    out = [fill_button(b, slots or {}) for b in SCREENS.get(screen_id, {}).get("buttons", [])]
+    return [b for b in out if b]
+
+
+def button_call(text: str, screen_ids: list[str], slots: dict | None = None) -> dict | None:
     """A visible screen's "Say X" button spoken exactly -> its action call,
     the same one a tap sends (registry `buttons`)."""
     said = _said(text)
     for sid in screen_ids:
-        for b in SCREENS.get(sid, {}).get("buttons", []):
+        for b in buttons_for(sid, slots):
             if _said(b["say"]) == said:
                 return {"name": b["action"], "args": dict(b.get("args") or {})}
     return None

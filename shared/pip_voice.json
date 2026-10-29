@@ -160,8 +160,33 @@
     "catch": {"title": "{wells} isn't in this plan", "detail": "Record anyway?"},
     "next_step": {"title": "Move to step {step}?", "detail": "Step {done} done"},
     "end_run": {"title": "Finish this run?", "detail": ""},
+    "new_run": {"title": "{run} is finished", "detail": "Start a new run of {name}?"},
     "default": {"title": "{question}", "detail": "{detail}"}
   },
+  "prompts": {
+    "_note": "Milo's line at the top of each screen (registry screen `prompt` -> key here), spoken on entry. The first template whose {slots} all have values is used; slots come from the server (store.view_slots), never example values.",
+    "home": ["Continue {run} from step {step}?", "Import a protocol, or pick a run."],
+    "main": ["Step {step} of {of}. {title}."],
+    "run_view": ["{name}. {state}."],
+    "mode": ["Full or Private?"],
+    "import_choice": ["Text, file, or photo?"],
+    "import_text": ["Paste or type it."],
+    "import_photo": ["Snap the pages."],
+    "protocol_review": ["Draft ready. Review it?"],
+    "draft_steps": ["{pipetting}. Step {step} needs a look.", "{pipetting}. All look right."],
+    "draft_step": ["Step {step} needs a look: {reason}.", "Step {step} of {of}. Looks right?"],
+    "draft_page": ["Page {page}. Step {step} is highlighted.", "Step {step} is highlighted."],
+    "plan_check": ["Draft ready. {conditions}, {steps}."]
+  },
+  "run_started": [
+    "{name} started. Step 1 of {steps}."
+  ],
+  "new_run": [
+    "{run} is finished. Start a new run of {name}?"
+  ],
+  "draft_discarded": [
+    "Draft discarded."
+  ],
   "not_ready": [
     "That isn't ready yet."
   ],

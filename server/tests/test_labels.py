@@ -48,11 +48,12 @@ docs = [
 ]
 short = lambda d: L.shorten_title(d["pn"])  # noqa: E731
 lab = {d["run_id"][-4:]: L.run_label(d, docs, short, "run-20261029-142000-aaaa", now) for d in docs}
-assert lab["aaaa"] == {"display": "Oct 29 · 2:20 PM · Drug A/B Dosing", "spoken": "the active run"}, lab["aaaa"]
-assert lab["bbbb"]["spoken"] == "the first Drug A/B Dosing run today", lab["bbbb"]
-assert lab["cccc"]["spoken"] == "yesterday's Demo run", lab["cccc"]
-assert lab["dddd"]["spoken"] == "the Oct 27 ELISA run", lab["dddd"]
-assert lab["eeee"]["spoken"] == "today's 12:00 PM ELISA run", lab["eeee"]
+assert lab["aaaa"]["display"] == "Run 2" and lab["aaaa"]["spoken"] == "the active run", lab["aaaa"]
+assert (lab["bbbb"]["display"], lab["bbbb"]["spoken"], lab["bbbb"]["day"]) == \
+    ("Run 1", "Drug A/B Dosing run 1", "Today"), lab["bbbb"]
+assert lab["cccc"]["spoken"] == "Demo run 1", lab["cccc"]
+assert (lab["dddd"]["spoken"], lab["dddd"]["day"]) == ("ELISA run 1", "Oct 27"), lab["dddd"]
+assert lab["eeee"]["spoken"] == "ELISA run 2", lab["eeee"]
 assert all(no_ids(v["display"]) and no_ids(v["spoken"]) for v in lab.values())
 print("LB2 ok: run labels")
 
@@ -65,8 +66,8 @@ for q, want in [("yesterday's run", "cccc"), ("the 2 PM run", "aaaa"), ("the lat
     assert d and d["run_id"].endswith(want), (q, d, c)
 d, c = pick("the Drug A/B run")
 assert d is None and [x["run_id"][-4:] for x in c] == ["aaaa", "bbbb"], (d, c)
-assert L.which_one(["the active run", "the first Drug A/B Dosing run today"]) == \
-    "The active run or the first Drug A/B Dosing run today?"
+assert L.which_one(["the active run", "Drug A/B Dosing run 1"]) == \
+    "The active run or Drug A/B Dosing run 1?"
 assert pick("2 runs") == (None, [])  # a bare number is not a time
 print("LB3 ok: spoken selectors")
 
@@ -99,7 +100,7 @@ said += api._render_record("runs", read)
 said += [api.store.snapshot()["run"]["label"]]
 said += [p["label"] for p in c.get("/protocols").json()["protocols"]]
 assert all(no_ids(x) for x in said), [x for x in said if not no_ids(x)]
-assert any("run" in x and "Here's" in x for x in said), said
+assert "Run 1. Ended at step 1." in said, said  # the run record's line: "Run N. <state>."
 print("LB5 ok: no internal ids in user text")
 
 # LB6. Step screen titles: the extracted short_title, else one rule; every
@@ -135,4 +136,38 @@ abbrs = {k: c["abbr"] for k, c in st.snapshot()["plan"]["conditions"].items()}
 assert abbrs == {"ctrl": "Ct", "drug_A": "A", "drug_B": "B"}, abbrs
 assert L.condition_abbrs({"a": {"label": "Low"}, "b": {"label": "Light"}}) == {"a": "Lo", "b": "Li"}
 print("LB7 ok: card title/detail, note source, plate letters")
+
+# LB8. Runs are numbered inside their protocol; the step reached is a label
+# fact; "run 2" resolves inside the named (else the context) protocol.
+for q, ctx, want in [("run 1", None, None), ("open run 2 of ELISA", None, "eeee"),
+                     ("the latest run of Drug A/B", None, "aaaa"), ("run 1", "ELISA", "dddd")]:
+    d, c = L.select_run(q, docs, short, "run-20261029-142000-aaaa", now,
+                        context=ctx and L.shorten_title(ctx))
+    assert (d and d["run_id"].endswith(want)) if want else (d is None and len(c) == 2), (q, d, c)
+plan5 = {"steps": [{}] * 5}
+prog = lambda status, i: L.run_progress({"status": status, "record": {"plan": plan5, "step_index": i}})  # noqa: E731
+assert prog("active", 3)["state"] == "Step 4 of 5"
+assert prog("finished", 2)["state"] == "Ended at step 3"
+assert prog("finished", 4)["state"] == "Finished"
+st = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+st.start_demo_run()
+st._finish_locked("finished")
+st.start_demo_run()
+st.r["step_index"] = 1
+c = TestClient(api.app)
+api.store = st
+rs = c.get("/runs").json()["runs"]
+assert [(r["label"], r["state"]) for r in rs] == [("Run 2", "Step 2 of 5"), ("Run 1", "Ended at step 1")], rs
+p = c.get("/protocols").json()["protocols"][0]
+assert (p["runs"], p["in_progress"], p["wells"]) == (2, 1, 21), p
+# most recently used first: a newer import, until an older protocol runs again
+newer = lib.save({"conditions": {}, "steps": [{"kind": "wait", "text": "x", "wells": []}], "backups": []},
+                 "Never run", "n.txt", st.root)
+assert [x["id"] for x in c.get("/protocols").json()["protocols"]][:2] == [newer["id"], p["id"]]
+st._finish_locked("finished")
+st.start_demo_run()
+assert c.get("/protocols").json()["protocols"][0]["id"] == p["id"]
+j = c.post("/input", json={"action": {"id": "open", "args": {"target": "run 1"}}, "session": "lb"}).json()
+assert j["reply"] == "Run 1. Ended at step 1." and st.r["view"]["current"]["screen"] == "run_view", j
+print("LB8 ok: run numbers, step reached, run N by voice")
 print("ALL PASS")

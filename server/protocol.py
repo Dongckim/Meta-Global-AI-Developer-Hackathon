@@ -1175,18 +1175,39 @@ def build_extract_body(kind: str, filename: str, payload: str, model: str) -> di
     }
 
 
+TRANSCRIBE_PROMPT = (
+    "Transcribe every word on this protocol page verbatim, in reading order. "
+    "Keep line breaks, numbers, units, symbols and well names exactly as printed. "
+    "Output only the page text."
+)
+
+
+def build_transcribe_body(image_url: str, model: str) -> dict:
+    """Responses body for one photographed page -> plain text (same Spark path)."""
+    return {
+        "model": model,
+        "instructions": "You transcribe photographed lab protocol pages.",
+        "input": [{"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": TRANSCRIBE_PROMPT},
+            {"type": "input_image", "image_url": image_url}]}],
+        "reasoning": {"effort": "minimal"},
+        "max_output_tokens": IMPORT_MAX_OUTPUT_TOKENS,
+        "store": False,
+    }
+
+
+def output_text(payload: dict) -> str:
+    return "\n".join(part.get("text", "") for item in (payload or {}).get("output", [])
+                     if item.get("type") == "message"
+                     for part in item.get("content", []) if part.get("type") == "output_text")
+
+
 def parse_extract_payload(payload: dict):
     """Constrained output_text -> plan dict. Returns (ok, data|reason)."""
     if (payload or {}).get("status") == "incomplete":
         return False, "protocol too long, try fewer pages"
-    texts = []
-    for item in (payload or {}).get("output", []):
-        if item.get("type") == "message":
-            for part in item.get("content", []):
-                if part.get("type") == "output_text":
-                    texts.append(part.get("text", ""))
     try:
-        data = json.loads("\n".join(texts))
+        data = json.loads(output_text(payload))
     except (json.JSONDecodeError, TypeError):
         return False, "extraction did not return JSON"
     errs = validate_against_schema(data, PROTOCOL_SCHEMA)
@@ -1248,3 +1269,36 @@ def draft_summary(plan: dict) -> dict:
     steps = "; ".join(f"[{i}] {(s.get('text') or '')[:40]}"
                       for i, s in enumerate(plan.get("steps") or []))
     return {"liquids": liquids, "conditions": conditions, "steps": steps}
+
+
+def _unit(u) -> str:
+    return {"ul": "µL", "ml": "mL", "l": "L"}.get(str(u or "").lower(), str(u or ""))
+
+
+def draft_rows(draft: dict) -> dict:
+    """What the Start review screens show (⑤b-⑤f), one rule for every draft:
+    robot steps (steps with a pipette) as rows numbered 1..n with a short
+    title, "volume · wells", whether a review/error item points at the step and
+    why, its quote and page; the other steps' short titles ("not for the
+    robot"); and the plan's counts."""
+    from server.labels import step_short_title
+    plan = (draft or {}).get("plan") or {}
+    items = list((draft or {}).get("errors") or []) + list((draft or {}).get("review") or [])
+    used = {w for c in (plan.get("conditions") or {}).values() for w in (c or {}).get("wells") or []}
+    rows, others = [], []
+    for i, st in enumerate(plan.get("steps") or []):
+        st = st or {}
+        if not st.get("pipette"):
+            others.append(step_short_title(st))
+            continue
+        p = st["pipette"] or {}
+        wells = st.get("wells") or []
+        where = f"All {len(wells)} wells" if wells and set(wells) == used else wells_label(wells) if wells else ""
+        vol = f"{p['volume']:g} {_unit(p.get('unit'))}".strip() if isinstance(p.get("volume"), (int, float)) else ""
+        why = next((x.get("reason") for x in items
+                    if x.get("path") == f"steps.{i}" or str(x.get("path", "")).startswith(f"steps.{i}.")), None)
+        rows.append({"n": len(rows) + 1, "index": i, "title": step_short_title(st),
+                     "detail": " · ".join(x for x in (vol, where) if x), "flagged": why is not None,
+                     "reason": why or "", "quote": st.get("quote") or "", "page": st.get("quote_page")})
+    return {"rows": rows, "others": others, "conditions": len(plan.get("conditions") or {}),
+            "wells": len(used), "steps": len(plan.get("steps") or [])}

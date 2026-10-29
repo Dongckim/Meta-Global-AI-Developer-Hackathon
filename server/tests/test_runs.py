@@ -294,15 +294,15 @@ with patch("httpx.AsyncClient", FakeClient):
     assert sorted(done_wells(api.store.r)) == ["C3"], j
     print("RUN9 ok: view target scopes taps")
 
-    # RUN11. opening the active run (tap or "latest") shows the live bench.
+    # RUN11. opening the active run (tap or "latest") shows its record (Continue -> bench).
     active = api.store.r["run"]["run_id"]
     for target in (active, "latest"):
         c.post("/input", json={"action": {"id": "open", "args": {"target": f"run:{target}"}},
                                "session": "run11"})
-        assert api.store.r["view"]["current"] == {"screen": "main", "target": ""}, target
+        assert api.store.r["view"]["current"] == {"screen": "run_view", "target": active}, target
     c.post("/input", json={"action": {"id": "open", "args": {"target": f"run:{run1}"}},
                            "session": "run11"})
     assert api.store.r["view"]["current"] == {"screen": "run_view", "target": run1}
-    print("RUN11 ok: active run opens on the bench")
+    print("RUN11 ok: active run opens its record")
 
 print("ALL PASS")

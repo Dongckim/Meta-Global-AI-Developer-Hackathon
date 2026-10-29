@@ -117,34 +117,51 @@ def _ordinal(i: int) -> str:
     return ORDINALS[i] if i < len(ORDINALS) else f"#{i + 1}"
 
 
+def _proto_key(doc: dict, short_for) -> str:
+    return doc.get("protocol_id") or short_for(doc)
+
+
+def run_number(doc: dict, docs: list[dict], short_for) -> int:
+    """1-based start order of this run among its protocol's runs ("Run 3")."""
+    key = _proto_key(doc, short_for)
+    same = sorted((x for x in docs if _proto_key(x, short_for) == key),
+                  key=lambda x: x.get("started_at") or 0)
+    return next((i + 1 for i, x in enumerate(same) if x.get("run_id") == doc.get("run_id")), len(same) or 1)
+
+
+def day_label(ts, now: _dt.datetime | None = None) -> str:
+    """"Today" or "Oct 27"."""
+    d, now = _local(ts), now or _dt.datetime.now()
+    if d is None:
+        return ""
+    return "Today" if d.date() == now.date() else f"{d.strftime('%b')} {d.day}"
+
+
+def run_progress(doc: dict) -> dict:
+    """Step reached: {"step" (1-based), "of", "state"}: "Step 4 of 5" while
+    active, "Ended at step 3" when it stopped early, else "Finished"."""
+    rec = (doc or {}).get("record") or {}
+    of = len((rec.get("plan") or {}).get("steps") or [])
+    step = min(int(rec.get("step_index") or 0) + 1, of) if of else 0
+    if doc.get("status") == "active":
+        state = f"Step {step} of {of}" if of else "In progress"
+    else:
+        state = f"Ended at step {step}" if of and step < of else "Finished"
+    return {"step": step, "of": of, "state": state}
+
+
 def run_label(doc: dict, docs: list[dict], short_for, active_id: str | None = None,
               now: _dt.datetime | None = None) -> dict:
-    """display "Oct 29 · 2:20 PM · Drug A/B Dosing"; spoken relative to today:
-    "the active run", "today's 2:20 PM Drug A/B Dosing run", "yesterday's
-    Drug A/B Dosing run", "the Oct 27 ... run"; several the same day with the
-    same protocol: "the second Drug A/B Dosing run today"."""
-    now = now or _dt.datetime.now()
-    short = short_for(doc)
-    d = _local(doc.get("started_at"))
-    display = " · ".join(x for x in (stamp(doc.get("started_at")), short) if x)
+    """A run is named by its start order inside its protocol: display "Run 3",
+    spoken "the active run" or "Drug A/B Dosing run 3"; plus its day
+    ("Today", "Oct 27") and step state ("Step 4 of 5", "Ended at step 3",
+    "Finished")."""
+    n = run_number(doc, docs, short_for)
+    out = {"display": f"Run {n}", "number": n, "day": day_label(doc.get("started_at"), now),
+           **run_progress(doc)}
     if active_id and doc.get("run_id") == active_id:
-        return {"display": display, "spoken": "the active run"}
-    if d is None:
-        return {"display": display, "spoken": f"the {short} run"}
-    days = (now.date() - d.date()).days
-    same = sorted((x for x in docs if (dx := _local(x.get("started_at"))) and dx.date() == d.date()
-                   and short_for(x) == short), key=lambda x: x.get("started_at") or 0)
-    when = {0: "today", 1: "yesterday"}.get(days, f"on {d.strftime('%b')} {d.day}")
-    if len(same) > 1:
-        i = next((k for k, x in enumerate(same) if x.get("run_id") == doc.get("run_id")), 0)
-        return {"display": display, "spoken": f"the {_ordinal(i)} {short} run {when}"}
-    if days == 0:
-        spoken = f"today's {_clock(d)} {short} run"
-    elif days == 1:
-        spoken = f"yesterday's {short} run"
-    else:
-        spoken = f"the {d.strftime('%b')} {d.day} {short} run"
-    return {"display": display, "spoken": spoken}
+        return {**out, "spoken": "the active run"}
+    return {**out, "spoken": f"{short_for(doc)} run {n}"}
 
 
 def _norm(s: str) -> str:
@@ -168,11 +185,12 @@ _MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun",
 
 
 def select_run(phrase: str, docs: list[dict], short_for, active_id: str | None = None,
-               now: _dt.datetime | None = None) -> tuple[dict | None, list[dict]]:
+               now: _dt.datetime | None = None, context: str | None = None) -> tuple[dict | None, list[dict]]:
     """What someone said -> (run, []) or (None, two candidates when ambiguous)
     or (None, []) when nothing matches. Filters from the label facts: active,
     latest, day (today / yesterday / Oct 29 / 2026-10-29), time (2 PM, 14:20),
-    protocol short title, ordinal. An exact run id still works."""
+    protocol short title, run number ("run 2": the named protocol's, else the
+    `context` protocol's), ordinal. An exact run id still works."""
     now = now or _dt.datetime.now()
     p = (phrase or "").strip()
     if not docs:
@@ -209,6 +227,11 @@ def select_run(phrase: str, docs: list[dict], short_for, active_id: str | None =
     named = [d for d in pool if _mentions(p, short_for(d))]
     if named:
         pool, used = named, True
+    if m := re.search(r"\brun\s*(?:number\s*|#\s*)?(\d{1,3})\b", low):
+        hits = [d for d in pool if run_number(d, docs, short_for) == int(m[1])]
+        if not named and context and len({_proto_key(d, short_for) for d in hits}) > 1:
+            hits = [d for d in hits if _proto_key(d, short_for) == context] or hits
+        pool, used = hits, True
     if m := re.search(r"\b(" + "|".join(ORDINALS) + r")\b", low):
         same = sorted(pool, key=lambda d: d.get("started_at") or 0)
         i = ORDINALS.index(m[1])

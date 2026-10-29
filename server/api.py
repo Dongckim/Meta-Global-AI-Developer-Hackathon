@@ -84,7 +84,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 10
+API_VERSION = 11
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -176,7 +176,8 @@ PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "edit_note", "save_tip", "set_timer", "cancel_timer",
                    "extend_timer", "next_step", "end_run", "show", "navigate",
                    "open", "back", "make_robot", "edit_draft", "retry_sync",
-                   "skip_sync"]
+                   "skip_sync", "review_draft", "save_draft", "start_run", "discard_draft",
+                   "show_step", "open_source_page"]
 #: Actions that aren't record writes; the coverage check counts only writes.
 VIEW_ACTIONS = frozenset(a for a in PERFORM_ACTIONS if a not in RecordStore.RUN_WRITES) \
     - {"edit_draft"} | {"read_record", "ask"}
@@ -197,9 +198,12 @@ TOOLS = [
         "set_timer{minutes,wells?,on_done?} (minutes stated, else ask); "
         "cancel_timer{label?}; extend_timer{label?,minutes?} (+5 default); "
         "next_step; end_run; show{view?,target?}; navigate{screen,target?}; "
-        "open{target} (well/screen/run/original/importer; a well is always open{target}); "
+        "open{target} (well/screen/original/importer, or \"run <as said>\" e.g. \"run 2\", "
+        "\"run latest of Drug A/B\"; a well is always open{target}); "
         "back; make_robot; "
-        "edit_draft{path,value} (draft_open only); "
+        "edit_draft{path,value} (draft_open only); review_draft; save_draft (later); "
+        "start_run{target?} (the open draft, else the protocol on screen or named); discard_draft; "
+        "show_step{step} / open_source_page{step?} (a draft's pipetting step, 1-based); "
         "retry_sync; skip_sync (setup screen only). Never answer_card. "
         f"Screens (navigate.screen): {SCREEN_GUIDE} "
         "Backup well: read free_wells first, then act on the first candidate at once.",
@@ -234,7 +238,7 @@ TOOLS = [
             "kind": {"type": "string", "enum": [r["kind"] for r in SCREEN_READS]},
             "filter": _opt({"type": "string",
                             "description": "WellRef, condition, step, label, protocol name, "
-                            "or run selector (latest/today/yesterday/date/id); blank for natural scope"}),
+                            "or run selector (run 2/latest/today/yesterday/date); blank for natural scope"}),
             "limit": _opt({"type": "integer", "description": "Max entries (default 10)"}),
         },
     ),
@@ -710,7 +714,8 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         return [], [], say("not_ready", session), 0, "grammar", [], {"dropped": 0, "drop_reasons": []}, []
     parts = request_parts(text, WRITE_ACTIONS)
     v = store.r["view"]
-    b = button_call(text, [x for x in ((v.get("sheet") or {}).get("name"), v["current"]["screen"]) if x])
+    b = button_call(text, [x for x in ((v.get("sheet") or {}).get("name"), v["current"]["screen"]) if x],
+                    store.view_slots(v["current"]["screen"], v["current"].get("target") or ""))
     # grammar claims a whole turn or nothing: two requests go to the model
     g = ([b], "") if b else None if len(parts) > 1 else match_grammar(text, store.prompt_state(session))
     if g is not None:
@@ -1576,52 +1581,79 @@ def _coerce_patch_value(draft, parsed, value):
     return True, (value.strip() if value else None)
 
 
+_IMAGE_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "heic": "image/heic"}
+
+
+async def _spark_json(client, name: str, body: dict) -> dict:
+    resp = await _post(client, name, f"{BASE_URL}/responses",
+                       headers={"Authorization": f"Bearer {_key()}", "Content-Type": "application/json"},
+                       json=body)
+    _check(name, resp)
+    return resp.json()
+
+
 @app.post("/protocols/import")
-async def protocol_import(file: UploadFile = File(...), session: str = Form("bench")):
-    """PDF/txt -> extracted draft. Full mode only; bytes never touch disk."""
+async def protocol_import(file: list[UploadFile] = File(default=[]), text: str = Form(""),
+                          filename: str = Form(""), original_id: str = Form(""),
+                          session: str = Form("bench")):
+    """One extraction path for three origins. pdf: the file rides input_file;
+    text: pasted text or a .txt; photo: page photos (several = pages) are
+    transcribed first through the same Spark call path and the transcript is
+    the original. Quotes are checked against that text. Bytes never touch disk:
+    the app keeps PDFs and photos under `original_id` on the device."""
     if not PROTOCOL_FULL_MODE:
         raise HTTPException(403, "protocol import needs Full mode")
     sess = get_session(session)
-    raw = await file.read()
-    if len(raw) > PROTOCOL_MAX_BYTES:
+    uploads = [(f.filename or "", await f.read()) for f in file]
+    if sum(len(raw) for _, raw in uploads) + len(text.encode()) > PROTOCOL_MAX_BYTES:
         raise HTTPException(413, "protocol file too large (10MB max)")
-    name = (file.filename or "").lower()
-    kind = "pdf" if name.endswith(".pdf") else "txt" if name.endswith(".txt") else None
-    if kind is None:
-        raise HTTPException(400, "need a .pdf or .txt file")
-    pages = None
-    if kind == "pdf":
-        try:
-            from pypdf import PdfReader
-            pages = [(pg.extract_text() or "") for pg in PdfReader(BytesIO(raw)).pages]
-            text = "\n".join(pages)
-        except Exception:
-            text = ""
-        payload = "data:application/pdf;base64," + base64.b64encode(raw).decode("ascii")
-    else:
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            raise HTTPException(400, "txt must be UTF-8")
-        payload = text[: proto.PROMPT_CHARS]
-    body = proto.build_extract_body(kind, file.filename or "protocol", payload, SPARK_MODEL)
-    key = _key()
+    ext = lambda n: n.lower().rsplit(".", 1)[-1] if "." in n else ""  # noqa: E731
     t0 = time.perf_counter()
+    pages = None
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await _post(client, "protocol", f"{BASE_URL}/responses",
-                           headers={"Authorization": f"Bearer {key}",
-                                    "Content-Type": "application/json"},
-                           json=body)
+        if text.strip():
+            origin, name, kind, doc_text = "text", filename or "Pasted text", "txt", text
+        elif uploads and all(ext(n) in _IMAGE_TYPES for n, _ in uploads):
+            origin, name, kind = "photo", filename or "Photo", "txt"
+            outs = await asyncio.gather(*(_spark_json(client, "transcribe", proto.build_transcribe_body(
+                f"data:{_IMAGE_TYPES[ext(n)]};base64," + base64.b64encode(raw).decode("ascii"), SPARK_MODEL))
+                for n, raw in uploads))
+            pages = [proto.output_text(o).strip() for o in outs]
+            doc_text = "\n".join(pages)
+            if not doc_text.strip():
+                raise HTTPException(502, "no text found in the photo")
+        elif len(uploads) == 1 and ext(uploads[0][0]) in ("pdf", "txt"):
+            name, raw = uploads[0]
+            kind = ext(name)
+            origin = "pdf" if kind == "pdf" else "text"
+            if kind == "txt":
+                try:
+                    doc_text = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    raise HTTPException(400, "txt must be UTF-8")
+        else:
+            raise HTTPException(400, "need a .pdf or .txt file, page photos, or text")
+        if kind == "pdf":
+            try:
+                from pypdf import PdfReader
+                pages = [(pg.extract_text() or "") for pg in PdfReader(BytesIO(raw)).pages]
+                doc_text = "\n".join(pages)
+            except Exception:
+                doc_text = ""
+            payload = "data:application/pdf;base64," + base64.b64encode(raw).decode("ascii")
+        else:
+            payload = doc_text[: proto.PROMPT_CHARS]
+        out = await _spark_json(client, "protocol", proto.build_extract_body(kind, name, payload, SPARK_MODEL))
     ms = int((time.perf_counter() - t0) * 1000)
-    _check("protocol", resp)
-    usage = resp.json().get("usage") or {}
-    print(f"protocol ms={ms} in_tok={usage.get('input_tokens', '?')} "
+    usage = out.get("usage") or {}
+    print(f"protocol origin={origin} ms={ms} in_tok={usage.get('input_tokens', '?')} "
           f"out_tok={usage.get('output_tokens', '?')}", flush=True)
-    ok, data = proto.parse_extract_payload(resp.json())
+    ok, data = proto.parse_extract_payload(out)
     if not ok:
         raise HTTPException(502, f"protocol extraction failed: {data}")
-    draft = proto.build_draft(data, proto.evidence_from_text(text, pages),
-                               file.filename or "protocol")
+    draft = proto.build_draft(data, proto.evidence_from_text(doc_text, pages), name)
+    draft["meta"]["origin"] = origin
+    draft["meta"]["original_id"] = re.sub(r"[^A-Za-z0-9_-]", "", original_id)[:64]
     store.save_draft(draft)
     conds = len(draft["plan"]["conditions"])
     steps = len(draft["plan"]["steps"])
@@ -1630,7 +1662,7 @@ async def protocol_import(file: UploadFile = File(...), session: str = Form("ben
         reply += f" {len(draft['errors'])} red items to fix."
     elif draft["review"]:
         reply += f" {len(draft['review'])} to review."
-    log_turn(sess, f"import {file.filename or 'protocol'}", [], [reply])
+    log_turn(sess, f"import {name}", [], [reply])
     return {"draft": draft, "review": draft["review"], "errors": draft["errors"], "reply": reply,
             "speak": speak_text(reply), "ms": ms, "record_version": store.r["version"]}
 
@@ -1711,7 +1743,7 @@ async def protocol_save(body: DraftStartIn):
 
 @app.get("/protocols")
 async def protocols_list():
-    return {"protocols": lib.list_all(store.root)}
+    return {"protocols": store.protocol_summaries()}
 
 
 @app.get("/protocols/{protocol_id}")

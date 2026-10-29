@@ -30,7 +30,7 @@ from server.grammar import (
 )
 from server.screens import READ_KINDS as SCREEN_READ_KINDS
 from server.screens import PLANNED, SCREENS, canonical, parent_of, result_of, title_of, ui_of
-from server.tone import say
+from server.tone import say, section
 from server import library as lib
 from server import protocol as proto
 from server import labels
@@ -286,7 +286,10 @@ class RecordStore:
         if v["current"] == new:
             v["sheet"] = {"name": "", "target": ""}
             return
-        v["stack"].append(dict(v["current"]))
+        if new in v["stack"]:  # a screen you came from: return to it, no loop
+            v["stack"] = v["stack"][:v["stack"].index(new)]
+        else:
+            v["stack"].append(dict(v["current"]))
         v["current"] = new
         v["sheet"] = {"name": "", "target": ""}
 
@@ -312,7 +315,7 @@ class RecordStore:
                     else f"I couldn't find the {t} protocol.")
                 return
             self._push_view(screen, doc["id"])
-            res["messages"].append(result_of(screen, name=doc.get("name") or "the protocol"))
+            res["messages"].append(self.screen_line(screen, doc["id"], name=doc.get("name") or "the protocol"))
             return
         if screen == "protocol_source":
             if not t:
@@ -337,7 +340,7 @@ class RecordStore:
             res["messages"].append(result_of(screen))
             return
         self._push_view(screen)
-        res["messages"].append(result_of(screen))
+        res["messages"].append(self.screen_line(screen))
 
     def _open_well(self, res: dict, well: str) -> None:
         self.r["view"]["sheet"] = {"name": "well_card", "target": well.upper()}
@@ -352,6 +355,53 @@ class RecordStore:
                 else "I couldn't find that protocol.")
             return
         self._navigate_locked(res, session, "protocol_detail", doc["id"])
+
+    # --- what each screen says on entry (registry `prompt` -> pip_voice.json `prompts`) ---
+
+    def view_slots(self, screen: str, target: str = "") -> dict:
+        """The data a screen's prompt and templated buttons ("Say Step {step}")
+        are filled from. Only slots with a value are returned."""
+        def n_of(k, word):
+            return f"{k} {word}{'' if k == 1 else 's'}"
+        out: dict = {}
+        run = self.r.get("run")
+        steps = (self.r.get("plan") or {}).get("steps") or []
+        if screen == "home" and run and steps:
+            out = {"run": self.run_label(self.active_run_doc())["display"], "step": self.current_step()}
+        elif screen == "main" and run and steps:
+            i = min(self.r.get("step_index", 0), len(steps) - 1)
+            out = {"step": i + 1, "of": len(steps), "title": labels.step_short_title(steps[i])}
+        elif screen == "run_view" and (doc := self._viewing_run()):
+            lab = self.run_label(doc)
+            out = {"name": lab["display"], "state": lab["state"],
+                   "status": "active" if doc.get("status") == "active" else "finished"}
+        elif screen in self.DRAFT_SCREENS and (draft := self.r.get("draft")):
+            d = proto.draft_rows(draft)
+            rows = d["rows"]
+            flagged = next((r for r in rows if r["flagged"]), None)
+            origin = (draft.get("meta") or {}).get("origin") or "pdf"
+            out = {"title": proto.resolve_short_title(draft), "conditions": n_of(d["conditions"], "condition"),
+                   "wells": n_of(d["wells"], "well"), "steps": n_of(d["steps"], "step"),
+                   "pipetting": n_of(len(rows), "pipetting step"), "of": len(rows),
+                   "doc": {"pdf": "PDF", "photo": "photo"}.get(origin, "text")}
+            row = rows[int(target) - 1] if str(target).isdigit() and 0 < int(target) <= len(rows) else None
+            if row:
+                out.update({"step": row["n"], "reason": row["reason"], "page": row["page"]})
+            elif flagged:
+                out["step"] = flagged["n"]
+        return {k: v for k, v in out.items() if v not in (None, "")}
+
+    def screen_line(self, screen: str, target: str = "", **fallback) -> str:
+        """The screen's prompt, its first template with no empty slot; else
+        the registry result line."""
+        from collections import defaultdict
+        key = SCREENS.get(screen, {}).get("prompt")
+        slots = self.view_slots(screen, target)
+        for tpl in section("prompts").get(key) or [] if key else []:
+            need = re.findall(r"{(\w+)}", tpl)
+            if all(k in slots for k in need):
+                return tpl.format_map(defaultdict(str, slots))
+        return result_of(screen, **fallback)
 
     # --- labels (server/labels.py is the one place) ---
 
@@ -368,12 +418,35 @@ class RecordStore:
         out = []
         for d in docs:
             lab = self.run_label(d, everything)
-            out.append({**runlog.summarize(d), "label": lab["display"], "spoken": lab["spoken"]})
+            out.append({**runlog.summarize(d), "label": lab["display"], "spoken": lab["spoken"],
+                        "number": lab["number"], "day": lab["day"], "step": lab["step"],
+                        "of": lab["of"], "state": lab["state"]})
         return out
+
+    def protocol_summaries(self) -> list[dict]:
+        """Library list with each protocol's run counts, most recently used
+        first (its newest run's start, else its import)."""
+        runs = self.all_run_docs()
+        out = []
+        for p in lib.list_all(self.root):
+            mine = [d for d in runs if d.get("protocol_id") == p["id"]]
+            out.append({**p, "runs": len(mine),
+                        "in_progress": sum(d.get("status") == "active" for d in mine),
+                        "last_used": max([d.get("started_at") or 0 for d in mine] + [p.get("imported_at") or 0])})
+        return sorted(out, key=lambda p: p["last_used"], reverse=True)
+
+    def context_protocol(self) -> str | None:
+        """The protocol "run 2" means: the one on screen, else the active run's."""
+        v = (self.r.get("view") or {}).get("current") or {}
+        if v.get("screen") == "protocol_detail" and v.get("target"):
+            return v["target"]
+        doc = self._viewing_run()
+        return (doc or self.r.get("run") or {}).get("protocol_id")
 
     def select_run(self, phrase: str) -> tuple[dict | None, list[dict]]:
         return labels.select_run(phrase, self.all_run_docs(), self.run_short,
-                                 (self.r.get("run") or {}).get("run_id"))
+                                 (self.r.get("run") or {}).get("run_id"),
+                                 context=self.context_protocol())
 
     def _open_run(self, res: dict, session: dict, selector: str) -> None:
         docs = self.all_run_docs()
@@ -385,14 +458,9 @@ class RecordStore:
                 else "I couldn't find that run.")
             return
         print(f"open run: {self.run_label(doc, docs)['display']}", flush=True)
-        # The active run lives on the bench (live plate); run_view is the
-        # read-only snapshot for finished runs.
-        if doc["run_id"] == (self.r.get("run") or {}).get("run_id"):
-            self._push_view("main")
-            res["messages"].append(result_of("main"))
-            return
+        # Every run opens its record; the active one's Continue goes to the bench.
         self._push_view("run_view", doc["run_id"])
-        res["messages"].append(result_of("run_view", name=self.run_label(doc, docs)["spoken"]))
+        res["messages"].append(self.screen_line("run_view", doc["run_id"], name=self.run_label(doc, docs)["spoken"]))
 
     def _open_source(self, res: dict, session: dict, t: str) -> None:
         """'The original' for the current (or named) step of the viewing run."""
@@ -467,24 +535,42 @@ class RecordStore:
         self._commit()
         return doc
 
+    def _save_protocol(self, draft: dict, plan: dict) -> dict:
+        meta = draft.get("meta") or {}
+        return lib.save(plan, proto.resolve_name(draft), meta.get("source") or "", self.root,
+                        short_title=proto.resolve_short_title(draft), origin=meta.get("origin") or "pdf",
+                        source_text=(meta.get("evidence") or {}).get("text") or "",
+                        original_id=meta.get("original_id") or "")
+
     def save_draft_to_library(self):
         """Draft -> resolved plan -> library. (ok, doc|reason). Run untouched."""
         with self._lock:
-            draft = self.r.get("draft")
-            if not draft:
-                return False, "no draft open"
-            proto.recompute_draft(draft)
-            if draft["errors"]:
-                self._commit()
-                return False, {"errors": draft["errors"]}
-            plan = proto.build_start_plan(draft["plan"])
-            doc = lib.save(plan, proto.resolve_name(draft),
-                           (draft.get("meta") or {}).get("source") or "", self.root,
-                           short_title=proto.resolve_short_title(draft))
-            self.r.pop("draft", None)
-            self._pop_view()
+            ok, info = self._save_draft_locked()
             self._commit()
-            return True, doc
+            return ok, info
+
+    def _save_draft_locked(self):
+        draft = self.r.get("draft")
+        if not draft:
+            return False, "no draft open"
+        proto.recompute_draft(draft)
+        if draft["errors"]:
+            return False, {"errors": draft["errors"]}
+        plan = proto.build_start_plan(draft["plan"])
+        doc = self._save_protocol(draft, plan)
+        self.r.pop("draft", None)
+        self._leave_draft()
+        return True, doc
+
+    #: The draft review screens (Start ⑤b-⑤f); leaving the draft leaves them all.
+    DRAFT_SCREENS = ("protocol_review", "draft_steps", "draft_step", "draft_page", "plan_check")
+
+    def _leave_draft(self) -> None:
+        v = self.r["view"]
+        v["stack"] = [x for x in v.get("stack") or [] if x.get("screen") not in self.DRAFT_SCREENS]
+        if v["current"].get("screen") in self.DRAFT_SCREENS:
+            v["current"] = v["stack"].pop() if v["stack"] else {"screen": "home", "target": ""}
+        v["sheet"] = {"name": "", "target": ""}
 
     def request_start_run(self, protocol_id: str, session: dict):
         """Start now, or card when an active run must finish first."""
@@ -531,7 +617,7 @@ class RecordStore:
     def clear_draft(self) -> None:
         with self._lock:
             self.r.pop("draft", None)
-            self._pop_view()
+            self._leave_draft()
             self._commit()
 
     def _pop_view(self) -> None:
@@ -544,27 +630,31 @@ class RecordStore:
     def start_run(self, session: dict):
         """Draft -> library, then start (cards when a run is active)."""
         with self._lock:
-            draft = self.r.get("draft")
-            if not draft:
-                return False, {"reason": "no draft open"}
-            proto.recompute_draft(draft)
-            if draft["errors"]:
+            ok, info = self._start_draft_locked(session)
+            if not ok and "errors" in info:
                 self._commit()
-                return False, {"errors": draft["errors"]}
-            plan = proto.build_start_plan(draft["plan"])
-            doc = lib.save(plan, proto.resolve_name(draft),
-                           (draft.get("meta") or {}).get("source") or "", self.root,
-                           short_title=proto.resolve_short_title(draft))
-            review_n = len(draft["review"])
-            self.r.pop("draft", None)
-            ok, info = self._request_start_locked(doc["id"], session)
-            if ok:
-                info["review"] = review_n
-                info["protocol_name"] = doc.get("name")
-            else:
-                info["protocol_id"] = doc["id"]
-                info["protocol_name"] = doc.get("name")
             return ok, info
+
+    def _start_draft_locked(self, session: dict):
+        draft = self.r.get("draft")
+        if not draft:
+            return False, {"reason": "no draft open"}
+        proto.recompute_draft(draft)
+        if draft["errors"]:
+            return False, {"errors": draft["errors"]}
+        plan = proto.build_start_plan(draft["plan"])
+        doc = self._save_protocol(draft, plan)
+        review_n = len(draft["review"])
+        self.r.pop("draft", None)
+        self._leave_draft()
+        ok, info = self._request_start_locked(doc["id"], session)
+        if ok:
+            info["review"] = review_n
+            info["protocol_name"] = doc.get("name")
+        else:
+            info["protocol_id"] = doc["id"]
+            info["protocol_name"] = doc.get("name")
+        return ok, info
 
     def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -594,6 +684,16 @@ class RecordStore:
         conds = (snap.get("plan") or {}).get("conditions") or {}
         for key, abbr in labels.condition_abbrs(conds).items():
             conds[key]["abbr"] = abbr  # plate letters, same rule for old plans
+        v = snap.get("view") or {}
+        cur = v.get("current") or {}
+        if cur.get("screen"):  # the screen's line and the slots its buttons fill from
+            v["prompt"] = self.screen_line(cur["screen"], cur.get("target") or "")
+            v["slots"] = {k: str(x) for k, x in self.view_slots(cur["screen"], cur.get("target") or "").items()}
+        if snap.get("draft"):
+            snap["draft"]["summary"] = proto.draft_rows(snap["draft"])
+            dconds = (snap["draft"].get("plan") or {}).get("conditions") or {}
+            for key, abbr in labels.condition_abbrs(dconds).items():
+                dconds[key]["abbr"] = abbr  # plate letters for the plan check, same rule
         if snap.get("run"):  # what the app shows instead of the run id
             snap["run"]["label"] = self.run_label(self.active_run_doc() or snap["run"])["display"]
         return snap
@@ -860,7 +960,7 @@ class RecordStore:
             subject = p.get("label")
         elif op == "next_step":
             subject = p.get("target")
-        elif op == "start_run":
+        elif op in ("start_run", "new_run"):
             subject = p.get("protocol_id")
         elif op == "end_run":
             subject = p.get("run_id")
@@ -1257,7 +1357,7 @@ class RecordStore:
                 self._open_run(res, session, t[4:])
                 return
             if low.startswith("run ") or low in ("run", "runs"):
-                self._open_run(res, session, t[3:].strip() if low.startswith("run ") else "latest")
+                self._open_run(res, session, t if low.startswith("run ") else "latest")
                 return
             if runlog.resolve(t, self.all_run_docs()) is not None:
                 self._open_run(res, session, t)
@@ -1326,9 +1426,83 @@ class RecordStore:
                         if draft["errors"]:
                             msg += f" Heads up: {draft['errors'][0]['reason']}."
                         res["messages"].append(msg)
+        elif name in self.DRAFT_ACTIONS:
+            self._draft_action(name, args, session, res)
         else:
             res["info"]["dropped"] += 1
             res["info"]["drop_reasons"].append({"call": name or "?", "args": args, "reason": "unknown tool"})
+
+    # --- Start: draft review (registry actions; same logic as the REST routes) ---
+
+    DRAFT_ACTIONS = ("review_draft", "save_draft", "start_run", "discard_draft", "show_step",
+                     "open_source_page")
+
+    def _draft_action(self, name: str, args: dict, session: dict, res: dict) -> None:
+        draft = self.r.get("draft")
+        if name == "start_run" and not draft:
+            v = self.r["view"]["current"]
+            run = self._viewing_run()
+            if run is not None and run.get("status") != "active" and not (args.get("target") or "").strip():
+                # a finished run can't go on: offer a new run of its protocol
+                lab, short = self.run_label(run), self.run_short(run)
+                self._card(res, "new_run", say("new_run", session, run=lab["display"], name=short), None,
+                           {"op": "new_run", "protocol_id": run.get("protocol_id")},
+                           slots={"run": lab["display"], "name": short})
+                return  # the card's question is the reply
+            pid = (args.get("target") or "").strip() or (
+                v.get("target") if v.get("screen") == "protocol_detail" else (run or {}).get("protocol_id") or "")
+            if not pid:
+                res["messages"].append("Which protocol? Open one from Home.")
+                return
+            doc, cands = labels.select_protocol(pid, lib.all_docs(self.root))
+            if doc is None:
+                res["messages"].append(labels.which_one([labels.protocol_label(c)["spoken"] for c in cands])
+                                       if cands else "I couldn't find that protocol.")
+                return
+            self._started(*self._request_start_locked(doc["id"], session), session, res)
+            return
+        if not draft:
+            res["messages"].append("No draft open — import a protocol from Home.")
+            return
+        if name == "review_draft":
+            self._navigate_locked(res, session, "draft_steps", None)
+        elif name == "save_draft":
+            ok, info = self._save_draft_locked()
+            res["messages"].append(say("protocol_saved", session, name=labels.protocol_short(info))
+                                   if ok else self._fix_first(info))
+        elif name == "start_run":
+            self._started(*self._start_draft_locked(session), session, res)
+        elif name == "discard_draft":
+            self.r.pop("draft", None)
+            self._leave_draft()
+            res["messages"].append(say("draft_discarded", session))
+        else:  # show_step / open_source_page: a robot step of the draft, 1-based
+            rows = proto.draft_rows(draft)["rows"]
+            v = self.r["view"]["current"]
+            here = v.get("target") if v.get("screen") in ("draft_step", "draft_page") else ""
+            n = _num(args.get("step")) or _num(here) or next((r["n"] for r in rows if r["flagged"]), 1)
+            if not rows or not 1 <= int(n) <= len(rows):
+                res["messages"].append(f"There's no step {int(n)} to check." if rows
+                                       else "This draft has no pipetting steps.")
+                return
+            screen = "draft_step" if name == "show_step" else "draft_page"
+            self._push_view(screen, str(int(n)))
+            res["messages"].append(self.screen_line(screen, str(int(n))))
+
+    def _fix_first(self, info) -> str:
+        n = len((info or {}).get("errors") or []) if isinstance(info, dict) else 0
+        return f"Fix {n} red item{'s' if n != 1 else ''} first." if n else "No draft open."
+
+    def _started(self, ok: bool, info: dict, session: dict, res: dict) -> None:
+        if ok:
+            doc = lib.get(info.get("protocol_id") or "", self.root)
+            res["messages"].append(say("run_started", session, name=labels.protocol_short(doc), steps=info.get("steps")))
+        elif info.get("card"):
+            res["cards"].append(info["card"])  # its question is the reply
+        elif info.get("errors"):
+            res["messages"].append(self._fix_first(info))
+        else:
+            res["messages"].append(f"I couldn't start that: {info.get('reason', 'no protocol')}.")
 
     # --- timers ---
 
@@ -1481,6 +1655,10 @@ class RecordStore:
                     self._finish_locked("finished")
                 self._begin_locked(doc["plan"], doc["id"], doc.get("name"))
                 res["messages"].append(f"Run started: {doc.get('name')}.")
+        elif op == "new_run":
+            # yes to "Run 1 is finished. Start a new run?": the usual start
+            # (an active run still asks "finish it first?")
+            self._started(*self._request_start_locked(p.get("protocol_id") or "", session), session, res)
         elif op == "end_run":
             if not self.r.get("run"):
                 res["messages"].append("No active run.")

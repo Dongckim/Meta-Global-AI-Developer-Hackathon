@@ -502,4 +502,41 @@ with patch("httpx.AsyncClient", FakeClient):
         (i["path"], i["code"]) for i in d["review"]}, d["review"]
     print("P15c ok: absent numbers still flag")
 
+# P16. Text and Photo imports ride the same extraction path; the original
+# (pasted text, photo transcript) is what quotes are checked against and what
+# the library keeps. Photos: one transcription call per page, then extraction.
+def text_out(t):
+    return {"id": "t", "output": [{"type": "message", "content": [{"type": "output_text", "text": t}]}]}
+
+
+DOC = "\n".join([SEED_Q, S1, S2, S3, S4, S5])
+calls.clear()
+with patch("httpx.AsyncClient", ScriptClient):
+    api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+    c = TestClient(api.app)
+    ScriptClient.queue = [extraction(good)]
+    j = c.post("/protocols/import", data={"text": DOC}).json()
+    d = api.store.r["draft"]
+    assert d["meta"]["origin"] == "text" and d["meta"]["source"] == "Pasted text", d["meta"]
+    assert d["meta"]["evidence"]["text"] == DOC and j["errors"] == [], j
+    assert not [i for i in d["review"] if i["code"] == "ungrounded_quote"], d["review"]
+    ScriptClient.queue = [extraction(good)]
+    c.post("/protocols/import", data={"text": DOC.replace(S5, "")})  # quotes checked against the paste
+    assert "steps.4" in {i["path"] for i in api.store.r["draft"]["review"] if i["code"] == "ungrounded_quote"}
+    ScriptClient.queue = [text_out("\n".join([SEED_Q, S1, S2])), text_out("\n".join([S3, S4, S5])),
+                          extraction(good)]
+    calls.clear()
+    j = c.post("/protocols/import", files=[("file", ("p1.jpg", b"\xff\xd8a", "image/jpeg")),
+                                           ("file", ("p2.jpg", b"\xff\xd8b", "image/jpeg"))]).json()
+    bodies = [kw["json"] for _, kw in calls]
+    assert [b["input"][0]["content"][1]["type"] for b in bodies[:2]] == ["input_image"] * 2, bodies
+    assert bodies[0]["input"][0]["content"][1]["image_url"].startswith("data:image/jpeg;base64,")
+    assert "Document:" in bodies[2]["input"][0]["content"][0]["text"] and S5 in bodies[2]["input"][0]["content"][0]["text"]
+    d = api.store.r["draft"]
+    assert d["meta"]["origin"] == "photo" and len(d["meta"]["evidence"]["pages"]) == 2, d["meta"]
+    assert d["plan"]["steps"][4]["quote_page"] == 2, d["plan"]["steps"][4]
+    ok, doc = api.store.save_draft_to_library()
+    assert ok and doc["origin"] == "photo" and S5 in doc["source_text"], doc
+    assert c.post("/protocols/import", files={"file": ("x.gif", b"g", "image/gif")}).status_code == 400
+print("P16 ok: text and photo imports share one path, original = text / transcript")
 print("ALL PASS")
