@@ -209,6 +209,14 @@ class RecordStore:
             if "view" not in self.r:
                 self.r["view"] = self._default_view(bool(self.r.get("run")))
                 self._save()
+            if any(isinstance(m, str) for m in self.r.get("done") or []):
+                # API 4 -> 5: bare wells become step-1 marks (step unknown).
+                stamps = self.r.get("stamps") or {}
+                self.r["done"] = [
+                    {**m, "source": (stamps.get(m["well"]) or {}).get("source", ""),
+                     "ts": (stamps.get(m["well"]) or {}).get("ts", 0)}
+                    for m in runlog.done_marks(self.r)]
+                self._save()
             return
         self.r = self._fresh_record({"conditions": {}, "steps": [], "backups": []})
         self.r["epoch"] = uuid.uuid4().hex[:16]
@@ -546,10 +554,20 @@ class RecordStore:
             return set((steps[idx] or {}).get("wells", []))
         return set()
 
-    def unplanned(self, wells) -> list[str]:
-        if not self.r["plan"]["steps"]:
+    def current_step(self) -> int:
+        """1-based step that unqualified marks land on."""
+        return self.r.get("step_index", 0) + 1
+
+    def done_now(self) -> set[str]:
+        """Wells done in the current step."""
+        return runlog.done_wells(self.r, self.current_step())
+
+    def unplanned(self, wells, step: int | None = None) -> list[str]:
+        steps = self.r["plan"]["steps"]
+        if not steps:
             return []
-        planned = self.current_planned()
+        n = self.current_step() if step is None else step
+        planned = set((steps[n - 1] or {}).get("wells", [])) if 0 < n <= len(steps) else set()
         return [w for w in wells if w not in planned]
 
     def step_wells(self, rec: dict | None = None) -> list[str]:
@@ -565,7 +583,7 @@ class RecordStore:
         return out
 
     def remaining_wells(self) -> list[str]:
-        done = set(self.r["done"])
+        done = self.done_now()
         return [w for w in self.step_wells() if w not in done and w not in self.r["excluded"]]
 
     def timer_wells(self) -> set[str]:
@@ -578,7 +596,7 @@ class RecordStore:
         return out
 
     def occupied_wells(self) -> set[str]:
-        return (set(self.r["done"]) | set(self.r["excluded"])
+        return (runlog.done_wells(self.r) | set(self.r["excluded"])
                 | set(self.r["redo"]) | self.timer_wells())
 
     def find_free_wells(self, near: str, count=3) -> list[str]:
@@ -639,7 +657,7 @@ class RecordStore:
             return "already excluded"
         if well in self.r["redo"]:
             return "already marked for redo"
-        if well in self.r["done"]:
+        if well in runlog.done_wells(self.r):
             return "already done"
         return "has a running timer"
 
@@ -656,7 +674,7 @@ class RecordStore:
             "caution": (raw[idx].get("caution") or "") if idx < len(raw) else "",
             "next_caution": (raw[idx + 1].get("caution") or "") if idx + 1 < len(raw) else "",
             "plan_summary": f"Step {idx + 1}/{len(steps)}: {steps[idx]}" if idx < len(steps) else "",
-            "done": sorted(self.r["done"]),
+            "done": sorted(self.done_now()),
             "excluded": sorted(self.r["excluded"]),
             "step_wells": self.step_wells(),
             "remaining": self.remaining_wells(),
@@ -688,7 +706,7 @@ class RecordStore:
         name = steps[idx] if idx < len(steps) else ""
         pt = "; ".join(f"{i + 1}: {', '.join(f'{fmt_minutes(d)}m' for d in ds)}"
                        for i, ds in sorted(self.plan_times().items()))
-        usable = set(self.r["done"]) - set(self.r["excluded"])
+        usable = runlog.done_wells(self.r) - set(self.r["excluded"])
         conds = []
         for gname in sorted(self.r["plan"]["conditions"]):
             g = self.r["plan"]["conditions"][gname]
@@ -708,7 +726,7 @@ class RecordStore:
             "conditions": "; ".join(conds),
             "step_wells": join_wells_ranges(self.step_wells()),
             "remaining": join_wells_ranges(self.remaining_wells()),
-            "done": join_wells_ranges(self.r["done"]),
+            "done": join_wells_ranges(self.done_now()),
             "excluded": join_wells_ranges(self.r["excluded"]),
             "timers": timers,
             "recent": self.r["recent"][-5:],
@@ -749,7 +767,7 @@ class RecordStore:
         )
         return (
             f"Step {idx + 1}/{len(steps)} {steps[idx] if idx < len(steps) else ''}. "
-            f"Done: {sorted(self.r['done'])}. Excluded: {sorted(self.r['excluded'])}. "
+            f"Done this step: {sort_wells(self.done_now())}. Excluded: {sorted(self.r['excluded'])}. "
             f"Timers: {labels}. Recent: {recent}."
         )
 
@@ -765,7 +783,7 @@ class RecordStore:
         op = (payload or {}).get("op")
         p = payload or {}
         if op == "mark_done":
-            subject = tuple(sorted(p.get("wells") or []))
+            subject = (p.get("step"), tuple(sorted(p.get("wells") or [])))
         elif op == "exclude_well":
             subject = p.get("well")
         elif op == "record_redo":
@@ -863,15 +881,27 @@ class RecordStore:
             wells = [w for w in (args.get("wells") or []) if isinstance(w, str)]
             bad = [w for w in wells if not is_well(w)]
             good = [w for w in wells if is_well(w)]
-            if not force and good and self.unplanned(good):
+            n_steps = len(self.r["plan"]["steps"])
+            step = args.get("step")
+            if step is None:
+                step = self.current_step()
+            if not isinstance(step, int) or isinstance(step, bool) or not 0 < step <= max(n_steps, 1):
+                res["messages"].append(f"I couldn't mark that: there's no step {step}.")
+                return
+            if not force and good and self.unplanned(good, step):
                 self._card(res, "catch",
                            say("catch_off_plan", session,
-                               wells=join_wells_ranges(self.unplanned(good))),
-                           None, {"op": "mark_done", "wells": good})
+                               wells=join_wells_ranges(self.unplanned(good, step))),
+                           None, {"op": "mark_done", "wells": good, "step": step})
                 return
             msg = ""
             if good:
-                self.r["done"] = sorted(set(self.r["done"]) | set(good))
+                have = runlog.done_wells(self.r, step)
+                self.r["done"] = sorted(
+                    runlog.done_marks(self.r)
+                    + [{"step": step, "well": w, "source": source, "ts": now}
+                       for w in good if w not in have],
+                    key=lambda m: (m["step"], _well_coords(m["well"]), m["well"]))
                 self._stamp(good, source, now)
                 msg = say("mark_done", session, wells=join_wells_ranges(good))
                 res["ui"].append({"action": "flash", "wells": good})
@@ -1314,7 +1344,8 @@ class RecordStore:
                      "info": {"dropped": 0, "drop_reasons": []}}
         origin = ""
         if op == "mark_done":
-            self._apply_call({"name": "mark_done", "args": {"wells": p.get("wells", [])}},
+            self._apply_call({"name": "mark_done", "args": {"wells": p.get("wells", []),
+                                                            "step": p.get("step")}},
                              source, origin, "card", session, res, force=True)
         elif op == "exclude_well":
             self._apply_call({"name": "exclude_well", "args": {"well": p.get("well"), "reason": p.get("reason")}},
@@ -1491,7 +1522,7 @@ class RecordStore:
             status = "excluded"
         elif up in (rec.get("redo") or {}):
             status = "redo"
-        elif up in (rec.get("done") or []):
+        elif up in runlog.done_wells(rec):
             status = "done"
         elif any(up in (g or {}).get("wells", [])
                  for g in (rec.get("plan") or {}).get("conditions", {}).values()):
@@ -1507,6 +1538,7 @@ class RecordStore:
             "memos": [m["text"] for m in rec.get("notes", []) if m["target"] == up],
             "reason": (rec.get("excluded") or {}).get(up, ""),
             "redo_note": (rec.get("redo") or {}).get(up, ""),
+            "done_steps": sorted(m["step"] for m in runlog.done_marks(rec) if m["well"] == up),
         }
 
     def edit_note_manual(self, note_id: str, text: str):

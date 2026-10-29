@@ -12,6 +12,8 @@ import json
 import queue
 import threading
 
+from server.runs import done_wells
+
 
 class Backend:
     def say(self, text, session="fake"):
@@ -132,12 +134,13 @@ def render(snap: dict) -> str:
     steps = plan.get("steps") or []
     idx = snap.get("step_index", 0)
     name = (steps[idx].get("text") or "")[:28] if idx < len(steps) else "-"
-    done = set(snap.get("done") or [])
+    done = done_wells(snap, idx + 1)  # current step, like the app plate
+    earlier = done_wells(snap) - done
     excl = set((snap.get("excluded") or {}))
     redo = set((snap.get("redo") or {}))
     marks = []
-    for well in sorted(done | excl | redo):
-        m = "x" if well in excl else ("r" if well in redo else "*")
+    for well in sorted(done | earlier | excl | redo):
+        m = "x" if well in excl else ("r" if well in redo else ("*" if well in done else "."))
         marks.append(f"{well}{m}")
     timers = ",".join(f"{t.get('label', '?')}" for t in snap.get("timers") or []) or "-"
     cards = ";".join(c.get("question", "?") for c in (snap.get("cards") or {}).values()) or "-"
@@ -164,7 +167,7 @@ def check_screen_matches_record(text: str, record: dict) -> list[str]:
     """Parse the render back; every mismatch is one error string."""
     errs = []
     head = text.split("\n")[0]
-    want_done = set(record.get("done") or [])
+    want_done = done_wells(record, record.get("step_index", 0) + 1)
     cells = head.split("wells:")[1].split("|")[0].split(",") if "wells:" in head else []
     got_done = {w.strip()[:-1] for w in cells if w.strip().endswith("*")}
     if got_done != (want_done - set((record.get("excluded") or {}))):

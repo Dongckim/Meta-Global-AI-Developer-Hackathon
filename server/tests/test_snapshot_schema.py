@@ -104,6 +104,21 @@ class SchemaTest(unittest.TestCase):
         bad["done"] = "C2"
         with self.assertRaises(jsonschema.ValidationError):
             VALIDATE.validate(bad)
+        bad["done"] = ["C2"]  # API 4 bare wells are no longer valid
+        with self.assertRaises(jsonschema.ValidationError):
+            VALIDATE.validate(bad)
+
+    def test_legacy_done_migrates_per_step(self):
+        old = {"version": 1, "plan": {"conditions": {}, "steps": [
+            {"kind": "wait", "text": "w", "wells": ["C2"]}], "backups": []},
+            "step_index": 0, "done": ["C2"], "excluded": {}, "redo": {},
+            "notes": [], "tips": [], "timers": [],
+            "stamps": {"C2": {"source": "voice", "ts": 5.0}}, "cards": {}, "recent": []}
+        p = Path(self.tmp.name) / "old4.json"
+        p.write_text(json.dumps(old))
+        s2 = RecordStore(path=p)
+        self.assertEqual(s2.r["done"], [{"step": 1, "well": "C2", "source": "voice", "ts": 5.0}])
+        self.check(s2.snapshot())
 
     def test_api_version_agrees(self):
         api_src = (ROOT / "server" / "api.py").read_text()

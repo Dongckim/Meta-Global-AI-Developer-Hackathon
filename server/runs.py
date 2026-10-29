@@ -17,6 +17,23 @@ from pathlib import Path
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
+def done_marks(record: dict) -> list[dict]:
+    """Per-step done log [{step (1-based), well, source, ts}]. Legacy bare
+    well strings (API <= 4) read as step 1 with unknown provenance."""
+    out = []
+    for m in (record or {}).get("done") or []:
+        if isinstance(m, str):
+            out.append({"step": 1, "well": m, "source": "", "ts": 0})
+        elif isinstance(m, dict) and isinstance(m.get("well"), str):
+            out.append(m)
+    return out
+
+
+def done_wells(record: dict, step: int | None = None) -> set[str]:
+    """Wells done in `step` (1-based), or in any step when None."""
+    return {m["well"] for m in done_marks(record) if step is None or m.get("step") == step}
+
+
 def _dir(root: Path | None) -> Path:
     return (root or DATA_DIR) / "runs"
 
@@ -30,7 +47,7 @@ def summarize_record(record: dict) -> dict:
     """Frozen-at-end (or live) overview: per-condition have/need + counts."""
     record = record or {}
     plan = record.get("plan") or {}
-    usable = set(record.get("done") or []) - set(record.get("excluded") or {})
+    usable = done_wells(record) - set(record.get("excluded") or {})
     conds = []
     for key in sorted(plan.get("conditions") or {}):
         c = plan["conditions"][key] or {}

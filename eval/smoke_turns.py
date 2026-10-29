@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastapi.testclient import TestClient  # noqa: E402
 
 import server.api as api  # noqa: E402
+from server.runs import done_wells  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
 TURNS = [
@@ -36,7 +37,7 @@ LINE = re.compile(r"spark ms=(\d+)")
 
 #: Strict per-turn state checks, same order as TURNS (None = no check).
 CHECKS = [
-    lambda r: ({"C2", "C3"} <= set(r["done"]), "C2,C3 done"),
+    lambda r: ({"C2", "C3"} <= done_wells(r), "C2,C3 done"),
     lambda r: (len(r["notes"]) >= 1, "note saved"),
     lambda r: (len(r["timers"]) >= 1, "timer running"),
     None,
@@ -45,7 +46,7 @@ CHECKS = [
     lambda r: (len(r["cards"]) >= 1, "redo cards"),
     None,
     lambda r: (len(r["timers"]) == 0, "timer cancelled"),
-    lambda r: ({"C4", "C5", "C6", "C7", "C8"} <= set(r["done"]), "C4-C8 done"),
+    lambda r: ({"C4", "C5", "C6", "C7", "C8"} <= done_wells(r), "C4-C8 done"),
 ]
 
 
@@ -59,7 +60,7 @@ END_TURNS = [
 ]
 
 END_CHECKS = [
-    lambda r: ({"C2", "C3"} <= set(r["done"]), "C2,C3 done"),
+    lambda r: ({"C2", "C3"} <= done_wells(r), "C2,C3 done"),
     lambda r: (len(r["notes"]) >= 1, "note saved"),
     lambda r: (r["view"]["sheet"] == {"name": "well_card", "target": "C5"},
                "tap opens sheet"),

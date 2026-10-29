@@ -417,13 +417,22 @@ struct ProtocolDraft: Decodable {
     var meta: DraftMeta
 }
 
+/// One per-step completion (API 5): which plan step (1-based) a well was
+/// done in, by whom, when. Exclusions stay per well across steps.
+struct DoneMark: Decodable, Equatable {
+    var step: Int
+    var well: String
+    var source: String
+    var ts: Double
+}
+
 struct RecordSnapshot: Decodable {
     var epoch: String?
     var view = ViewState()
     var version: Int
     var plan: Plan
     var stepIndex: Int
-    var done: [String]
+    var done: [DoneMark]
     var excluded: [String: String]
     var redo: [String: String]
     var notes: [Memo]
@@ -450,7 +459,7 @@ struct RecordSnapshot: Decodable {
         // wrong types still throw so the banner names the break (draft is
         // auxiliary: its errors never take down the bench).
         stepIndex = try c.decodeIfPresent(Int.self, forKey: .stepIndex) ?? 0
-        done = try c.decodeIfPresent([String].self, forKey: .done) ?? []
+        done = try c.decodeIfPresent([DoneMark].self, forKey: .done) ?? []
         excluded = try c.decodeIfPresent([String: String].self, forKey: .excluded) ?? [:]
         redo = try c.decodeIfPresent([String: String].self, forKey: .redo) ?? [:]
         notes = try c.decodeIfPresent([Memo].self, forKey: .notes) ?? []
@@ -538,7 +547,10 @@ final class LabState {
     var conditions: [String: PlanCondition] = [:]
     var steps: [String] = ["Prep", "Dispense", "Incubate", "Measure", "Clean up"]
     var stepIndex = 0
+    /// Wells done in the current step (the plate's filled wells).
     var done: Set<String> = []
+    /// Wells done only in other steps (dimmed on the plate).
+    var doneEarlier: Set<String> = []
     var excluded: [String: String] = [:]
     var redo: [String: String] = [:]
     var notes: [Memo] = []
@@ -570,7 +582,9 @@ final class LabState {
         conditions = snap.plan.conditions
         if !snap.plan.steps.isEmpty { steps = snap.plan.steps.map(\.text) }
         stepIndex = min(max(snap.stepIndex, 0), steps.count - 1)
-        done = Set(snap.done)
+        let now = snap.done.filter { $0.step == stepIndex + 1 }.map(\.well)
+        done = Set(now)
+        doneEarlier = Set(snap.done.map(\.well)).subtracting(now)
         excluded = snap.excluded
         redo = snap.redo
         notes = snap.notes
@@ -585,7 +599,7 @@ final class LabState {
 
     /// Per-condition usable-done counts: done wells minus excluded ones, vs replicates.
     func conditionProgress() -> [(key: String, label: String, have: Int, need: Int)] {
-        let usable = done.subtracting(excluded.keys)
+        let usable = done.union(doneEarlier).subtracting(excluded.keys)
         return conditions.sorted { $0.key < $1.key }.map {
             (key: $0.key, label: $0.value.label,
              have: usable.intersection($0.value.wells).count, need: $0.value.replicates)

@@ -17,6 +17,7 @@ os.environ["MODEL_API_KEY"] = "dummy"
 from fastapi.testclient import TestClient  # noqa: E402
 
 import server.api as api  # noqa: E402
+from server.runs import done_wells  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -156,19 +157,19 @@ with patch("httpx.AsyncClient", FakeClient):
 
     # RUN3. active start cards; confirm finishes the old run, starts new.
     j = c.post("/orchestrate", json={"text": "B2 done", "session": "run3"}).json()
-    assert j["route"] == "grammar" and api.store.r["done"] == ["B2"], j
+    assert j["route"] == "grammar" and sorted(done_wells(api.store.r)) == ["B2"], j
     j = c.post("/runs/start", json={"protocol_id": demo_id, "session": "run3"}).json()
     assert j["started"] is False and j["card"]["kind"] == "finish_first", j
     j = c.post("/confirm", json={"card_id": j["card"]["id"], "ok": True,
                                  "session": "run3"}).json()
     assert "Run started" in j["message"], j
     run2 = api.store.r["run"]["run_id"]
-    assert run2 != run1 and api.store.r["done"] == [], api.store.r["run"]
+    assert run2 != run1 and sorted(done_wells(api.store.r)) == [], api.store.r["run"]
     runs = list((Path(api.store.path).parent / "runs").glob("run-*.json"))
     assert len(runs) == 1, runs
     old = json.loads(runs[0].read_text())
     assert old["run_id"] == run1 and old["status"] == "finished", old
-    assert old["record"]["done"] == ["B2"], old["record"]["done"]
+    assert sorted(done_wells(old["record"])) == ["B2"], old["record"]["done"]
     j = c.get("/runs").json()
     assert [r["status"] for r in j["runs"]] == ["active", "finished"], j
     assert j["runs"][1]["summary"]["notes"] == 0, j
@@ -186,7 +187,7 @@ with patch("httpx.AsyncClient", FakeClient):
                                               "target": run1}, j
     j = c.post("/orchestrate", json={"text": "C3 done", "session": "run4"}).json()
     assert j["reply"] == "That run is finished — read only.", j
-    assert api.store.r["done"] == [] and run1 not in [
+    assert sorted(done_wells(api.store.r)) == [] and run1 not in [
         d.get("run_id") for d in [api.store.active_run_doc()]], "active untouched"
     d = api.store.read_record("wells", "B2", 10)
     assert d["run"] == run1 and d["wells"][0]["status"] == "done", d
@@ -285,11 +286,11 @@ with patch("httpx.AsyncClient", FakeClient):
                                               "target": run1}
     j = c.post("/orchestrate", json={"text": "C3 done", "session": "run9"}).json()
     assert j["reply"] == "That run is finished — read only.", j
-    assert api.store.r["done"] == [], api.store.r["done"]
+    assert sorted(done_wells(api.store.r)) == [], api.store.r["done"]
     c.post("/input", json={"action": {"id": "back", "args": {}},
                            "session": "run9"})
     j = c.post("/orchestrate", json={"text": "C3 done", "session": "run9"}).json()
-    assert api.store.r["done"] == ["C3"], j
+    assert sorted(done_wells(api.store.r)) == ["C3"], j
     print("RUN9 ok: view target scopes taps")
 
     # RUN11. opening the active run (tap or "latest") shows the live bench.

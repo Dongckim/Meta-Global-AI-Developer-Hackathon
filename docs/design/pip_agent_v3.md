@@ -261,6 +261,14 @@ smoke + iPad check.
   only when accepted (`onWake` returns it); a rejected one re-arms on a
   fresh task. Every capture exit releases its trigger (the wake path leaked
   it, so the 2nd "Hey Pip" was ignored as "starting").
+- Per-step done (API 5): `record.done` is a log of {step (1-based), well,
+  source, ts}, one per (step, well), sorted by step then well; excluded
+  stays per well across steps. mark_done{wells, step?} lands on the current
+  step when step is blank and checks off-plan against that step. Plate
+  (design `.well`): current-step targets are done (filled) or now (blue
+  ring); wells done only in other steps are dimmed; others are planned
+  (group ring). CSV hand-off rows carry step/source/ts. API 4 bare-well
+  records migrate on load as step 1 (the step was never recorded).
 
 ## Standing rules (carried over)
 

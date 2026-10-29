@@ -18,6 +18,7 @@ os.environ["MODEL_API_KEY"] = "dummy"
 from fastapi.testclient import TestClient  # noqa: E402
 
 import server.api as api  # noqa: E402
+from server.runs import done_wells  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
 api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
@@ -93,7 +94,7 @@ with patch("httpx.AsyncClient", FakeClient):
     assert j["reply"] == "Nice, C3 are in.", j
     assert j["route"] == "spark", j
     assert j["cards"] == [] and j["record_version"] >= 1, j
-    assert "C3" in api.store.r["done"], api.store.r["done"]
+    assert "C3" in done_wells(api.store.r), api.store.r["done"]
     url, kw = calls[-1]
     assert url == "https://api.meta.ai/v1/responses", url
     assert kw["headers"]["Authorization"] == f"Bearer {os.environ['MODEL_API_KEY']}"
@@ -477,7 +478,7 @@ with patch("httpx.AsyncClient", FakeClient):
         "output": '{"ok": false, "message": "pending confirmation"}'}, bodies[3]["input"]
     assert json.loads(bodies[4]["input"][0]["output"]) == {"ok": True, "message": "Got it — C7 done."}
     assert bodies[4]["input"][-1] == {"role": "user", "content": "t4 alpha"}
-    assert {"C6", "C7", "C8"} <= set(api.store.r["done"])
+    assert {"C6", "C7", "C8"} <= done_wells(api.store.r)
     print("22 ok: five-turn outputs chain")
 
     # 23b. dropped write answers honestly, never "Noted"

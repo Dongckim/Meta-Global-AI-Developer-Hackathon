@@ -13,7 +13,7 @@ struct PipTests {
                              "tip": null, "caution": null, "pipette": null, "wells": ["B2"]},
                             {"kind": "pipette", "text": "s2", "minutes": null, "temp_c": null,
                              "tip": null, "caution": null, "pipette": null, "wells": ["C2", "C3"]}]},
-         "step_index": 1, "done": ["C2"], "excluded": {}, "redo": {},
+         "step_index": 1, "done": [{"step": 2, "well": "C2", "source": "voice", "ts": 1.0}], "excluded": {}, "redo": {},
          "notes": [{"id": "m1", "target": "C2", "text": "bubbles", "ts": 1.0, "history": []}],
          "tips": [], "timers": [{"id": "t1", "label": "s2 · C2 · 30 min", "minutes": 30,
            "on_done": null, "started_at": 1000.0, "step": "s2", "wells": "C2"}],
@@ -55,12 +55,36 @@ struct PipTests {
         #expect(lab.wellSource["C2"] == "voice")
     }
 
+    @Test @MainActor func doneSplitsByStep() {
+        let json = """
+        {"version": 1,
+         "plan": {"conditions": {"a": {"label": "A", "treatments": [], "replicates": 2,
+                                       "wells": ["B2", "C2"]}},
+                  "steps": [{"kind": "add", "text": "media", "wells": ["B2", "C2"]},
+                            {"kind": "add", "text": "drug", "wells": ["C2"]}]},
+         "step_index": 1,
+         "done": [{"step": 1, "well": "B2", "source": "voice", "ts": 1.0},
+                  {"step": 1, "well": "C2", "source": "voice", "ts": 1.0},
+                  {"step": 2, "well": "C2", "source": "tap", "ts": 2.0}],
+         "cards": {}}
+        """
+        let lab = LabState()
+        lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(json.utf8)))
+        #expect(lab.done == ["C2"]) // filled: done this step
+        #expect(lab.doneEarlier == ["B2"]) // dimmed: done only before
+        #expect(lab.conditionProgress().first?.have == 2) // any step counts
+        let legacy = Data(#"{"version": 1, "plan": {"conditions": {}, "steps": []}, "done": ["C2"]}"#.utf8)
+        #expect(throws: DecodingError.self) { // API 4 bare wells are a contract break
+            _ = try JSONDecoder().decode(RecordSnapshot.self, from: legacy)
+        }
+    }
+
     @Test @MainActor func redoWellCountsInGroup() {
         let json = """
         {"version": 4,
          "plan": {"conditions": {"drug_A": {"label": "Drug A", "treatments": ["Drug A"],
                                             "replicates": 2, "wells": ["C2", "C3", "C9"]}}, "steps": []},
-         "step_index": 0, "done": ["C9"], "excluded": {}, "redo": {"C9": "backup"},
+         "step_index": 0, "done": [{"step": 1, "well": "C9", "source": "voice", "ts": 1.0}], "excluded": {}, "redo": {"C9": "backup"},
          "notes": [], "tips": [], "timers": [], "stamps": {}, "cards": {}}
         """
         let lab = LabState()
@@ -181,7 +205,7 @@ struct PipTests {
         {"version": 7, "run": {"run_id": "run-1", "protocol_id": "p",
          "protocol_name": "Demo", "started_at": 1.0},
          "plan": {"conditions": {}, "steps": []}, "step_index": 1,
-         "done": ["C2"], "cards": {"c1": {"id": "c1", "kind": "end_run",
+         "done": [{"step": 2, "well": "C2", "source": "voice", "ts": 1.0}], "cards": {"c1": {"id": "c1", "kind": "end_run",
           "question": "End this run?", "detail": null, "ts": 2.0}}}
         """
         let lab = LabState()
@@ -225,7 +249,7 @@ struct PipTests {
         {"epoch": "aaa", "version": 7, "run": {"run_id": "run-1",
          "protocol_id": "p", "protocol_name": "Demo", "started_at": 1.0},
          "plan": {"conditions": {}, "steps": []},
-         "done": ["C2"], "cards": {}}
+         "done": [{"step": 1, "well": "C2", "source": "voice", "ts": 1.0}], "cards": {}}
         """
         lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(live.utf8)))
         #expect(lab.version == 7 && lab.epoch == "aaa")
@@ -242,7 +266,7 @@ struct PipTests {
         let stale = """
         {"epoch": "bbb", "version": 1, "run": null,
          "plan": {"conditions": {}, "steps": []},
-         "done": ["C9"], "cards": {}}
+         "done": [{"step": 1, "well": "C9", "source": "voice", "ts": 1.0}], "cards": {}}
         """
         lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(stale.utf8)))
         #expect(lab.version == 2 && lab.done.isEmpty)

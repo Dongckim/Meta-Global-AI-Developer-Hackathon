@@ -89,7 +89,20 @@
       }
     },
     "step_index": {"type": "integer"},
-    "done": {"type": "array", "items": {"type": "string"}},
+    "done": {
+      "type": "array",
+      "description": "Per-step done log, one entry per (step, well), sorted by step then well. step is 1-based. Exclusions stay per well across steps.",
+      "items": {
+        "type": "object",
+        "required": ["step", "well", "source", "ts"],
+        "properties": {
+          "step": {"type": "integer"},
+          "well": {"type": "string"},
+          "source": {"type": "string"},
+          "ts": {"type": "number"}
+        }
+      }
+    },
     "excluded": {"type": "object", "additionalProperties": {"type": "string"}},
     "redo": {"type": "object", "additionalProperties": {"type": "string"}},
     "notes": {

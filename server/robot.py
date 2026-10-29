@@ -10,6 +10,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from server.runs import done_marks, done_wells
 from server.store import DATA_DIR
 
 PROTOCOL_PATH = DATA_DIR / "robot_protocol.py"
@@ -37,9 +38,10 @@ def _q(s) -> str:
 
 
 def export_csv(store) -> str:
-    lines = ["well,status,detail,raw"]
-    for w in sorted(store.r["done"]):
-        lines.append(f"{w},done,,")
+    # Per-step done rows (step, source, ts) so hand-off keeps the run order.
+    lines = ["well,status,detail,raw,step,source,ts"]
+    for m in done_marks(store.r):
+        lines.append(f"{m['well']},done,,,{m['step']},{m.get('source', '')},{m.get('ts', 0)}")
     for w, reason in sorted(store.r["excluded"].items()):
         lines.append(f'{w},excluded,"{reason}",')
     for w, note in sorted(store.r["redo"].items()):
@@ -51,7 +53,7 @@ def export_csv(store) -> str:
 
 
 def render_protocol(store) -> str:
-    return TEMPLATE.format(wells=sorted(store.r["done"]))
+    return TEMPLATE.format(wells=sorted(done_wells(store.r)))
 
 
 def _run_sim() -> dict:
@@ -86,7 +88,7 @@ def run_pipeline(store) -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     PROTOCOL_PATH.write_text(code)
     sim = _run_sim()
-    check = check_sim(sim.get("log", ""), sorted(store.r["done"]))
+    check = check_sim(sim.get("log", ""), sorted(done_wells(store.r)))
     return {
         "csv": csv_text,
         "code": code,

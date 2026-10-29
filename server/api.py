@@ -69,7 +69,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 4
+API_VERSION = 5
 
 BASE_URL = "https://api.meta.ai/v1"
 SPARK_MODEL = "muse-spark-1.3"
@@ -156,7 +156,8 @@ TOOLS = [
     _tool(
         "perform",
         "Do one bench action per call; emit in run order. "
-        "mark_done{wells}: REPORTED finished only (done/finished/added/I put); "
+        "mark_done{wells,step?}: REPORTED finished only (done/finished/added/I put); "
+        "step = the plan step number it belongs to (blank = current step); "
         "bench instructions (wash/add/do) record nothing. "
         "exclude_well{well,reason?}; record_redo{wells,note?} (+exclude when elsewhere); "
         "add_note{target,text} (stated observation; nothing to write -> ask); "
@@ -181,6 +182,7 @@ TOOLS = [
             "note": _opt({"type": "string"}),
             "reason": _opt({"type": "string"}),
             "screen": _opt({"type": "string"}),
+            "step": _opt({"type": "integer"}),
             "path": _opt({"type": "string"}),
             "value": _opt({"type": "string"}),
             "step_id": _opt({"type": "string"}),

@@ -60,27 +60,31 @@ struct WellDot: View {
 
     private var excluded: Bool { lab.excluded[well] != nil }
     private var done: Bool { lab.done.contains(well) }
+    private var doneEarlier: Bool { lab.doneEarlier.contains(well) }
     private var redo: Bool { lab.redo[well] != nil }
     private var noted: Bool { lab.hasNote(well) }
     private var cond: String? { lab.conditionOf(well) }
     private var current: Bool { lab.currentPlanned.contains(well) }
     private var lit: Bool { lab.flashing.contains(well) }
 
+    /// Design `.well` states: current-step targets are done (filled) or
+    /// now (blue ring); other wells show earlier-step done dimmed, else
+    /// planned (group ring). Excluded holds across steps.
     private var fill: Color {
         if excluded { return scheme == .dark ? Color(white: 0.6) : Color(white: 0.35) }
         if done { return conditionColor(cond) }
-        if current, cond != nil { return conditionColor(cond).opacity(0.18) }
+        if !current, doneEarlier { return conditionColor(cond).opacity(0.35) }
         return .clear
     }
 
     private var edge: (Color, CGFloat) {
         if lit { return (.yellow, 3) }
-        if current { return (conditionColor(cond), 3) }
+        if current, !done, !excluded { return (Theme.blue, 3) }
         if cond != nil { return (conditionColor(cond), 1.5) }
         return (.secondary.opacity(0.5), 1.5)
     }
 
-    private var markFg: Color { (excluded || done) ? .white : .primary }
+    private var markFg: Color { (excluded || done || (!current && doneEarlier)) ? .white : .primary }
 
     var body: some View {
         Button(action: onTap) {
@@ -103,7 +107,7 @@ struct WellDot: View {
                 }
         }
         .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.3), value: "\(excluded)\(done)\(redo)\(noted)\(lit)\(current)")
+        .animation(.easeInOut(duration: 0.3), value: "\(excluded)\(done)\(doneEarlier)\(redo)\(noted)\(lit)\(current)")
     }
 }
 
@@ -148,7 +152,11 @@ struct WellSheet: View {
         var s: [String] = []
         if lab.excluded[well] != nil { s.append("Excluded") }
         if lab.redo[well] != nil { s.append("Redo") }
-        if lab.done.contains(well) { s.append("Done") }
+        if lab.done.contains(well) {
+            s.append("Done this step")
+        } else if lab.doneEarlier.contains(well) {
+            s.append("Done in an earlier step")
+        }
         if s.isEmpty { s.append(lab.conditionOf(well) == nil ? "Empty" : "Planned") }
         return s.joined(separator: ", ")
     }

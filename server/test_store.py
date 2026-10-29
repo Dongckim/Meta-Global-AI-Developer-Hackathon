@@ -5,6 +5,7 @@ import time
 import unittest
 from pathlib import Path
 
+from server.runs import done_wells
 from server.store import RecordStore
 
 
@@ -29,7 +30,7 @@ class StoreTest(unittest.TestCase):
     def test_seed(self):
         self.assertEqual(self.s.r["step_index"], 2)
         self.assertEqual(len(self.s.steps()), 5)
-        self.assertEqual(self.s.r["done"], [])
+        self.assertEqual(sorted(done_wells(self.s.r)), [])
 
     def test_epoch_lineage(self):
         first = self.s.r["epoch"]
@@ -52,23 +53,49 @@ class StoreTest(unittest.TestCase):
         r = self.apply([T("mark_done", wells=["C2", "C3"])])
         self.assertEqual(r["messages"], ["Nice, C2–C3 are in."])
         self.assertEqual(r["cards"], [])
-        self.assertEqual(self.s.r["done"], ["C2", "C3"])
+        self.assertEqual(sorted(done_wells(self.s.r)), ["C2", "C3"])
+
+    def test_done_is_per_step(self):
+        # fixture is at step 3 (drug A, C2-C8); step 1 put media in every well
+        self.apply([T("mark_done", wells=["C2", "C3"], step=1)])
+        self.assertEqual(done_wells(self.s.r, 1), {"C2", "C3"})
+        self.assertEqual(self.s.done_now(), set())  # step 3 still open
+        self.assertEqual(self.s.remaining_wells()[:2], ["C2", "C3"])
+        self.apply([T("mark_done", wells=["C2"])])  # no step -> current (3)
+        self.assertEqual(self.s.done_now(), {"C2"})
+        m = [x for x in self.s.r["done"] if x["well"] == "C2"]
+        self.assertEqual([x["step"] for x in m], [1, 3])
+        self.assertTrue(all(x["source"] == "voice" and x["ts"] > 0 for x in m))
+        self.apply([T("mark_done", wells=["C2"])])  # repeat: no duplicate
+        self.assertEqual(len([x for x in self.s.r["done"] if x["well"] == "C2"]), 2)
+
+    def test_done_step_checks(self):
+        r = self.apply([T("mark_done", wells=["C2"], step=9)])
+        self.assertEqual(r["messages"], ["I couldn't mark that: there's no step 9."])
+        self.assertEqual(self.s.r["done"], [])
+        r = self.apply([T("mark_done", wells=["B2"], step=2)])  # B2 is in step 2's plan
+        self.assertEqual(r["cards"], [])
+        self.assertEqual(done_wells(self.s.r, 2), {"B2"})
+        r = self.apply([T("mark_done", wells=["C2"], step=2)])  # off step 2's plan
+        self.assertIn("isn't in this step", r["cards"][0]["question"])
+        self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
+        self.assertEqual(done_wells(self.s.r, 2), {"B2", "C2"})  # card keeps the step
 
     def test_catch_and_confirm(self):
         r = self.apply([T("mark_done", wells=["A1"])])
         self.assertEqual(r["messages"], [])
         self.assertEqual(r["cards"][0]["question"], "Wait — A1 isn't in this step. Still log it?")
-        self.assertEqual(self.s.r["done"], [])
+        self.assertEqual(sorted(done_wells(self.s.r)), [])
         msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
         self.assertEqual(msg, "Nice, A1 are in.")
-        self.assertEqual(self.s.r["done"], ["A1"])
+        self.assertEqual(sorted(done_wells(self.s.r)), ["A1"])
 
     def test_catch_plural_and_decline(self):
         r = self.apply([T("mark_done", wells=["A1", "A2"])])
         self.assertIn("isn't in this step. Still log it?", r["cards"][0]["question"])
         msg, _, _ = self.s.confirm(r["cards"][0]["id"], False, "card", self.sess)
         self.assertEqual(msg, "Canceled.")
-        self.assertEqual(self.s.r["done"], [])
+        self.assertEqual(sorted(done_wells(self.s.r)), [])
 
     def test_mark_invalid(self):
         r = self.apply([T("mark_done", wells=["Z9"])])
@@ -544,7 +571,7 @@ class StoreTest(unittest.TestCase):
         self.apply([T("mark_done", wells=["C2"])])
         self.assertTrue(any(m.get("kind") == "snapshot" for m in seen))
         again = RecordStore(path=Path(self.tmp.name) / "r.json")
-        self.assertEqual(again.r["done"], ["C2"])
+        self.assertEqual(sorted(done_wells(again.r)), ["C2"])
 
 
 if __name__ == "__main__":
