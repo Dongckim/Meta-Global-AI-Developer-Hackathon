@@ -1,38 +1,34 @@
-"""Glassistant · Modal Sandbox protocol runner.
+"""Glassistant · Modal Sandbox protocol runner (ROBOT_SIM=modal).
 
-Simulates server/data/robot_protocol.py (written by server/robot.py)
-with opentrons_simulate inside an isolated Modal Sandbox.
+Runs server/robot_runner.py on one protocol inside an isolated Modal
+Sandbox and prints the runner's JSON line. The default simulator is local
+(server/handoff.py); this is the switch.
 
-Run from the repo root:
-  modal run server/robot_sim.py
+  modal run server/robot_sim.py --code-path /path/to/protocol.py
 """
 
 from pathlib import Path
 
 import modal
 
-PROTO_FILE = Path(__file__).resolve().parent / "data" / "robot_protocol.py"
+RUNNER = Path(__file__).resolve().parent / "robot_runner.py"
 
 app = modal.App("glassistant-robot-sim")
 image = modal.Image.debian_slim(python_version="3.12").pip_install("opentrons")
 
 
 @app.local_entrypoint()
-def main():
-    code = PROTO_FILE.read_text()
+def main(code_path: str):
+    code = Path(code_path).read_text()
     sb = modal.Sandbox.create(app=app, image=image, timeout=300)
     try:
         script = (
+            "cat > /tmp/runner.py <<'RUNNER'\n" + RUNNER.read_text() + "\nRUNNER\n"
             "cat > /tmp/protocol.py <<'PROTO'\n" + code + "\nPROTO\n"
-            "opentrons_simulate /tmp/protocol.py"
+            "cd /tmp && python runner.py protocol.py"
         )
         proc = sb.exec("bash", "-c", script)
         proc.wait()
-        print("exit code:", proc.returncode)
         print(proc.stdout.read())
-        err = proc.stderr.read()
-        if err.strip():
-            print("--- stderr ---")
-            print(err)
     finally:
         sb.terminate()

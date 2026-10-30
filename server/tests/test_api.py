@@ -419,24 +419,12 @@ with patch("httpx.AsyncClient", FakeClient):
     assert r.json()["message"] == "Canceled.", r.json()
     print("19 ok: card checklist replaces plans")
 
-    # 20. manual note edit + robot pipeline (mocked modal)
+    # 20. manual note edit
     mid = api.store.r["notes"][-1]["id"]
     r = c.post("/notes/edit", json={"id": mid, "text": "fixed by hand"})
     assert r.json()["message"].startswith("Note updated ("), r.json()
 
-    class Proc:
-        returncode = 0
-        stdout = "exit code: 0\ntransfer to C2\ntransfer to C3\n"
-        stderr = ""
-
-    with patch("server.robot.subprocess.run", return_value=Proc()):
-        r = c.post("/robot")
-    j = r.json()
-    assert "C2" in j["csv"] and "p.transfer" in j["code"], j
-    assert j["sim"]["ok"] is True and j["sim"]["exit"] == 0, j
-    assert j["check"]["ok"] is False and "C4" in j["check"]["missing"], j
-    assert "well,status" in j["preview"]["csv_head"], j
-    print("20 ok: notes edit + robot pipeline")
+    print("20 ok: notes edit")
 
     # 21. turn after an ask-ended turn carries function_call_outputs
     FakeClient.spark_payload = {"id": "resp_a", "output": [
@@ -759,11 +747,11 @@ with patch("httpx.AsyncClient", FakeClient):
     body = calls[-1][1]["json"]
     assert '"current_screen": "main"' in body["instructions"], body["instructions"]
     assert f'"pending_cards": {len(api.store.r["cards"])}' in body["instructions"], body["instructions"]
-    c.post("/input", json={"action": {"id": "navigate", "args": {"screen": "robot_preview"}},
+    c.post("/input", json={"action": {"id": "navigate", "args": {"screen": "sync"}},
                            "session": "s34"})
-    assert api.store.r["view"]["current"]["screen"] == "robot_preview"
+    assert api.store.r["view"]["current"]["screen"] == "sync"
     r = c.post("/orchestrate", json={"text": "C2 all set", "session": "s34b"})
-    assert '"current_screen": "robot_preview"' in calls[-1][1]["json"]["instructions"]
+    assert '"current_screen": "sync"' in calls[-1][1]["json"]["instructions"]
     c.post("/input", json={"action": {"id": "back", "args": {}}, "session": "s34"})
     assert api.store.r["view"]["current"]["screen"] == "main"
     print("34 ok: flash echo + speak + view state")

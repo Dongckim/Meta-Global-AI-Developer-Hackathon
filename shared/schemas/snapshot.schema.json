@@ -195,6 +195,15 @@
         }
       }
     },
+    "timer_log": {
+      "type": "array",
+      "description": "Timers that ended or were cancelled, with their actual minutes (timers leave `timers` a minute after they end); hand off reads a timed step's real time here.",
+      "items": {"type": "object", "required": ["step_index", "minutes", "status"],
+                "properties": {"step_index": {"type": ["integer", "null"]}, "label": {"type": ["string", "null"]},
+                               "planned": {"type": ["number", "null"]}, "minutes": {"type": "number"},
+                               "started_at": {"type": "number"}, "ended_at": {"type": "number"},
+                               "status": {"enum": ["done", "cancelled"]}}}
+    },
     "stamps": {
       "type": "object",
       "additionalProperties": {
@@ -217,6 +226,27 @@
           "ts": {"type": "number"},
           "payload": {"type": "object"}
         }
+      }
+    },
+    "handoff": {
+      "type": ["object", "null"],
+      "description": "Served snapshots only: the finished run a hand off screen shows (docs/design/handoff.md), else null. summary is the import review's summary shape, rows carrying plan, run and changes (each with its record event); stage, while approved: generating | simulating | fixing | passed | needs_you.",
+      "required": ["run_id", "summary", "approved", "stage", "meta"],
+      "properties": {
+        "run_id": {"type": "string"}, "label": {"type": "string"}, "approved": {"type": "boolean"},
+        "stage": {"enum": [null, "generating", "simulating", "fixing", "passed", "needs_you"]},
+        "attempt": {"type": "integer"}, "error": {"type": "string"}, "check": {"type": ["object", "null"]},
+        "code": {"type": "string"}, "csv": {"type": "string"}, "exported": {"type": ["number", "null"]},
+        "meta": {"type": "object"},
+        "summary": {"type": "object", "required": ["rows", "others", "of", "changed"],
+                    "properties": {
+                      "rows": {"type": "array", "items": {
+                        "type": "object",
+                        "required": ["n", "index", "title", "detail", "flagged", "reason", "quote", "plan", "run", "changes"],
+                        "properties": {"changes": {"type": "array", "items": {
+                          "type": "object", "required": ["kind", "wells", "text", "event"],
+                          "properties": {"kind": {"enum": ["excluded", "skipped", "not_marked", "redo", "off_plan", "timer"]}}}}}}},
+                      "others": {"type": "array"}, "of": {"type": "integer"}, "changed": {"type": "integer"}}}
       }
     },
     "draft": {

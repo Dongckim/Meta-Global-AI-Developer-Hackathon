@@ -778,8 +778,8 @@ class UIGrammarTests(unittest.TestCase):
         self.assertEqual(calls, [{"name": "open", "args": {"target": "C5"}}])
 
     def test_open_screen_alias(self):
-        calls, _ = match_grammar(normalize_text("open the robot preview"), ST)
-        self.assertEqual(calls, [{"name": "navigate", "args": {"screen": "robot_preview"}}])
+        calls, _ = match_grammar(normalize_text("open the glasses sync"), ST)
+        self.assertEqual(calls, [{"name": "navigate", "args": {"screen": "sync"}}])
         calls, _ = match_grammar(normalize_text("open main"), ST)
         self.assertEqual(calls, [{"name": "navigate", "args": {"screen": "main"}}])
         self.assertIsNone(match_grammar(normalize_text("open the pod bay"), ST))

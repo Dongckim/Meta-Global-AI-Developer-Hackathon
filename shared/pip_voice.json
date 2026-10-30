@@ -203,7 +203,13 @@
     "draft_page": ["Page {page}. Step {step} is highlighted.", "Step {step} is highlighted."],
     "plan_check": ["Draft ready. {conditions}, {steps}."],
     "web_searches": ["{searches}. Which one?", "No web searches yet."],
-    "web_answer": ["{answer}. Source: {domain}, searched {searched}.", "{answer_pages}. Based on pages from {domain}, searched {searched}.", "{answer_photo}. Read from photo.", "{looking}", "Searching “{query}”."]
+    "web_answer": ["{answer}. Source: {domain}, searched {searched}.", "{answer_pages}. Based on pages from {domain}, searched {searched}.", "{answer_photo}. Read from photo.", "{looking}", "Searching “{query}”."],
+    "final_protocol": ["{robot}, {changed} from the plan. Look right?", "{robot}, as planned. Look right?"],
+    "final_step": ["Step {step}: {reason}.", "Step {step} of {of}. Looks right?"],
+    "final_page": ["Page {page}. Step {step} is highlighted.", "Step {step} is highlighted."],
+    "simulate": ["{line}"],
+    "export_files": ["Here are the files. Export?"],
+    "exported": ["Exported safely. A copy stays with the run."]
   },
   "run_started": [
     "{run} started. Step 1: {step}."
@@ -226,6 +232,14 @@
   "all_steps_done": [
     "All steps done. Finish the run?"
   ],
+  "handoff_generating": ["Writing the robot code…"],
+  "handoff_simulating": ["Running it on a virtual robot…"],
+  "handoff_fixing": ["Fixing the code, try {attempt}…"],
+  "handoff_passed": ["All {of} steps match your record. Export?"],
+  "handoff_needs_you": ["It didn't pass: {error}. Write it again?"],
+  "handoff_none": ["No finished run to hand off yet."],
+  "handoff_private": ["Hand off is off in Private mode."],
+  "handoff_changed": ["The run changed since you approved it. Look again?"],
   "new_run": [
     "{run} is finished. Start a new run of {name}?"
   ],

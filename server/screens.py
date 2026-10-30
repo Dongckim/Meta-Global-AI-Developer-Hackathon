@@ -20,9 +20,6 @@ FALLBACK = {
         {"id": "well_card", "title": "Well card", "parent": "main",
          "targets": ["well"], "aliases": ["well card"],
          "commands": ["note bubbles", "exclude this well", "back"]},
-        {"id": "robot_preview", "title": "Robot preview", "parent": "main",
-         "targets": [], "aliases": ["robot preview", "robot"],
-         "commands": ["make the robot protocol", "back"]},
     ],
     "reads": [
         {"kind": "wells", "screens": ["main"], "desc": "well status"},

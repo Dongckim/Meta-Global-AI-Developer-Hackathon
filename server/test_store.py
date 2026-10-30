@@ -400,11 +400,11 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(result_of("well_card", target="C5"), "Here's C5.")
 
     def test_navigate_open_back(self):
-        r = self.apply([T("navigate", screen="robot_preview")])
-        self.assertEqual(r["messages"], ["Here's the robot preview."])  # registry result line
+        r = self.apply([T("navigate", screen="sync")])
+        self.assertEqual(r["messages"], ["Here's glasses sync."])  # registry result line
         self.assertEqual(r["ui"], [])
         self.assertEqual(self.s.r["view"]["current"],
-                         {"screen": "robot_preview", "target": ""})
+                         {"screen": "sync", "target": ""})
         r = self.apply([T("open", target="C5")])
         self.assertEqual(r["messages"], ["Opened C5."])
         self.assertEqual(self.s.r["view"]["sheet"],

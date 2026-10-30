@@ -61,6 +61,7 @@ from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
 from server.screens import (PLAIN_ANSWERS, ask_choice, button_match, button_words, buttons_for, card_choices,
                             control_call, look_call, planned_screen, start_call)
+from server import handoff
 from server import look as lookmod
 from server.screens import guide as _screen_guide
 from server.screens import READS as SCREEN_READS
@@ -87,7 +88,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 19
+API_VERSION = 20
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -177,7 +178,7 @@ PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "open", "back", "make_robot", "edit_draft", "retry_sync",
                    "skip_sync", "review_draft", "save_draft", "start_run", "discard_draft", "look", "retake_look",
                    "show_step", "open_source_page", "web_search", "open_source", "control", "pick",
-                   "resume_run"]
+                   "resume_run", "approve_handoff", "retry_handoff", "export_handoff"]
 #: Actions that aren't record writes; the coverage check counts only writes.
 VIEW_ACTIONS = frozenset(a for a in PERFORM_ACTIONS if a not in RecordStore.RUN_WRITES) \
     - {"edit_draft"} | {"read_record", "ask"}
@@ -200,7 +201,8 @@ TOOLS = [
         "next_step; end_run; show{view?,target?}; navigate{screen,target?}; "
         "open{target} (well/screen/original/importer, or \"run <as said>\" e.g. \"run 2\", "
         "\"run latest of Drug A/B\"; a well is always open{target}); "
-        "back; make_robot; "
+        "back; make_robot (a finished run's final protocol, for the robot); "
+        "approve_handoff / retry_handoff / export_handoff (the hand off screens' Looks right, Try again, Export); "
         "edit_draft{path,value} (draft_open only); review_draft; save_draft (later); "
         "start_run{target?} (the open draft, else the protocol on screen or named); discard_draft; "
         "show_step{step} / open_source_page{step?} (a draft's pipetting step, 1-based); "
@@ -338,6 +340,39 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Pip server", lifespan=lifespan)
+
+#: Hand off: Spark writes the robot code with room to think and a whole file.
+HANDOFF_EFFORT = "low"
+HANDOFF_MAX_TOKENS = 8192
+#: One hand off loop per run; a retry replaces the one still going.
+_HANDOFFS: dict[str, asyncio.Task] = {}
+
+
+async def _handoff_task(run_id: str) -> None:
+    """The approved run's robot code: Spark writes, the simulator runs, code
+    checks (server/handoff.py); progress lands on the run (store)."""
+    steps = store.handoff_steps(run_id)
+    if not steps:
+        return
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        async def call(body: dict) -> dict:
+            return await _spark_json(client, "handoff", {
+                "model": SPARK_MODEL, "reasoning": {"effort": HANDOFF_EFFORT},
+                "max_output_tokens": HANDOFF_MAX_TOKENS, **body})
+
+        out = await handoff.run_loop(call, steps, lambda code: asyncio.to_thread(handoff.simulate, code),
+                                     lambda stage, **st: store.handoff_stage(run_id, stage, **st))
+    print(f"handoff {run_id}: {out['stage']} after {out['attempt']} simulation(s)", flush=True)
+
+
+def _spawn_handoff(run_id: str) -> None:
+    old = _HANDOFFS.get(run_id)
+    if old and not old.done():
+        old.cancel()
+    _HANDOFFS[run_id] = asyncio.get_running_loop().create_task(_handoff_task(run_id))
+
+
+store.spawn_handoff = _spawn_handoff
 
 
 class OrchestrateIn(BaseModel):
@@ -853,14 +888,14 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         res = store.apply_calls(calls, source, text, "grammar", session)
         reply = _compose_reply(calls, res, store.prompt_state(session), session)
         return calls, res["messages"], reply, 0, "grammar", res["cards"], res["info"], []
-    if planned_screen(text):
-        # a registry screen that isn't built yet: say so, no model call
-        return [], [], say("not_ready", session), 0, "grammar", [], {"dropped": 0, "drop_reasons": []}, []
-    parts = request_parts(text, WRITE_ACTIONS)
     v = store.r["view"]
     shown = [x for x in ((v.get("sheet") or {}).get("name"), v["current"]["screen"]) if x]
     vslots = store.view_slots(v["current"]["screen"], v["current"].get("target") or "")
     b, which = button_match(text, shown, vslots)
+    if b is None and not which and planned_screen(text):
+        # a registry screen that isn't built yet (a button on screen comes first): say so, no model call
+        return [], [], say("not_ready", session), 0, "grammar", [], {"dropped": 0, "drop_reasons": []}, []
+    parts = request_parts(text, WRITE_ACTIONS)
     b = b or (None if which else control_call(text, v["current"]["screen"],
                                               store.screen_items.get(v["current"]["screen"])) or start_call(text)
                              or look_call(text))
@@ -1077,7 +1112,7 @@ def _merge_round(res: dict, res2: dict):
     res["info"]["dropped"] += res2["info"]["dropped"]
     res["info"]["drop_reasons"] += res2["info"]["drop_reasons"]
     res.setdefault("told", []).extend(res2.get("told") or [])
-    for k in ("saved_memo", "edited", "robot", "setup_done", "sync_retry"):
+    for k in ("saved_memo", "edited", "setup_done", "sync_retry"):
         if res2["info"].get(k):
             res["info"][k] = res2["info"][k]
 
@@ -1395,7 +1430,7 @@ def _utterance_response(calls, messages, reply, ms, route, cards, info, sources,
         "record_version": version,
         "sources": sources,
     }
-    for k in ("saved_memo", "edited", "robot", "ui", "setup_done",
+    for k in ("saved_memo", "edited", "ui", "setup_done",
                 "sync_retry"):
         if info.get(k):
             out[k] = info[k]
@@ -2229,8 +2264,3 @@ async def events():
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
-@app.post("/robot")
-async def robot():
-    from server.robot import run_pipeline
-
-    return run_pipeline(store)

@@ -37,6 +37,7 @@ from server import labels
 from server import runs as runlog
 from server import look as lookmod
 from server import search as searchmod
+from server import handoff as hand
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 RECORD_PATH = DATA_DIR / "record.json"
@@ -196,6 +197,8 @@ class RecordStore:
         self._lock = threading.Lock()
         #: App-side lists on screen now (import_file's files, import_photo's pages).
         self.screen_items: dict[str, list[dict]] = {}
+        #: Starts a run's hand off loop (api sets it; None in plain store tests).
+        self.spawn_handoff = None
         self._load_or_seed()
 
     # --- persistence / broadcast ---
@@ -254,6 +257,7 @@ class RecordStore:
             "notes": [],
             "tips": [],
             "timers": [],
+            "timer_log": [],
             "stamps": {},
             "recent": [],
             "cards": {},
@@ -321,6 +325,9 @@ class RecordStore:
         t = target.strip() if isinstance(target, str) else ""
         if screen == "run_view":
             self._open_run(res, session, t or "latest")
+            return
+        if screen in self.HANDOFF_SCREENS:
+            self._open_handoff(res, session, t.split(":", 1)[0], screen)
             return
         if screen == "well_card" and is_well(t):
             self._open_well(res, t)  # the same well card open{target} shows
@@ -447,6 +454,8 @@ class RecordStore:
                 out["searched"] = lab["searched"]
             if out["sources"] > 1:
                 out["second"] = "2"
+        elif screen in self.HANDOFF_SCREENS:
+            out = self._handoff_slots(screen, target)
         elif screen in self.DRAFT_SCREENS and (draft := self.r.get("draft")):
             d = proto.draft_rows(draft)
             rows = d["rows"]
@@ -616,6 +625,9 @@ class RecordStore:
         run = self.r.get("run")
         if not run:
             return None
+        if status == "finished":
+            self._log_timers(self.r["timers"], time.time())
+            self.r["timers"] = []
         doc = {"run_id": run.get("run_id"), "protocol_id": run.get("protocol_id"),
                "protocol_name": run.get("protocol_name"), "protocol_version": run.get("protocol_version") or 1,
                "started_at": run.get("started_at"), "ended_at": time.time(),
@@ -910,6 +922,7 @@ class RecordStore:
             i = t.get("step_index")
             t["chip"] = labels.step_short_title(steps[i]) if isinstance(i, int) and 0 <= i < len(steps) \
                 else labels.shorten_title(t.get("step") or t.get("label") or "")
+        snap["handoff"] = self.handoff_view(self._handoff_here()) if self._handoff_here() else None
         snap["bench"] = self.bench_view(self.r)
         snap["header"] = {"mode": self.header_mode(cur.get("screen") or ("main" if snap.get("run") else "home"))}
         if snap.get("run"):  # what the app shows instead of the run id
@@ -1305,7 +1318,7 @@ class RecordStore:
 
     RUN_WRITES = frozenset({"mark_done", "exclude_well", "record_redo", "add_note",
                                 "edit_note", "save_tip", "set_timer", "cancel_timer",
-                                "extend_timer", "next_step", "make_robot", "end_run"})
+                                "extend_timer", "next_step", "end_run"})
 
     def _apply_call(self, call, source, origin, route, session, res, force: bool,
                     evidence=None):
@@ -1678,9 +1691,9 @@ class RecordStore:
             res["messages"].append("Already on the main screen." if here == "main"
                                    else f"Already on {title_of(here)}.")
         elif name == "make_robot":
-            res["messages"].append("Building robot protocol…")
-            res["info"]["robot"] = True
-            self._push_view("robot_preview")
+            self._open_handoff(res, session, str(args.get("target") or ""))
+        elif name in self.HANDOFF_ACTIONS:
+            self._handoff_action(name, args, session, res)
         elif name == "read_record":
             if args.get("kind") not in self.READ_KINDS:
                 res["messages"].append("I couldn't read that: unknown section.")
@@ -1719,6 +1732,8 @@ class RecordStore:
             self._retake_look(res, session)
         elif name == "resume_run":
             self._resume_locked(str(args.get("target") or ""), session, res)
+        elif name in ("show_step", "open_source_page") and self._handoff_here():
+            self._final_step(name, args, session, res)
         elif name in self.DRAFT_ACTIONS:
             self._draft_action(name, args, session, res)
         else:
@@ -1996,6 +2011,174 @@ class RecordStore:
             self._push_view(screen, str(int(n)))
             res["messages"].append(self.screen_line(screen, str(int(n))))
 
+    # --- hand off: a finished run -> approved as-run protocol -> robot code (docs/design/handoff.md) ---
+
+    HANDOFF_SCREENS = ("final_protocol", "final_step", "final_page", "simulate", "export_files", "exported")
+    HANDOFF_ACTIONS = ("approve_handoff", "retry_handoff", "export_handoff")
+    #: Screens that need an approval that still matches the run record.
+    _HANDOFF_APPROVED = ("simulate", "export_files", "exported")
+
+    def _handoff_here(self) -> str:
+        """The run a hand off screen shows ("" elsewhere)."""
+        v = self.r["view"]["current"]
+        return (v.get("target") or "").split(":", 1)[0] if v.get("screen") in self.HANDOFF_SCREENS else ""
+
+    def _handoff_doc(self, run_id: str) -> dict | None:
+        doc = runlog.get(run_id, self.root) if run_id else None
+        return doc if doc and doc.get("status") == "finished" else None
+
+    def _handoff_ok(self, doc: dict) -> bool:
+        """The approval still matches the run record."""
+        a = (doc.get("handoff") or {}).get("approved")
+        return bool(a) and a.get("hash") == hand.record_hash(doc.get("record") or {})
+
+    def _open_handoff(self, res: dict, session: dict | None, selector: str, screen: str = "final_protocol") -> None:
+        """A finished run's hand off screen: this run (on screen or named),
+        else the latest finished one. Private runs have none; a screen past
+        ⑨0 needs a live approval, and ⑨b/⑨d a passed simulation."""
+        run_id = selector or self._handoff_here() or (self._viewing_run() or {}).get("run_id") or ""
+        doc = self._handoff_doc(run_id) if run_id else next(
+            (d for d in self.all_run_docs() if d.get("status") == "finished"), None)
+        if doc is None:
+            res["messages"].append(say("handoff_none", session))
+            return
+        if ((doc.get("record") or {}).get("run") or {}).get("mode") == "private":
+            res["messages"].append(say("handoff_private", session))
+            return
+        h = doc.get("handoff") or {}
+        if screen in self._HANDOFF_APPROVED and not self._handoff_ok(doc):
+            if h.get("approved"):
+                res["messages"].append(say("handoff_changed", session))
+            screen = "final_protocol"
+        elif screen in ("export_files", "exported") and h.get("stage") != "passed":
+            screen = "simulate"
+        if screen in ("final_step", "final_page"):
+            screen = "final_protocol"  # a step opens by its number (show_step)
+        self._push_view(screen, doc["run_id"])
+        res["messages"].append(self.screen_line(screen, doc["run_id"]))
+
+    def _final_step(self, name: str, args: dict, session: dict, res: dict) -> None:
+        """Step n of the final protocol, or its original page (the review's words)."""
+        run_id = self._handoff_here()
+        doc = self._handoff_doc(run_id)
+        rows = hand.changes(doc["record"])["rows"] if doc else []
+        v = self.r["view"]["current"]
+        here = v.get("target", "").partition(":")[2] if v.get("screen") in ("final_step", "final_page") else ""
+        n = _num(args.get("step")) or _num(here) or next((r["n"] for r in rows if r["flagged"]), 1)
+        if not rows or not 1 <= int(n) <= len(rows):
+            res["messages"].append(f"There's no step {int(n)} to check." if rows else "This run has no robot steps.")
+            return
+        screen = "final_step" if name == "show_step" else "final_page"
+        self._push_view(screen, f"{run_id}:{int(n)}")
+        res["messages"].append(self.screen_line(screen, f"{run_id}:{int(n)}"))
+
+    def _handoff_action(self, name: str, args: dict, session: dict, res: dict) -> None:
+        run_id = self._handoff_here()
+        doc = self._handoff_doc(run_id)
+        if doc is None:
+            res["messages"].append(say("handoff_none", session))
+            return
+        h = doc.setdefault("handoff", {})
+        if name == "approve_handoff":
+            steps = hand.as_run(doc["record"])
+            why = hand.blockers(steps) or ([] if steps else ["No robot steps were done in this run."])
+            if why:
+                res["messages"].append(why[0])
+                return
+            doc["handoff"] = {"approved": {"hash": hand.record_hash(doc["record"]), "ts": time.time(),
+                                           "steps": steps}, "stage": "generating", "attempt": 0}
+            runlog.write_run(doc, self.root)
+            self._push_view("simulate", run_id)
+            res["messages"].append(self.screen_line("simulate", run_id))
+            if self.spawn_handoff:
+                self.spawn_handoff(run_id)
+        elif name == "retry_handoff":
+            if not self._handoff_ok(doc):
+                self._open_handoff(res, session, run_id)
+                return
+            doc["handoff"] = {"approved": h["approved"], "stage": "generating", "attempt": 0}
+            runlog.write_run(doc, self.root)
+            res["messages"].append(self.screen_line("simulate", run_id))
+            if self.spawn_handoff:
+                self.spawn_handoff(run_id)
+        elif name == "export_handoff":
+            if not self._handoff_ok(doc) or h.get("stage") != "passed":
+                self._open_handoff(res, session, run_id, "export_files")
+                return
+            out = self.root / "exports" / run_id
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "protocol.py").write_text(h.get("code") or "")
+            (out / "plate_map.csv").write_text(h.get("csv") or "")
+            h["exported"] = time.time()
+            runlog.write_run(doc, self.root)
+            self._push_view("exported", run_id)
+            res["messages"].append(self.screen_line("exported", run_id))
+
+    def handoff_steps(self, run_id: str) -> list[dict] | None:
+        """The approved steps the loop writes code for (None: not approved now)."""
+        with self._lock:
+            doc = self._handoff_doc(run_id)
+            return doc["handoff"]["approved"]["steps"] if doc and self._handoff_ok(doc) else None
+
+    def handoff_stage(self, run_id: str, stage: str, **state) -> None:
+        """The loop's progress, kept on the run and shown (snapshot handoff)."""
+        with self._lock:
+            doc = self._handoff_doc(run_id)
+            if doc is None or not self._handoff_ok(doc):
+                return
+            h = doc["handoff"]
+            h.update({"stage": stage, **{k: v for k, v in state.items() if k in ("code", "check", "error", "attempt")}})
+            if stage == "passed":
+                h["csv"] = hand.plate_csv(doc["record"])
+            runlog.write_run(doc, self.root)
+            self._commit()
+
+    def handoff_view(self, run_id: str) -> dict | None:
+        """What the hand off screens draw (snapshot `handoff`)."""
+        doc = self._handoff_doc(run_id)
+        if doc is None:
+            return None
+        rec = doc.get("record") or {}
+        h = doc.get("handoff") or {}
+        p = lib.get(doc.get("protocol_id"), self.root) or {}
+        ok = self._handoff_ok(doc)
+        return {"run_id": doc["run_id"], "label": self.run_label(doc)["display"],
+                "summary": hand.changes(rec), "approved": ok,
+                "stage": h.get("stage") if ok else None, "attempt": h.get("attempt") or 0,
+                "error": h.get("error") or "", "check": h.get("check"),
+                "code": (h.get("code") or "") if ok else "", "csv": (h.get("csv") or "") if ok else "",
+                "exported": h.get("exported") if ok else None,
+                "meta": {"source": p.get("source_filename") or p.get("name") or "", "layout": {},
+                         "origin": p.get("origin"), "original_id": p.get("original_id"),
+                         "evidence": {"text": p.get("source_text") or ""}}}
+
+    def _handoff_slots(self, screen: str, target: str) -> dict:
+        def n_of(k, word):
+            return f"{k} {word}{'' if k == 1 else 's'}"
+        run_id, _, step = (target or "").partition(":")
+        v = self.handoff_view(run_id)
+        if v is None:
+            return {}
+        d = v["summary"]
+        rows = d["rows"]
+        out: dict = {"run": run_id, "of": len(rows),
+                     "robot": n_of(len(rows), "robot step") if len(rows) == d["of"]
+                     else f"{len(rows)} of {d['of']} robot steps",
+                     "changed": n_of(d["changed"], "change") if d["changed"] else "",
+                     "doc": {"pdf": "PDF", "photo": "photo"}.get(v["meta"]["origin"] or "pdf", "text")}
+        row = rows[int(step) - 1] if step.isdigit() and 0 < int(step) <= len(rows) else None
+        if row:
+            out.update({"step": row["n"], "reason": row["reason"], "page": row["page"]})
+        elif flagged := next((r for r in rows if r["flagged"]), None):
+            out["step"] = flagged["n"]
+        if screen == "simulate":
+            stage = v["stage"] or "generating"
+            chk = v["check"] or {}
+            matched = sum(1 for s in chk.get("steps") or [] if s["ok"])
+            out.update({"stage": stage, "line": say(f"handoff_{stage}", None, attempt=v["attempt"] + 1,
+                                                    matched=matched, of=len(rows), error=v["error"])})
+        return out
+
     def _fix_first(self, info) -> str:
         n = len((info or {}).get("errors") or []) if isinstance(info, dict) else 0
         return f"Fix {n} red item{'s' if n != 1 else ''} first." if n else "No draft open."
@@ -2042,7 +2225,7 @@ class RecordStore:
         self.r["timers"].append({
             "id": uuid.uuid4().hex[:8], "label": label, "minutes": minutes, "on_done": on_done,
             "started_at": now, "step": step, "wells": frozen, "warned": False, "notified": False,
-            "step_index": self.r["step_index"],
+            "step_index": self.r["step_index"], "planned": minutes,
         })
         if wells:
             self._tell(res, "timer_start", session, list(wells), minutes=fmt_minutes(minutes))
@@ -2054,7 +2237,20 @@ class RecordStore:
             res["ui"].append({"action": "flash", "wells": list(wells)})
 
     def _purge(self, now: float):
-        self.r["timers"] = [t for t in self.r["timers"] if now - t["started_at"] < t["minutes"] * 60 + 60]
+        gone = [t for t in self.r["timers"] if now - t["started_at"] >= t["minutes"] * 60 + 60]
+        self._log_timers(gone, now)
+        self.r["timers"] = [t for t in self.r["timers"] if t not in gone]
+
+    def _log_timers(self, timers: list[dict], now: float) -> None:
+        """Timers leave `timers`; their actual minutes stay (timer_log, hand off)."""
+        for t in timers:
+            over = is_over(t, now)
+            self.r.setdefault("timer_log", []).append({
+                "step_index": t.get("step_index"), "label": t.get("label"),
+                "planned": t.get("planned", t.get("minutes")),
+                "minutes": t["minutes"] if over else round((now - t["started_at"]) / 60, 1),
+                "started_at": t["started_at"], "ended_at": now,
+                "status": "done" if over else "cancelled"})
 
     def _running_list(self) -> str:
         return ", ".join(t["label"] for t in self.r["timers"])
@@ -2086,6 +2282,7 @@ class RecordStore:
             return
         t = self.r["timers"][hits[0]]
         gone = {self.r["timers"][i]["label"] for i in hits}
+        self._log_timers([t for t in self.r["timers"] if t["label"] in gone], now)
         self.r["timers"] = [t for t in self.r["timers"] if t["label"] not in gone]
         res["messages"].append(say("timer_cancel", session, wells=t["wells"]))
 
@@ -2210,8 +2407,11 @@ class RecordStore:
                 res["messages"].append("No active run.")
             else:
                 name = (self.r.get("run") or {}).get("protocol_name") or "run"
-                self._finish_locked("finished")
+                mode = (self.r.get("run") or {}).get("mode")
+                doc = self._finish_locked("finished")
                 res["messages"].append(f"Run finished: {name}.")
+                if doc and mode != "private":  # hand off: the run as it went, for the robot
+                    self._open_handoff(res, session, doc["run_id"])
         else:
             res["messages"].append("That card is gone.")
         self._commit()

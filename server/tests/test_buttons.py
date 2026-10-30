@@ -25,6 +25,8 @@ def noid(ui):
 
 from server import protocol as proto  # noqa: E402
 from server.screens import fill_button  # noqa: E402
+from server import handoff  # noqa: E402
+from server import runs as runlog  # noqa: E402
 
 everything = [(sid, b) for sid, s in SCREENS.items() for b in s.get("buttons", [])]
 # tap_only: iOS system pickers we can't drive by voice ("Browse files…"); the
@@ -82,6 +84,13 @@ def fresh(sid: str, b: dict | None = None) -> RecordStore:
                        "target": "label", "answer_short": "DMSO", "detail": "", "status": "ok", "basis": "photo",
                        "attempt": 1, "run_id": None, "ms": 0, "sources": []})
         target = "s4"
+    if sid in RecordStore.HANDOFF_SCREENS:
+        # a finished run's hand off, approved, at the stage the button shows in
+        target = finished + (":1" if sid in ("final_step", "final_page") else "")
+        doc = runlog.get(finished, st.root)
+        doc["handoff"] = {"approved": {"hash": handoff.record_hash(doc["record"]), "ts": 1, "steps": []},
+                          "stage": ((b or {}).get("when") or {}).get("stage") or "passed", "attempt": 1}
+        runlog.write_run(doc, st.root)
     if sid == "protocol_detail":
         target = st.r["run"]["protocol_id"]  # the protocol of the run going (Continue shows there)
     if sid == "run_view":

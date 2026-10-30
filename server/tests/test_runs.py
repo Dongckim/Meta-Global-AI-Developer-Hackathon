@@ -243,8 +243,9 @@ with patch("httpx.AsyncClient", FakeClient):
     assert [x["kind"] for x in j["cards"]] == ["end_run"], j
     j = c.post("/confirm", json={"card_id": j["cards"][0]["id"], "ok": True,
                                  "session": "run6"}).json()
-    assert j["message"] == "Run finished: Demo protocol.", j
+    assert j["message"].startswith("Run finished: Demo protocol. "), j  # then ⑨0's line
     assert api.store.r.get("run") is None
+    assert api.store.r["view"]["current"] == {"screen": "final_protocol", "target": run2}, j
     j = c.get(f"/runs/{run2}").json()
     assert j["run"]["status"] == "finished", j
     assert time.time() - 120 < j["run"]["ended_at"] <= time.time() + 1, j["run"]
