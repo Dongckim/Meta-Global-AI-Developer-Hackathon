@@ -25,8 +25,18 @@ from starlette.background import BackgroundTask
 REPO = "unsloth/Muse-Glimmer-30B-GGUF"
 MODEL_FILE = "Muse-Glimmer-30B-UD-Q4_K_XL.gguf"
 MMPROJ_FILE = "mmproj-kquant.gguf"
+DRAFT_FILE = "dflash-kquant.gguf"
 WEIGHTS = "/weights"
-GPU = "A10"
+#: Read when deploying: GLIMMER_GPU=<key> modal deploy ... (a typo fails here).
+GPUS = {"L40S": "L40S", "H100": "H100", "A100_80": "A100-80GB", "A10": "A10"}
+GPU = GPUS[os.environ.get("GLIMMER_GPU", "L40S")]
+#: GLIMMER_KEEP_WARM=1 keeps one container on: no cold start, billed all day.
+MIN_CONTAINERS = 1 if os.environ.get("GLIMMER_KEEP_WARM") == "1" else 0
+TUNING = [
+    "--reasoning-effort", "low", "--reasoning-budget", "0",
+    "--model-draft", f"{WEIGHTS}/{DRAFT_FILE}", "--spec-type", "draft-dflash",
+    "--spec-draft-n-max", "15", "-fa", "on",
+]
 #: Live session window is 60 s (pip_voice.json): idle shorter than that would
 #: put the model to sleep in the middle of a conversation.
 SCALEDOWN_S = 120
@@ -150,13 +160,13 @@ def make_guard(transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
 def download():
     from huggingface_hub import hf_hub_download
 
-    for name in (MODEL_FILE, MMPROJ_FILE):
+    for name in (MODEL_FILE, MMPROJ_FILE, DRAFT_FILE):
         print(hf_hub_download(REPO, name, local_dir=WEIGHTS), flush=True)
     volume.commit()
 
 
-@app.cls(image=image, gpu=GPU, volumes={WEIGHTS: volume}, max_containers=1,
-         scaledown_window=SCALEDOWN_S, startup_timeout=900, timeout=600)
+@app.cls(image=image, gpu=GPU, volumes={WEIGHTS: volume}, min_containers=MIN_CONTAINERS,
+         max_containers=1, scaledown_window=SCALEDOWN_S, startup_timeout=900, timeout=600)
 @modal.concurrent(max_inputs=8)
 class Glimmer:
     @modal.enter()
@@ -166,7 +176,7 @@ class Glimmer:
             "/app/llama-server", "--host", "127.0.0.1", "--port", str(PORT),
             "--model", f"{WEIGHTS}/{MODEL_FILE}", "--mmproj", f"{WEIGHTS}/{MMPROJ_FILE}",
             "--jinja", "--n-gpu-layers", "99", "--ctx-size", str(CTX_SIZE),
-            "--parallel", "1", "--no-webui", "--reasoning-effort", "low",
+            "--parallel", "1", "--no-webui", *TUNING,
             "--temp", "1.0", "--top-p", "0.95", "--top-k", "64",  # model card
         ], env=os.environ | {"LD_LIBRARY_PATH": "/app"})
         while True:
