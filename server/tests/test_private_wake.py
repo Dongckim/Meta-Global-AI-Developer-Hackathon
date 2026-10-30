@@ -17,7 +17,8 @@ from server.store import RecordStore  # noqa: E402
 from server.tone import section  # noqa: E402
 
 LINES = section("private")["lines"]
-SIZES = {glimmer_modal.MODEL_FILE: 15_878_222_368, glimmer_modal.MMPROJ_FILE: 1_400_328_928, "other.gguf": 9_000_000_000}
+SIZES = {glimmer_modal.MODEL_FILE: 19_654_000_000, glimmer_modal.MMPROJ_FILE: 1_400_000_000,
+         glimmer_modal.DRAFT_FILE: 1_630_000_000, "other.gguf": 9_000_000_000}
 
 
 def fresh():
@@ -70,13 +71,13 @@ real_stage = api._stage
 api._stage = lambda session, stage, **d: stages.append((stage, d.get("say")))
 
 # the schedule and the names are the deployed ones
-assert (glimmer_modal.MODEL_FILE, glimmer_modal.MMPROJ_FILE) == tuple(section("private")["files"])
+assert (glimmer_modal.MODEL_FILE, glimmer_modal.MMPROJ_FILE, glimmer_modal.DRAFT_FILE) == tuple(section("private")["files"])
 assert glimmer_modal.REPO == section("private")["repo"]
 assert api.WAKE_TIMEOUT_S == 60
 assert [x["at"] for x in LINES] == [0, 5, 10, 16, 22, 28, 40]
 
 # file size: weights + mmproj only, from the bytes
-assert pw.weights_gb(SIZES, section("private")["files"]) == 17
+assert pw.weights_gb(SIZES, section("private")["files"]) == 23
 
 # line times
 w = [(t, pw.line_at(t, 17)) for t in (0, 4.9, 5, 9.9, 10, 16, 22, 28, 39, 40, 59)]

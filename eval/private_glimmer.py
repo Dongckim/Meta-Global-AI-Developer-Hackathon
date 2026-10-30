@@ -6,6 +6,7 @@ Run from repo root (needs PRIVATE_LLM_URL and MODEL_API_KEY in .env):
     .venv/bin/python eval/private_glimmer.py cold [n]
     .venv/bin/python eval/private_glimmer.py turns
     .venv/bin/python eval/private_glimmer.py effort none
+    .venv/bin/python eval/private_glimmer.py rounds
     .venv/bin/python eval/private_glimmer.py label
     .venv/bin/python eval/private_glimmer.py guard
 Appends to eval/results/private_glimmer.md.
@@ -42,6 +43,12 @@ TURNS = [
     ("start the timer for C5, five minutes", "perform", "set_timer"),
     ("what is on C6", "read_record", None),
     ("how many wells have I finished", "read_record", None),
+]
+#: (said, what the read returned): a read and the answer built on it.
+READS = [
+    ("what is on C6", "C6: Drug A 10 mM, pending, no notes."),
+    ("how many wells have I finished", "0 of 7 wells done on this step."),
+    ("is C3 done", "C3: Drug A 10 mM, pending, no notes."),
 ]
 LABEL = ("Drug A", "10 mM", "4471", "2027-03")
 LABEL_ASK = "Read this tube label. Give the reagent, concentration, lot and expiry."
@@ -218,6 +225,31 @@ def effort(value: str) -> None:
     summary(value, rows)
 
 
+def rounds() -> None:
+    """Read, then the answer built on it: _lookup_round's replay as chat."""
+    log(f"\n## Two rounds ({time.strftime('%F %T')}), ms\n")
+    log("| turn | round 1 | round 2 | turn total | answer |\n|---|---|---|---|---|")
+    system = bench_system()
+    totals = []
+    with httpx.Client(timeout=200) as c:
+        for said, read in READS * 2:
+            one = stream_glimmer(c, glimmer_body(system, said, None))
+            if one.get("error") or not one["calls"]:
+                log(f"| {said} | {one.get('error') or 'no tool call'} | | | |")
+                continue
+            calls = [{"id": f"c{i}", "type": "function", "function": x} for i, x in enumerate(one["calls"])]
+            body = glimmer_body(system, said, None)
+            body["messages"] += [{"role": "assistant", "content": "", "tool_calls": calls}]
+            body["messages"] += [{"role": "tool", "tool_call_id": x["id"], "content": read} for x in calls]
+            body["messages"] += [{"role": "user", "content": api.CONTINUE_TEXT}]
+            two = stream_glimmer(c, body)
+            totals.append(one["ms"] + two["ms"])
+            log(f"| {said} | {one['ms']} | {two['ms']} | {totals[-1]} | "
+                f"{(two.get('error') or two.get('text') or '')[:60]!r} |")
+    if totals:
+        log(f"\nmedian turn total {int(statistics.median(totals))} ms, {len(totals)}/{len(READS) * 2} answered")
+
+
 def cold(n: int) -> None:
     """Time from a sleeping container to the first byte, redirects not followed."""
     log(f"\n## Cold start ({time.strftime('%F %T')}), limit {WEB_LIMIT_S}s\n")
@@ -281,5 +313,6 @@ def guard() -> None:
 
 
 {"cold": lambda: cold(int(sys.argv[2]) if len(sys.argv) > 2 else 3),
+ "rounds": rounds,
  "turns": turns, "label": label, "guard": guard,
  "effort": lambda: effort(sys.argv[2])}[sys.argv[1]]()

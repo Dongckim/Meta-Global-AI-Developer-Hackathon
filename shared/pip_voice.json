@@ -293,8 +293,8 @@
   ],
   "private": {
     "_note": "Waking Private's model (server/private_wake.py). lines: `at` seconds after the wake-up starts; {gb} is the model's real size.",
-    "repo": "unsloth/Muse-Glimmer-30B-GGUF",
-    "files": ["Muse-Glimmer-30B-UD-Q4_K_XL.gguf", "mmproj-kquant.gguf"],
+    "repo": "meta-models/Muse-Glimmer-30B-GGUF",
+    "files": ["Muse-Glimmer-30B-KQuant-Dynamic-Q4_K_XL.gguf", "mmproj-Muse-Glimmer-30B-Q4_K_M.gguf", "dflash-Muse-Glimmer-30B-Q4_K_M.gguf"],
     "wake_timeout_s": 60,
     "ready_ttl_s": 100,
     "speak_after_s": 1.5,

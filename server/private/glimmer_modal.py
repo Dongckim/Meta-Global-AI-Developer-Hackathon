@@ -22,10 +22,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
-REPO = "unsloth/Muse-Glimmer-30B-GGUF"
-MODEL_FILE = "Muse-Glimmer-30B-UD-Q4_K_XL.gguf"
-MMPROJ_FILE = "mmproj-kquant.gguf"
-DRAFT_FILE = "dflash-kquant.gguf"
+REPO = "meta-models/Muse-Glimmer-30B-GGUF"
+REVISION = "b44f1072cf75e918a1b82a3a17b45c4389b076e7"
+MODEL_FILE = "Muse-Glimmer-30B-KQuant-Dynamic-Q4_K_XL.gguf"
+MMPROJ_FILE = "mmproj-Muse-Glimmer-30B-Q4_K_M.gguf"
+DRAFT_FILE = "dflash-Muse-Glimmer-30B-Q4_K_M.gguf"
 WEIGHTS = "/weights"
 #: Read when deploying: GLIMMER_GPU=<key> modal deploy ... (a typo fails here).
 GPUS = {"L40S": "L40S", "H100": "H100", "A100_80": "A100-80GB", "A10": "A10"}
@@ -34,7 +35,7 @@ GPU = GPUS[os.environ.get("GLIMMER_GPU", "L40S")]
 MIN_CONTAINERS = 1 if os.environ.get("GLIMMER_KEEP_WARM") == "1" else 0
 TUNING = [
     "--reasoning-effort", "low", "--reasoning-budget", "0",
-    "--model-draft", f"{WEIGHTS}/{DRAFT_FILE}", "--spec-type", "draft-dflash",
+    "--model-draft", f"{WEIGHTS}/{DRAFT_FILE}", "-ngld", "99", "--spec-type", "draft-dflash",
     "--spec-draft-n-max", "15", "-fa", "on",
 ]
 #: Live session window is 60 s (pip_voice.json): idle shorter than that would
@@ -161,7 +162,7 @@ def download():
     from huggingface_hub import hf_hub_download
 
     for name in (MODEL_FILE, MMPROJ_FILE, DRAFT_FILE):
-        print(hf_hub_download(REPO, name, local_dir=WEIGHTS), flush=True)
+        print(hf_hub_download(REPO, name, revision=REVISION, local_dir=WEIGHTS), flush=True)
     volume.commit()
 
 
