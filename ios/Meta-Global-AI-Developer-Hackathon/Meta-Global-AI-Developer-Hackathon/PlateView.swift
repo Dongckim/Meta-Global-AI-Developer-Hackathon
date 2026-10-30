@@ -108,25 +108,27 @@ struct WellDot: View {
     let onTap: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduce
 
-    private var excluded: Bool { lab.excluded[well] != nil }
-    private var done: Bool { lab.done.contains(well) }
-    private var doneEarlier: Bool { lab.doneEarlier.contains(well) }
+    /// The server's state for this well (snapshot bench.wells): done,
+    /// now, excluded, or nothing. Nothing is worked out per step here.
+    private var state: String? { lab.bench?.wells[well] }
+    private var excluded: Bool { state == "excluded" }
     private var redo: Bool { lab.redo[well] != nil }
     private var noted: Bool { lab.hasNote(well) }
-    private var current: Bool { lab.currentPlanned.contains(well) }
     private var lit: Bool { lab.flashing.contains(well) }
     private var tone: Color { lab.groupIndex(lab.conditionOf(well)).map(Theme.groupTone) ?? Theme.text1 }
 
-    /// Step record states: this step's done wells filled in their group
-    /// tone, its remaining targets white with a blue ring, earlier steps'
-    /// done wells dimmed, excluded wells empty with a cross.
-    private var filled: Bool { !excluded && (done || (!current && doneEarlier)) }
-    private var now: Bool { current && !done && !excluded }
+    /// Done wells (this step or earlier) filled in their group tone, this
+    /// step's remaining targets white with a blue ring, excluded wells
+    /// empty with a cross (design ① Main).
+    private var filled: Bool { state == "done" }
+    private var now: Bool { state == "now" }
+    /// Passed over unmarked (Skip them): an empty well with a faint dashed ring.
+    private var skipped: Bool { state == "skipped" }
     /// A condition's well not yet done or due (plan check): a group-tone ring.
     private var planned: Bool { showPlanned && !filled && !now && !excluded && lab.conditionOf(well) != nil }
 
     private var fill: Color {
-        if filled { return done ? tone : tone.opacity(0.45) }
+        if filled { return tone }
         return now || planned ? Theme.card : Theme.wellEmpty
     }
 
@@ -144,6 +146,12 @@ struct WellDot: View {
                 .fill(fill.shadow(.inner(color: .black.opacity(filled || now || planned ? 0 : 0.07), radius: 1, y: 1)))
                 .frame(width: d, height: d)
                 .overlay(Circle().strokeBorder(edge.0, lineWidth: edge.1))
+                .overlay {
+                    if skipped {
+                        Circle().strokeBorder(Theme.text4, style: StrokeStyle(lineWidth: d * 2 / 48,
+                                                                             dash: [d * 4 / 48, d * 4 / 48]))
+                    }
+                }
                 .overlay {
                     if excluded {
                         Image(systemName: "xmark").font(Theme.ui(d * 0.36, weight: .medium))
@@ -173,8 +181,8 @@ struct WellDot: View {
                     }
                 }
                 // justIn: a well just done pops (.6 -> 1.12 -> 1)
-                .keyframeAnimator(initialValue: 1.0, trigger: done) { view, k in
-                    view.scaleEffect(reduce || !done ? 1 : k)
+                .keyframeAnimator(initialValue: 1.0, trigger: filled) { view, k in
+                    view.scaleEffect(reduce || !filled ? 1 : k)
                 } keyframes: { _ in
                     KeyframeTrack {
                         CubicKeyframe(M.wellInScale, duration: 0.001)
@@ -187,7 +195,7 @@ struct WellDot: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(well)
-        .animation(.easeInOut(duration: 0.3), value: "\(excluded)\(done)\(doneEarlier)\(redo)\(noted)\(lit)\(current)")
+        .animation(.easeInOut(duration: 0.3), value: "\(state ?? "")\(redo)\(noted)\(lit)")
     }
 }
 
@@ -202,14 +210,14 @@ struct ConditionBars: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(lab.conditionProgress(), id: \.key) { g in
+            // design ① legend: each condition and its wells on the plate ("n 7"), from the server
+            ForEach(lab.bench?.legend ?? [], id: \.key) { g in
                 HStack(spacing: 12 * u) {
                     Circle().fill(lab.groupIndex(g.key).map(Theme.groupTone) ?? Theme.text1)
                         .frame(width: 12 * u, height: 12 * u)
                     Text(g.label).font(Theme.ui(28 * u)).foregroundStyle(Theme.text1)
                     (Text("n ").foregroundStyle(Theme.text2)
-                     + Text("\(g.have)").fontWeight(.semibold).foregroundStyle(Theme.text1)
-                     + Text(g.have < g.need ? "/\(g.need)" : "").foregroundStyle(Theme.text2))
+                     + Text("\(g.n)").font(Theme.ui(34 * u, weight: .semibold)).foregroundStyle(Theme.text1))
                         .font(Theme.ui(34 * u)).tracking(-0.68 * u)
                 }
                 .lineLimit(1).minimumScaleFactor(0.6)
@@ -299,6 +307,8 @@ struct TimerList: View {
             let vis = lab.visibleTimers(now: ctx.date)
                 .sorted { left($0, ctx.date) < left($1, ctx.date) }
             VStack(alignment: .leading, spacing: 5 * u) {
+                // the last steps passed stay as Done rows (server bench.rows), then timers and what's next
+                ForEach(Array((lab.bench?.rows ?? []).enumerated()), id: \.offset) { _, r in doneRow(r) }
                 ForEach(vis.prefix(maxRows)) { t in row(t, now: ctx.date) }
                 if vis.count > maxRows {
                     Text("+\(vis.count - maxRows)").font(Theme.ui(22 * u, weight: .medium))
@@ -335,6 +345,25 @@ struct TimerList: View {
         .frame(height: 43 * u)
         .background(Capsule().fill(Theme.chip).shadow(color: .black.opacity(0.04), radius: 1, y: 1))
         .opacity(blink ? 0.25 : 1)
+    }
+
+    /// Design ① "B2–B8 PBS  Done": a step passed, checked.
+    private func doneRow(_ r: RecordSnapshot.Bench.Row) -> some View {
+        HStack(spacing: 14 * u) {
+            ZStack {
+                Circle().fill(Theme.polishBlue)
+                Image(systemName: "checkmark").font(Theme.ui(14 * u, weight: .bold)).foregroundStyle(.white)
+            }
+            .frame(width: 30 * u, height: 30 * u)
+            Text(r.wells).font(Theme.ui(26 * u, weight: .semibold)).foregroundStyle(Theme.text1)
+            Text(r.name).font(Theme.ui(24 * u, weight: .light)).foregroundStyle(Theme.text2)
+            Spacer(minLength: 0)
+            Text("Done").font(Theme.ui(26 * u, weight: .semibold)).foregroundStyle(Theme.polishBlue)
+        }
+        .lineLimit(1).minimumScaleFactor(0.6)
+        .padding(.horizontal, 12 * u)
+        .frame(height: 43 * u)
+        .background(Capsule().fill(Theme.chip).shadow(color: .black.opacity(0.04), radius: 1, y: 1))
     }
 
     /// Next plan step with a duration, after the current one.

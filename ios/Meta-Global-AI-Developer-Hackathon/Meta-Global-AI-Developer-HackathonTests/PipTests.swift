@@ -47,7 +47,6 @@ struct PipTests {
     @Test @MainActor func renderDerives() {
         let lab = LabState()
         lab.sync(Self.snapshot())
-        #expect(lab.conditionProgress().first { $0.key == "drug_A" }?.have == 1)
         #expect(lab.conditionOf("C2") == "drug_A")
         #expect(lab.currentRange == "C2–C3")
         #expect(lab.hasNote("C2"))
@@ -107,24 +106,28 @@ struct PipTests {
         lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(json.utf8)))
         #expect(lab.done == ["C2"]) // filled: done this step
         #expect(lab.doneEarlier == ["B2"]) // dimmed: done only before
-        #expect(lab.conditionProgress().first?.have == 2) // any step counts
         let legacy = Data(#"{"version": 1, "plan": {"conditions": {}, "steps": []}, "done": ["C2"]}"#.utf8)
         #expect(throws: DecodingError.self) { // API 4 bare wells are a contract break
             _ = try JSONDecoder().decode(RecordSnapshot.self, from: legacy)
         }
     }
 
-    @Test @MainActor func redoWellCountsInGroup() {
+    @Test @MainActor func benchComesFromTheServer() {
+        // the plate, legend and Done rows are the server's (snapshot bench), drawn as is
         let json = """
         {"version": 4,
          "plan": {"conditions": {"drug_A": {"label": "Drug A", "treatments": ["Drug A"],
                                             "replicates": 2, "wells": ["C2", "C3", "C9"]}}, "steps": []},
-         "step_index": 0, "done": [{"step": 1, "well": "C9", "source": "voice", "ts": 1.0}], "excluded": {}, "redo": {"C9": "backup"},
-         "notes": [], "tips": [], "timers": [], "stamps": {}, "cards": {}}
+         "step_index": 0, "done": [], "excluded": {}, "redo": {},
+         "notes": [], "tips": [], "timers": [], "stamps": {}, "cards": {},
+         "bench": {"wells": {"C2": "done", "C3": "now"},
+                   "legend": [{"key": "drug_A", "label": "Drug A", "n": 3}],
+                   "rows": [{"wells": "B2–B8", "name": "PBS", "state": "done"}]}}
         """
         let lab = LabState()
         lab.sync(try! JSONDecoder().decode(RecordSnapshot.self, from: Data(json.utf8)))
-        #expect(lab.conditionProgress().first { $0.key == "drug_A" }?.have == 1)
+        #expect(lab.bench?.wells["C2"] == "done" && lab.bench?.wells["C3"] == "now")
+        #expect(lab.bench?.legend.first?.n == 3 && lab.bench?.rows.first?.name == "PBS")
     }
 
     @Test @MainActor func timerVisibility() {

@@ -33,10 +33,12 @@ struct ConfirmScreen: View {
                 .benchCard(radius: 44 * u)
                 .modifier(ShakeIf(on: cards.first?.kind == "catch" && cards.count == 1, u: u))
                 .enter(.pop, u: u)
+            let row = buttons[layout] ?? []
             HStack(spacing: 36 * u) {
-                ForEach(Array((buttons[layout] ?? []).enumerated()), id: \.offset) { i, b in
+                ForEach(Array(row.enumerated()), id: \.offset) { i, b in
+                    // two buttons 360 each under the 756 card; three share it
                     SayButton(button: b, kind: i == 0 ? .primary : .secondary, size: 34 * u, perform: answer)
-                        .frame(width: 360 * u)
+                        .frame(width: (756 - 36 * CGFloat(max(1, row.count) - 1)) / CGFloat(max(1, row.count)) * u)
                         .modifier(EntranceFor(primary: i == 0, order: i + 1, u: u))
                 }
             }

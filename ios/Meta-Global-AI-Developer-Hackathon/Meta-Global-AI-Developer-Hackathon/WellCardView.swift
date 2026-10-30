@@ -23,6 +23,7 @@ struct WellCardSide: View {
         else if lab.redo[well] != nil { state = "Redo" }
         else if lab.done.contains(well) { state = "Done this step" }
         else if lab.doneEarlier.contains(well) { state = "Done earlier" }
+        else if lab.bench?.wells[well] == "skipped" { state = "Skipped" }
         else if lab.currentPlanned.contains(well) { state = "Next up" }
         else if lab.conditionOf(well) != nil { state = "Planned" }
         return [lab.conditionLabel(well), state].compactMap { $0 }.joined(separator: " · ")

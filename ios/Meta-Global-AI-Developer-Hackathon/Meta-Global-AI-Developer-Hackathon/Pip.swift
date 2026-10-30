@@ -626,6 +626,18 @@ struct RecordSnapshot: Decodable {
     var recent: [HistoryEntry]
     /// The header's mode label, decided by the server (nil: not drawn).
     var headerMode: RunModeLabel?
+    /// The bench as the server worked it out from the run so far.
+    var bench: Bench?
+
+    /// Snapshot `bench`: each touched well's state (done / now / excluded),
+    /// wells per condition (legend), the last steps passed (Done rows).
+    struct Bench: Decodable, Equatable {
+        var wells: [String: String]
+        var legend: [Legend]
+        var rows: [Row]
+        struct Legend: Decodable, Equatable { var key: String; var label: String; var n: Int }
+        struct Row: Decodable, Equatable { var wells: String; var name: String; var state: String }
+    }
 
     /// The run mode as the header shows it (`header.mode`): id full / private, its label.
     struct RunModeLabel: Decodable, Equatable {
@@ -637,7 +649,7 @@ struct RecordSnapshot: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case epoch, view, version, plan, stepIndex = "step_index", done, excluded, redo,
-             notes, tips, timers, stamps, cards, draft, run, recent, header
+             notes, tips, timers, stamps, cards, draft, run, recent, header, bench
     }
 
     init(from decoder: Decoder) throws {
@@ -663,6 +675,7 @@ struct RecordSnapshot: Decodable {
         run = try c.decodeIfPresent(RunBlock.self, forKey: .run)
         recent = try c.decodeIfPresent([HistoryEntry].self, forKey: .recent) ?? []
         headerMode = try c.decodeIfPresent(Header.self, forKey: .header)?.mode
+        bench = try c.decodeIfPresent(Bench.self, forKey: .bench)
     }
 }
 
@@ -779,6 +792,8 @@ final class LabState {
     var timers: [TimerEntry] = []
     /// The header's mode label (server `header.mode`); nil: hidden on this screen.
     var headerMode: RecordSnapshot.RunModeLabel?
+    /// The server's bench (plate well states, legend, Done rows); drawn as is.
+    var bench: RecordSnapshot.Bench?
     var cards: [ServerCard] = []
     var draft: ProtocolDraft?
     var run: RunBlock?
@@ -815,6 +830,7 @@ final class LabState {
         notes = snap.notes
         timers = snap.timers
         headerMode = snap.headerMode
+        bench = snap.bench
         cards = snap.cards
         draft = snap.draft
         run = snap.run
@@ -823,14 +839,6 @@ final class LabState {
         wellTime = snap.stamps.mapValues { Date(timeIntervalSince1970: $0.ts) }
     }
 
-    /// Per-condition usable-done counts: done wells minus excluded ones, vs replicates.
-    func conditionProgress() -> [(key: String, label: String, have: Int, need: Int)] {
-        let usable = done.union(doneEarlier).subtracting(excluded.keys)
-        return conditions.sorted { $0.key < $1.key }.map {
-            (key: $0.key, label: $0.value.label,
-             have: usable.intersection($0.value.wells).count, need: $0.value.replicates)
-        }
-    }
 
     func conditionOf(_ well: String) -> String? {
         conditions.first { $0.value.wells.contains(well) }?.key
