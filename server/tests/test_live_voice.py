@@ -310,4 +310,38 @@ api.LIVE_HOLD_S = hold
 api._handle_text = real_handle
 assert heard == ["I wanna I want to see"], heard
 print("LV7 ok: cut-off turns wait for the rest, then go alone")
+# LV-send. One way out to the live socket: after it closes (or the app left),
+# pings, stages and replies are dropped, never "websocket.send after close".
+import asyncio  # noqa: E402
+
+from server.live_session import LiveSender  # noqa: E402
+
+
+class ClosingWS:
+    def __init__(self):
+        self.sent, self.closed = [], False
+
+    async def send_json(self, m):
+        if self.closed:
+            raise RuntimeError("Unexpected ASGI message 'websocket.send', after sending 'websocket.close'")
+        self.sent.append(m)
+
+    async def close(self):
+        self.closed = True
+
+
+async def after_close():
+    ws = ClosingWS()
+    tx = LiveSender(ws)
+    assert await tx.send({"type": "ping"})
+    await tx.close()
+    assert not await tx.send({"type": "stage", "stage": "done"}) and not await tx.send({"type": "ping"})
+    ws2 = ClosingWS()
+    ws2.closed = True  # closed under us
+    tx2 = LiveSender(ws2)
+    assert not await tx2.send({"type": "turn"}) and tx2.closed
+    return ws.sent
+
+assert asyncio.run(after_close()) == [{"type": "ping"}]
+print("LV-send ok: nothing goes out after close")
 print("ALL PASS")

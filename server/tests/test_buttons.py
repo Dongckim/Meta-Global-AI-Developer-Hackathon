@@ -18,11 +18,22 @@ import server.api as api  # noqa: E402
 from server.screens import PLANNED, SCREENS, button_call  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
+def noid(ui):
+    """ui actions without their delivery id (the app runs each id once)."""
+    return [{k: v for k, v in a.items() if k != "id"} for a in ui or []]
+
+
 from server import protocol as proto  # noqa: E402
 from server.screens import fill_button  # noqa: E402
 
-buttons = [(sid, b) for sid, s in SCREENS.items() for b in s.get("buttons", [])]
+everything = [(sid, b) for sid, s in SCREENS.items() for b in s.get("buttons", [])]
+# tap_only: iOS system pickers we can't drive by voice ("Browse files…"); the
+# rest is said == tapped, every screen, every button
+TAP_ONLY = [(sid, b["say"]) for sid, b in everything if b.get("tap_only")]
+buttons = [(sid, b) for sid, b in everything if not b.get("tap_only")]
 assert buttons, "no registry buttons"
+assert all(button_call(say, [sid]) is None for sid, say in TAP_ONLY), "tap-only buttons never answer to voice"
+print(f"tap_only (not voice): {TAP_ONLY}")
 
 # A state where every screen's buttons have their slots: an active run and an
 # imported draft with one pipetting step that needs a look.
@@ -36,7 +47,7 @@ RAW = {"title": "", "short_title": "Media test", "liquids": [], "conditions": [
                  "mix": None, "repeat": None}},
     {"kind": "incubate", "text": "incubate", "short_title": "", "quote": "Incubate 30 min.", "minutes": 30,
      "temp_c": None, "caution": None, "pipette": None}]}
-TARGET = {"draft_step": "1", "draft_page": "1", "protocol_detail": "", "web_answer": "s1"}
+TARGET = {"draft_step": "1", "draft_page": "1", "protocol_detail": "", "web_answer": "s1", "web_source": "s1:1"}
 
 
 def fresh(sid: str, b: dict | None = None) -> RecordStore:
@@ -45,6 +56,9 @@ def fresh(sid: str, b: dict | None = None) -> RecordStore:
     st.start_demo_run()
     finished = st.r["run"]["run_id"]
     st._finish_locked("finished")
+    st.start_demo_run()
+    paused = st.r["run"]["run_id"]
+    st._finish_locked("paused")
     st.start_demo_run()
     st.r["draft"] = proto.build_draft(RAW, proto.evidence_from_text(DOC), "d.pdf")
     st.add_search({"id": "s1", "ts": 1, "question": "Max DMSO for HeLa cells?", "query": "max DMSO HeLa",
@@ -57,7 +71,8 @@ def fresh(sid: str, b: dict | None = None) -> RecordStore:
     if sid == "web_answer" and ((b or {}).get("when") or {}).get("status") == "failed":
         target = "s2"
     if sid == "run_view":
-        target = st.r["run"]["run_id"] if ((b or {}).get("when") or {}).get("status") == "active" else finished
+        status = ((b or {}).get("when") or {}).get("status")
+        target = st.r["run"]["run_id"] if status == "active" else paused if status == "paused" else finished
     st.r["view"]["current"] = {"screen": sid, "target": target}  # said on its own screen
     return st
 
@@ -76,7 +91,7 @@ for sid, b in buttons:
                  f"{fb['say']}, Milo", f"um, so {fb['say']} please"):
         call = button_call(said, [sid], slots)
         assert call == {"name": b["action"], "args": fb["args"]}, (sid, said, call)
-assert button_call("next step for C3", ["main"]) is None  # the words, not a sentence holding them
+assert button_call("don't go to the next step", ["main"]) is None  # negated: not a press
 assert fill_button({"say": "Step {step}", "action": "show_step"}, {}) is None  # no hole shown
 print("BT1 ok: say == command == action")
 
@@ -108,8 +123,9 @@ for said in ("Continue", "continue.", "okay continue"):
     j = c.post("/input", json={"text": said, "session": "bt"}).json()
     assert api.store.r["view"]["current"]["screen"] == "main" and j["route"] == "grammar", (said, j)
 api.store = fresh("run_view", {"when": {"status": "finished"}})
+before = api.store.r["run"]["run_id"]
 j = c.post("/input", json={"text": "Start run", "session": "bt"}).json()
-assert j["cards"] and j["cards"][0]["kind"] == "new_run", j
+assert not j["cards"] and api.store.r["run"]["run_id"] != before and api.store.r["view"]["current"]["screen"] == "main", j
 api.store = fresh("home")
 j = c.post("/input", json={"text": "Continue", "session": "bt"}).json()
 assert api.store.r["view"]["current"]["screen"] == "main", j
@@ -151,4 +167,77 @@ for layout, bs in REGISTRY.get("cards", {}).items():
         assert b["action"] == "answer_card", (layout, b)
         assert match_card_answer(b["say"]) == b["args"]["answer"], (layout, b)
 print("BT5 ok: card buttons say their answer")
+# BT6. The screen's own parts, said or tapped: original pages, the file list,
+# the camera, a source page. "page 2", "number 2", "the first one", a name.
+from server.screens import control_call  # noqa: E402
+
+api.store = fresh("draft_page")
+for said, want in (("next page", {"cmd": "next_page"}), ("Page 2", {"cmd": "page", "n": 2}),
+                   ("go to page three", {"cmd": "page", "n": 3}), ("show the quote", {"cmd": "quote"}),
+                   ("zoom in", {"cmd": "zoom_in"})):
+    j = c.post("/input", json={"text": said, "session": "bt"}).json()
+    assert j["route"] == "grammar" and noid(j["ui"]) == [{"action": "control", "target": want["cmd"],
+                                                     **({"n": want["n"]} if "n" in want else {})}], (said, j)
+api.store = fresh("main")
+j = c.post("/input", json={"action": {"id": "control", "args": {"cmd": "next_page"}}, "session": "bt"}).json()
+assert not j.get("ui") and j["reply"] == "I can't do that here.", j  # not this screen's
+api.store = fresh("import_file")
+assert api.store.snapshot()["view"]["prompt"] == "Here are your files.", "no claim before the app's list"
+c.post("/screen/items", json={"screen": "import_file", "items": [
+    {"id": "drug_ab_dosing.pdf", "name": "drug ab dosing"}, {"id": "mtt_assay.txt", "name": "mtt assay"}]})
+assert api.store.snapshot()["view"]["prompt"] == "2 files. Which one?"
+for said, want in (("number 2", "mtt_assay.txt"), ("the first one", "drug_ab_dosing.pdf"),
+                   ("okay the second one", "mtt_assay.txt"), ("the MTT assay", "mtt_assay.txt"),
+                   ("drug dosing", "drug_ab_dosing.pdf")):
+    j = c.post("/input", json={"text": said, "session": "bt"}).json()
+    assert j["route"] == "grammar" and noid(j["ui"]) == [{"action": "pick", "target": want}], (said, j)
+j = c.post("/input", json={"action": {"id": "pick", "args": {"n": 9}}, "session": "bt"}).json()
+assert j["reply"] == "There are only 2.", j
+assert control_call("browse files", "import_file", []) is None
+api.store = fresh("import_photo")
+j = c.post("/input", json={"text": "take it", "session": "bt"}).json()
+assert noid(j["ui"]) == [{"action": "control", "target": "take"}], j
+c.post("/screen/items", json={"screen": "import_photo", "items": [{"id": "p1", "name": "page 1"}]})
+assert api.store.snapshot()["view"]["prompt"] == "1 page so far. Say one more, or done."
+api.store = fresh("web_answer")
+j = c.post("/input", json={"text": "open source", "session": "bt"}).json()
+assert api.store.r["view"]["current"] == {"screen": "web_source", "target": "s1:1"}, j
+v = api.store.snapshot()["view"]
+assert v["prompt"] == "A, a.org." and v["slots"]["url"] == "https://a.org", v
+j = c.post("/input", json={"text": "scroll down", "session": "bt"}).json()
+assert noid(j["ui"]) == [{"action": "control", "target": "scroll_down"}], j
+c.post("/input", json={"text": "source 2", "session": "bt"})
+assert api.store.r["view"]["current"] == {"screen": "web_source", "target": "s1:2"}
+c.post("/input", json={"text": "back", "session": "bt"})
+assert api.store.r["view"]["current"]["screen"] == "web_answer", "one page deep"
+print("BT6 ok: pages, files, camera, source page by voice and tap")
+# BT7. Lead-ins anywhere, repeats folded; a sentence holding exactly one of
+# the screen's buttons is that button, unless it negates or asks; two -> ask.
+from server.screens import button_match  # noqa: E402
+
+for said in ("full please full please", "um full", "let's go full", "Oh. Full."):
+    call, ask = button_match(said, ["mode"])
+    assert call == {"name": "navigate", "args": {"screen": "import_choice"}} and ask is None, (said, call, ask)
+assert button_match("not full", ["mode"]) == (None, None)
+assert button_match("full or private", ["mode"]) == (None, "Full or Private?")
+assert button_match("what's the next step?", ["main"]) == (None, None), "a question isn't a press"
+api.store = fresh("mode")
+j = c.post("/input", json={"text": "full please full please", "session": "bt"}).json()
+assert j["route"] == "grammar" and api.store.r["view"]["current"]["screen"] == "import_choice", j
+api.store = fresh("mode")
+j = c.post("/input", json={"text": "full or private", "session": "bt"}).json()
+assert j["reply"] == "Full or Private?" and j["route"] == "grammar" and api.store.r["view"]["current"]["screen"] == "mode", j
+print("BT7 ok: buttons heard inside a sentence, not when negated or asked")
+# BT8. A snapshot can be made on every screen, whatever the target (odd ones
+# too), with a run, a draft, searches and listed files: it never fails and it
+# is strict JSON (the app's GET /record and /events).
+import json  # noqa: E402
+
+for sid in SCREENS:
+    st = fresh(sid)
+    st.screen_items = {"import_file": [{"id": "a.pdf", "name": "a"}], "import_photo": []}
+    for tgt in ("", "junk", "s1", "s2", "s1:1", "s1:9", "1", "99"):
+        st.r["view"]["current"] = {"screen": sid, "target": tgt}
+        json.dumps(st.snapshot(), allow_nan=False)
+print("BT8 ok: every screen's snapshot is strict JSON")
 print("ALL PASS")

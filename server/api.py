@@ -59,7 +59,7 @@ from server.grammar import (
 )
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
-from server.screens import ask_choice, button_call, button_words, buttons_for, planned_screen
+from server.screens import ask_choice, button_match, button_words, buttons_for, control_call, planned_screen, start_call
 from server.screens import guide as _screen_guide
 from server.screens import READS as SCREEN_READS
 from server import library as lib
@@ -70,7 +70,7 @@ from server.store import RecordStore, describe_well_row
 from server import live_asr
 from server import tone
 from server.grammar import match_session_end
-from server.live_session import LiveConversation, live_keywords
+from server.live_session import LiveSender, LiveConversation, live_keywords
 from server.live_session import settings as live_settings
 from server.tone import keys as tone_keys
 from server.tone import say, section
@@ -85,7 +85,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 13
+API_VERSION = 14
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -174,7 +174,8 @@ PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "extend_timer", "next_step", "end_run", "show", "navigate",
                    "open", "back", "make_robot", "edit_draft", "retry_sync",
                    "skip_sync", "review_draft", "save_draft", "start_run", "discard_draft",
-                   "show_step", "open_source_page", "web_search", "open_source"]
+                   "show_step", "open_source_page", "web_search", "open_source", "control", "pick",
+                   "resume_run"]
 #: Actions that aren't record writes; the coverage check counts only writes.
 VIEW_ACTIONS = frozenset(a for a in PERFORM_ACTIONS if a not in RecordStore.RUN_WRITES) \
     - {"edit_draft"} | {"read_record", "ask"}
@@ -204,7 +205,9 @@ TOOLS = [
         "web_search{query} ONLY for outside knowledge the record and protocol can't hold (reagent "
         "limits, stability, general method facts); query = the general question, never wells, run "
         "names or notes; record facts -> read_record instead; open{target: \"search <as said>\"} "
-        "opens a past search; open_source{n?} on a search answer; "
+        "opens a past search; open_source{n?} on a search answer (a page in the app); "
+        "control{cmd,n?} = the screen's own buttons (next_page, page n, zoom_in, scroll_down, take, done...); "
+        "pick{n|name} = an item on a list screen (a file); "
         "retry_sync; skip_sync (setup screen only). Never answer_card. "
         f"Screens (navigate.screen): {SCREEN_GUIDE} "
         "Backup well: read free_wells first, then act on the first candidate at once.",
@@ -226,6 +229,8 @@ TOOLS = [
             "on_done": {"type": "string"},
             "view": {"type": "string"},
             "query": {"type": "string"},
+            "cmd": {"type": "string"},
+            "name": {"type": "string"},
             "n": {"type": "integer"},
         },
         # only what the action uses: a strict call spelled out all 16 props
@@ -736,7 +741,7 @@ REQUIRED_ARGS = {
     "add_note": ["target", "text"], "edit_note": ["text"],
     "save_tip": ["step_id", "text"], "set_timer": ["minutes"],
     "navigate": ["screen"], "open": ["target"], "edit_draft": ["path", "value"],
-    "web_search": ["query"],
+    "web_search": ["query"], "control": ["cmd"],
 }
 ASK_FOR = {
     "wells": "Which wells?", "well": "Which well?", "target": "Which one?",
@@ -837,11 +842,17 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     v = store.r["view"]
     shown = [x for x in ((v.get("sheet") or {}).get("name"), v["current"]["screen"]) if x]
     vslots = store.view_slots(v["current"]["screen"], v["current"].get("target") or "")
-    b = button_call(text, shown, vslots)
+    b, which = button_match(text, shown, vslots)
+    b = b or (None if which else control_call(text, v["current"]["screen"],
+                                              store.screen_items.get(v["current"]["screen"])) or start_call(text))
     # what the turn was matched against (iPad: "Continue" did nothing)
     print(f"[turn] screen={v['current']['screen']}:{v['current'].get('target') or ''} "
           f"buttons={[x['say'] for sid in shown for x in buttons_for(sid, vslots)]} "
-          f"said={text!r} as_button={button_words(text)!r} -> {b['name'] if b else 'none'}", flush=True)
+          f"said={text!r} as_button={button_words(text)!r} -> {b['name'] if b else 'ask' if which else 'none'}",
+          flush=True)
+    if which:  # two of this screen's buttons in one breath: ask which, no model
+        asked = {"question": which, "target": ""}
+        return [], [], which, 0, "grammar", [], {"dropped": 0, "drop_reasons": [], "asked": asked}, []
     # grammar claims a whole turn or nothing: two requests go to the model
     g = ([b], "") if b else None if len(parts) > 1 else match_grammar(text, store.prompt_state(session))
     if b is not None and b["name"] == "web_search":  # Try again, said
@@ -1522,6 +1533,7 @@ async def voice_live(ws: WebSocket):
     go back as they come; owner turns run the one text path (_handle_text)
     and the reply returns as a `turn` message (record changes ride SSE)."""
     await ws.accept()
+    sender = LiveSender(ws)
     start = await ws.receive_json()
     session = get_session((start or {}).get("session") or "bench")
     meta = live_asr.MetaStream(_key(), mode="DIARIZATION", keywords=live_keywords(store.r),
@@ -1532,12 +1544,12 @@ async def voice_live(ws: WebSocket):
         ok, meta.error = False, {"message": f"{type(e).__name__}: {e}"}
     if not ok:
         print(f"live open failed: {meta.error}", flush=True)
-        await ws.send_json({"type": "error", "message": (meta.error or {}).get("message", "open failed")})
+        await sender.send({"type": "error", "message": (meta.error or {}).get("message", "open failed")})
         await meta.aclose()
-        await ws.close()
+        await sender.close()
         return
     print(f"live open session={meta.session_id}", flush=True)
-    await ws.send_json({"type": "ready", "session_id": meta.session_id})
+    await sender.send({"type": "ready", "session_id": meta.session_id})
     conv = LiveConversation(opened_at=time.monotonic(),
                             window_s=float(live_settings().get("window_s") or 60),
                             max_s=float(live_settings().get("max_s") or 55 * 60),
@@ -1546,7 +1558,7 @@ async def voice_live(ws: WebSocket):
     ended = False
     why = ""
     # this session's turn stages ride its socket (_stage)
-    session["stage_sink"] = lambda m: asyncio.ensure_future(ws.send_json(m))
+    session["stage_sink"] = lambda m: asyncio.ensure_future(sender.send(m))
 
     async def end_stream(reason: str):
         """endStream once; Meta flushes and closes 1000 (downlink then ends)."""
@@ -1583,7 +1595,7 @@ async def voice_live(ws: WebSocket):
                     continue
                 if out["type"] == "ignored":
                     print(f'[voice] ignored speaker={out["speaker"]} text="{out["text"]}"', flush=True)
-                await ws.send_json(out)
+                await sender.send(out)
 
     def short(reply: str, route: str) -> dict:
         """A turn answered without the model (grammar / here / sorry)."""
@@ -1631,7 +1643,7 @@ async def voice_live(ws: WebSocket):
             except Exception as e:  # any failure: the session stays, the turn says sorry
                 print(f"live turn failed: {type(e).__name__}: {e}", flush=True)
                 text, resp, end = item.get("text", ""), short(say("didnt_catch", session), "error"), None
-            await ws.send_json({"type": "turn", "transcript": text, "end_session": end is not None, **resp})
+            await sender.send({"type": "turn", "transcript": text, "end_session": end is not None, **resp})
             conv.owner_replied(time.monotonic())
             if end is not None:
                 await end_stream("end_session")
@@ -1641,7 +1653,7 @@ async def voice_live(ws: WebSocket):
         session from a dead socket."""
         while not ended:
             await asyncio.sleep(HEARTBEAT_S)
-            await ws.send_json({"type": "ping"})
+            await sender.send({"type": "ping"})
 
     async def watchdog():
         while not ended:
@@ -1661,11 +1673,8 @@ async def voice_live(ws: WebSocket):
         # why: window / max_duration / end_session / client, else the stream broke
         why = why or ("error" if code != 1000 or meta.error else "server")
         print(f"live closed {code} {reason!r} why={why}", flush=True)
-        try:
-            await ws.send_json({"type": "closed", "code": code, "reason": reason, "why": why})
-            await ws.close()
-        except Exception:
-            pass  # the app already left
+        await sender.send({"type": "closed", "code": code, "reason": reason, "why": why})
+        await sender.close()
         await meta.aclose()
 
 
@@ -1740,19 +1749,74 @@ async def _spark_json(client, name: str, body: dict) -> dict:
     return resp.json()
 
 
+#: Extractions in flight by content hash: a second request for the same
+#: content joins the first instead of extracting again.
+_IMPORTS: dict[str, asyncio.Future] = {}
+
+
 @app.post("/protocols/import")
 async def protocol_import(file: list[UploadFile] = File(default=[]), text: str = Form(""),
                           filename: str = Form(""), original_id: str = Form(""),
                           session: str = Form("bench")):
+    """Idempotent import: the same content (hash of the files and text) joins
+    an extraction in flight, or reuses the open draft from it; else it
+    extracts once. The turn shows "Reading the protocol…" (stage reading) and
+    Draft ready opens when it's done."""
+    if not PROTOCOL_FULL_MODE:
+        raise HTTPException(403, "protocol import needs Full mode")
+    sess = get_session(session)
+    uploads = [(f.filename or "", await f.read()) for f in file]
+    h = lib.source_hash([raw for _, raw in uploads], text)
+    known = lib.find_by_source(h, store.root)
+    if known:
+        # the same original is already a protocol: no extraction, open it (runs stack under it)
+        print(f"import {h}: already the protocol {known['id']}", flush=True)
+        reply = store.open_known_protocol(known["id"], sess)
+        return {"draft": None, "review": [], "errors": [], "reply": reply, "speak": speak_text(reply),
+                "ms": 0, "protocol_id": known["id"], "record_version": store.r["version"]}
+    draft = store.r.get("draft")
+    if draft and (draft.get("meta") or {}).get("content_hash") == h:
+        print(f"import {h}: the open draft already holds this", flush=True)
+        store.save_draft(draft)  # every import ends on Draft ready, a reused one too
+        return _import_reply(draft, sess, 0)
+    if h in _IMPORTS:
+        print(f"import {h}: joining the extraction in flight", flush=True)
+        return await asyncio.shield(_IMPORTS[h])
+    fut = asyncio.get_running_loop().create_future()
+    _IMPORTS[h] = fut
+    _stage(sess, "reading")
+    try:
+        out = await _import_once(uploads, text, filename, original_id, sess, h)
+        fut.set_result(out)
+        _stage(sess, "done", reply=out["reply"])
+        return out
+    except BaseException as e:
+        fut.set_exception(e)
+        fut.exception()  # read here: nobody else may be waiting
+        _stage(sess, "failed", reason=getattr(e, "detail", None) or type(e).__name__)
+        raise
+    finally:
+        _IMPORTS.pop(h, None)
+
+
+def _import_reply(draft: dict, sess: dict, ms: int) -> dict:
+    conds = len(draft["plan"]["conditions"])
+    steps = len(draft["plan"]["steps"])
+    reply = f"Draft ready: {conds} conditions, {steps} steps."
+    if draft["errors"]:
+        reply += f" {len(draft['errors'])} red items to fix."
+    elif draft["review"]:
+        reply += f" {len(draft['review'])} to review."
+    return {"draft": draft, "review": draft["review"], "errors": draft["errors"], "reply": reply,
+            "speak": speak_text(reply), "ms": ms, "record_version": store.r["version"]}
+
+
+async def _import_once(uploads: list, text: str, filename: str, original_id: str, sess: dict, h: str) -> dict:
     """One extraction path for three origins. pdf: the file rides input_file;
     text: pasted text or a .txt; photo: page photos (several = pages) are
     transcribed first through the same Spark call path and the transcript is
     the original. Quotes are checked against that text. Bytes never touch disk:
     the app keeps PDFs and photos under `original_id` on the device."""
-    if not PROTOCOL_FULL_MODE:
-        raise HTTPException(403, "protocol import needs Full mode")
-    sess = get_session(session)
-    uploads = [(f.filename or "", await f.read()) for f in file]
     if sum(len(raw) for _, raw in uploads) + len(text.encode()) > PROTOCOL_MAX_BYTES:
         raise HTTPException(413, "protocol file too large (10MB max)")
     ext = lambda n: n.lower().rsplit(".", 1)[-1] if "." in n else ""  # noqa: E731
@@ -1802,17 +1866,11 @@ async def protocol_import(file: list[UploadFile] = File(default=[]), text: str =
     draft = proto.build_draft(data, proto.evidence_from_text(doc_text, pages), name)
     draft["meta"]["origin"] = origin
     draft["meta"]["original_id"] = re.sub(r"[^A-Za-z0-9_-]", "", original_id)[:64]
-    store.save_draft(draft)
-    conds = len(draft["plan"]["conditions"])
-    steps = len(draft["plan"]["steps"])
-    reply = f"Draft ready: {conds} conditions, {steps} steps."
-    if draft["errors"]:
-        reply += f" {len(draft['errors'])} red items to fix."
-    elif draft["review"]:
-        reply += f" {len(draft['review'])} to review."
-    log_turn(sess, f"import {name}", [], [reply])
-    return {"draft": draft, "review": draft["review"], "errors": draft["errors"], "reply": reply,
-            "speak": speak_text(reply), "ms": ms, "record_version": store.r["version"]}
+    draft["meta"]["content_hash"] = h
+    store.save_draft(draft)  # opens Draft ready (⑤b)
+    out = _import_reply(draft, sess, ms)
+    log_turn(sess, f"import {name}", [], [out["reply"]])
+    return out
 
 
 @app.patch("/protocols/draft")
@@ -1959,6 +2017,19 @@ async def draft_delete(body: DraftStartIn):
     return {"ok": True, "record_version": store.r["version"]}
 
 
+class ItemsIn(BaseModel):
+    screen: str
+    items: list[dict] = []
+
+
+@app.post("/screen/items")
+async def screen_items(body: ItemsIn):
+    """The app says what a list screen shows (its files, the photos taken), so
+    "number 2" and a file's name pick from exactly those."""
+    store.set_items(body.screen, body.items)
+    return {"ok": True, "record_version": store.r["version"]}
+
+
 @app.get("/searches")
 async def searches_list():
     """Every web search sent (status: pending / ok / why not), newest first."""
@@ -1985,6 +2056,7 @@ async def events():
         queue.put_nowait(msg)
 
     store.subscribe(cb)
+    print(f"events open: listeners={len(store._listeners)}", flush=True)
 
     async def gen():
         try:
@@ -2001,6 +2073,7 @@ async def events():
                 store._listeners.remove(cb)
             except ValueError:
                 pass
+            print(f"events closed: listeners={len(store._listeners)}", flush=True)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 

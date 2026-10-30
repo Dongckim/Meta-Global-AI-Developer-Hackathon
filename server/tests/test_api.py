@@ -21,6 +21,11 @@ import server.api as api  # noqa: E402
 from server.runs import done_wells  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
+def noid(ui):
+    """ui actions without their delivery id (the app runs each id once)."""
+    return [{k: v for k, v in a.items() if k != "id"} for a in ui or []]
+
+
 api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
 api.store.start_demo_run()
 api.store.r["step_index"] = 2  # mid-run fixture, as before
@@ -746,7 +751,7 @@ with patch("httpx.AsyncClient", FakeClient):
     FakeClient.spark_payload = SPARK_OK
     j = r.json()
     assert j["route"] == "spark", j
-    assert j["ui"] == [{"action": "flash", "wells": ["C5"]},
+    assert noid(j["ui"]) == [{"action": "flash", "wells": ["C5"]},
                        {"action": "flash", "wells": ["C5"]}], j
     assert api.store.r["view"]["sheet"] == {"name": "well_card", "target": "C5"}, j
     assert j["speak"] == "Here's C 5. Opened C 5.", j  # registry result line, never the view id

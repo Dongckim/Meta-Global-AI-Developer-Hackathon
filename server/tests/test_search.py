@@ -214,8 +214,9 @@ st.add_search(search.record("Max DMSO for HeLa cells?", "max DMSO HeLa", search.
                             "ok", None, 9))
 j = c.post("/input", json={"action": {"id": "open", "args": {"target": "search the DMSO one"}}, "session": "s"}).json()
 assert st.r["view"]["current"]["screen"] == "web_answer", j
+sid_ = st.r["view"]["current"]["target"]
 j = c.post("/input", json={"action": {"id": "open_source", "args": {"n": "2"}}, "session": "s"}).json()
-assert {"action": "web_source", "target": "https://lab.example.com/faq"} in j["ui"], j
+assert st.r["view"]["current"] == {"screen": "web_source", "target": f"{sid_}:2"}, j  # inside the app
 st.r["view"]["current"] = {"screen": "web_searches", "target": ""}
 assert st.snapshot()["view"]["prompt"] == "1 web search. Which one?"
 print("S7 ok: open a search by what was said; sources open")

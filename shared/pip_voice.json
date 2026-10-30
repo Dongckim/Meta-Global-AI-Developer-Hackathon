@@ -1,6 +1,7 @@
 {
   "_note": "The agent's voice. Eunbi-editable: change sentences freely, keep {placeholders} as-is. Server picks a different variant from last time. persona is the one place for the shown/spoken name, wake phrase and TTS voice (server prompt + app).",
   "persona": {
+    "app_name": "Glassistant",
     "agent_name": "Milo",
     "wake_phrase": "Hey Milo",
     "voice": "Jamie",
@@ -129,9 +130,8 @@
     "Kick off {minutes} minutes?",
     "Want me to start {minutes} minutes?"
   ],
-  "finish_first": [
-    "Finish the current run first?",
-    "Wrap up this run before starting {name}?"
+  "already_saved": [
+    "{name} is already in your library. Say start a run."
   ],
   "end_run": [
     "End this run?",
@@ -175,7 +175,9 @@
     "mode": ["Full or Private?"],
     "import_choice": ["Text, file, or photo?"],
     "import_text": ["Paste or type it."],
-    "import_photo": ["Snap the pages."],
+    "import_photo": ["{pages} so far. Say one more, or done.", "Snap the pages. Say take it."],
+    "import_file": ["{files}. Which one?", "No files yet. In the Files app, put PDFs in On My iPad, {app}."],
+    "web_source": ["{title}, {domain}."],
     "protocol_review": ["Draft ready. Review it?"],
     "draft_steps": ["{pipetting}. Step {step} needs a look.", "{pipetting}. All look right."],
     "draft_step": ["Step {step} needs a look: {reason}.", "Step {step} of {of}. Looks right?"],
@@ -185,7 +187,22 @@
     "web_answer": ["{answer}. Source: {domain}, searched {searched}.", "{answer_pages}. Based on pages from {domain}, searched {searched}.", "Searching “{query}”."]
   },
   "run_started": [
-    "{name} started. Step 1 of {steps}."
+    "{run} started. Step 1: {step}."
+  ],
+  "run_started_paused": [
+    "{run} started, {paused} is paused. Step 1: {step}."
+  ],
+  "run_paused": [
+    "{run} is paused."
+  ],
+  "run_resumed": [
+    "{run} picks up at step {step}."
+  ],
+  "step_done": [
+    "Step {done} done. Move to step {step}?"
+  ],
+  "all_steps_done": [
+    "All steps done. Finish the run?"
   ],
   "new_run": [
     "{run} is finished. Start a new run of {name}?"

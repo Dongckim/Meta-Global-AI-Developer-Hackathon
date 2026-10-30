@@ -145,6 +145,8 @@ def run_progress(doc: dict) -> dict:
     step = min(int(rec.get("step_index") or 0) + 1, of) if of else 0
     if doc.get("status") == "active":
         state = f"Step {step} of {of}" if of else "In progress"
+    elif doc.get("status") == "paused":
+        state = f"Paused at step {step}" if of else "Paused"
     else:
         state = f"Ended at step {step}" if of and step < of else "Finished"
     return {"step": step, "of": of, "state": state}
@@ -255,6 +257,11 @@ def select_protocol(phrase: str, docs: list[dict]) -> tuple[dict | None, list[di
     hits = [d for d in docs if _mentions(p, protocol_short(d))] or \
         [d for d in docs if len(said) >= 3 and (said in _compact(d.get("name"))
                                                or _compact(d.get("name")) in said)]
+    if not hits:
+        # words of it in the name ("the MTT one" -> MTT Viability Assay)
+        stop = {"the", "one", "protocol", "run", "again", "new", "of", "for", "a", "an", "my", "that", "this"}
+        words = {w for w in re.findall(r"[a-z0-9]+", p.lower()) if len(w) >= 3} - stop
+        hits = [d for d in docs if words and words <= set(re.findall(r"[a-z0-9]+", f"{protocol_short(d)} {d.get('name')}".lower()))]
     if len(hits) == 1:
         return hits[0], []
     return (None, hits[:2]) if hits else (None, [])
@@ -316,3 +323,19 @@ def select_search(phrase: str, docs: list[dict], now: _dt.datetime | None = None
     if len(pool) == 1:
         return pool[0], []
     return None, pool[:2]
+
+
+def step_say(step: dict) -> str:
+    """A step as Milo says it starting out: "add 100 µL culture medium to
+    B2–D8" for a pipette step, else its sentence (speak_text turns the
+    symbols into words)."""
+    from server.grammar import wells_label
+    s = step or {}
+    p = s.get("pipette") or {}
+    if s.get("kind") == "pipette" and p.get("liquid"):
+        unit = {"ul": "µL", "ml": "mL"}.get(str(p.get("unit") or "").lower(), p.get("unit") or "")
+        vol = f"{p['volume']:g} {unit} " if isinstance(p.get("volume"), (int, float)) else ""
+        where = wells_label(p.get("wells") or s.get("wells") or [])
+        return f"add {vol}{p['liquid']}" + (f" to {where}" if where else "")
+    text = " ".join((s.get("text") or s.get("name") or "").split()).rstrip(".")
+    return text[:1].lower() + text[1:]

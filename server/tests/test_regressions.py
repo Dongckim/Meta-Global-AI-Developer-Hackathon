@@ -18,6 +18,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 import server.api as api  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
+
+def noid(ui):
+    """ui actions without their delivery id (the app runs each id once)."""
+    return [{k: v for k, v in a.items() if k != "id"} for a in ui or []]
+
 api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
 api.store.start_demo_run()
 api.store.r["step_index"] = 2  # mid-run fixture, as before
@@ -156,15 +161,22 @@ with patch("httpx.AsyncClient", FakeClient):
     # an unknown protocol: a store failure
     assert j["reply"] == "I couldn't open that original: which protocol?", j
     assert ", but" not in j["reply"] and "Nice" not in j["reply"], j
-    # importer is a registry sheet: navigate opens it as ui, no view change
+    # the import flow has one way in: asked for the importer, Mode opens first
     ScriptClient.queue = [{"id": "r3e", "output": [fc("navigate", '{"screen": "importer"}', "c1")]}]
-    before = api.store.r["view"]["current"]
     with patch("httpx.AsyncClient", ScriptClient):
-        r = c.post("/orchestrate", json={"text": "add a new protocol", "session": "r3c"})
+        r = c.post("/orchestrate", json={"text": "I wanna import some new protocol", "session": "r3c"})
     j = r.json()
-    assert j["reply"] == "Opening the importer." and {"action": "import"} in (j.get("ui") or []), j
-    assert api.store.r["view"]["current"] == before, api.store.r["view"]
-    print("R3b ok: result-only replies, importer from the registry")
+    assert j["reply"] == "Full or Private?" and not j.get("ui"), j
+    assert api.store.r["view"]["current"]["screen"] == "mode", api.store.r["view"]
+    # past Mode and the choice, the importer is a registry sheet: ui, no view change
+    c.post("/input", json={"text": "full", "session": "r3c"})
+    assert api.store.r["view"]["current"]["screen"] == "import_choice", api.store.r["view"]
+    ScriptClient.queue = [{"id": "r3f", "output": [fc("navigate", '{"screen": "importer"}', "c1")]}]
+    with patch("httpx.AsyncClient", ScriptClient):
+        j = c.post("/orchestrate", json={"text": "browse my files", "session": "r3c"}).json()
+    assert j["reply"] == "Opening the importer." and {"action": "import"} in noid(j.get("ui")), j
+    assert api.store.r["view"]["current"]["screen"] == "import_choice", api.store.r["view"]
+    print("R3b ok: result-only replies, the import flow's one way in")
 
     # R3c. unusable model calls (perform without action, a tool without a
     # name) never crash the turn: they drop at the gate and the user is asked,

@@ -73,13 +73,36 @@ def ensure_demo_seed(root: Path | None = None) -> dict | None:
     return save(plan, name="Demo protocol", source_filename="plan_demo.json", root=root)
 
 
+def source_hash(files: list[bytes], text: str = "") -> str:
+    """What makes two imports the same protocol: the original itself (file
+    bytes, photos in order, or pasted text with spacing evened out), never the
+    extraction, which differs run to run."""
+    import re
+    h = hashlib.sha256()
+    for raw in files:
+        h.update(hashlib.sha256(raw).digest())
+    h.update(re.sub(r"\s+", " ", text or "").strip().encode())
+    return h.hexdigest()[:16]
+
+
+def find_by_source(src: str, root: Path | None = None) -> dict | None:
+    if not src:
+        return None
+    d = _dir(root)
+    return next((x for p in sorted(d.glob("*.json")) if (x := _read(p)) and x.get("source_hash") == src), None) \
+        if d.exists() else None
+
+
 def save(plan: dict, name: str, source_filename: str, root: Path | None = None,
          short_title: str = "", origin: str = "pdf", source_text: str = "",
-         original_id: str = "") -> dict:
-    """Store a confirmed plan; same content returns the existing protocol
-    (its first import time and labels stay)."""
+         original_id: str = "", source: str = "") -> dict:
+    """Store a confirmed plan. The same original (source hash) is the same
+    protocol, whatever its extraction; else the same plan content is."""
     d = _dir(root)
     d.mkdir(parents=True, exist_ok=True)
+    same = find_by_source(source, root)
+    if same:
+        return same
     h, pid = plan_hash(plan), protocol_id(plan)
     path = d / f"{pid}.json"
     existing = _read(path)
@@ -88,6 +111,7 @@ def save(plan: dict, name: str, source_filename: str, root: Path | None = None,
     doc = {"id": pid, "name": name or pid, "short_title": short_title or "",
            "source_filename": source_filename or "", "origin": origin,
            "source_text": source_text if origin != "pdf" else "", "original_id": original_id,
+           "source_hash": source,
            "imported_at": time.time(), "plan_hash": h, "plan": plan}
     path.write_text(json.dumps(doc, ensure_ascii=False, indent=1))
     return doc

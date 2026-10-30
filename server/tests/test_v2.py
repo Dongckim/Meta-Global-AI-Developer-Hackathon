@@ -19,6 +19,11 @@ import server.api as api  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 from server.tone import say, variants  # noqa: E402
 
+def noid(ui):
+    """ui actions without their delivery id (the app runs each id once)."""
+    return [{k: v for k, v in a.items() if k != "id"} for a in ui or []]
+
+
 api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
 api.store.start_demo_run()
 api.store.r["step_index"] = 2  # mid-run fixture, as before
@@ -113,8 +118,8 @@ with patch("httpx.AsyncClient", FakeClient):
     assert memo["text"] == "Reagent is a little sticky.", memo
     assert memo["raw"] == origin, memo
     assert memo["wells"] == ["C8"], memo
-    assert {"action": "flash", "wells": ["C8"]} in j["ui"], j
-    assert {"action": "peek", "target": "C8", "seconds": 3} in j["ui"], j
+    assert {"action": "flash", "wells": ["C8"]} in noid(j["ui"]), j
+    assert {"action": "peek", "target": "C8", "seconds": 3} in noid(j["ui"]), j
     print("V3 ok: memo text+raw, flash+peek")
 
     # V4. article-number timers ground: "a 25 minute" and "a 5 minute".

@@ -119,12 +119,13 @@ with patch("httpx.AsyncClient", FakeClient):
     assert j["saved"] is True and j["protocol"]["name"] == "Methods", j
     pid1 = j["protocol"]["id"]
     assert "draft" not in api.store.r
-    FakeClient.spark_payload = extraction(RAW)
-    c.post("/protocols/import",
-           files={"file": ("protocol_demo.pdf", PDF, "application/pdf")})
-    j = c.post("/protocols/save", json={"session": "lib2"}).json()
-    assert j["saved"] is True and j["protocol"]["id"] == pid1, j
-    print("LIB2 ok: save + dedup + quote_page")
+    # the same original again: no extraction, its protocol opens (runs stack under it)
+    FakeClient.spark_payload = {"id": "never", "output": []}
+    j = c.post("/protocols/import",
+               files={"file": ("protocol_demo.pdf", PDF, "application/pdf")}).json()
+    assert j["protocol_id"] == pid1 and j["draft"] is None and "draft" not in api.store.r, j
+    assert api.store.r["view"]["current"] == {"screen": "protocol_detail", "target": pid1}, api.store.r["view"]
+    print("LIB2 ok: save + same original -> same protocol + quote_page")
 
     # LIB3. missing title falls back to the filename stem.
     raw = {"title": "", "short_title": "", "liquids": [], "conditions": [], "steps": []}
@@ -156,28 +157,25 @@ with patch("httpx.AsyncClient", FakeClient):
     assert r.status_code == 404, r.text
     print("RUN2 ok: direct start + unknown 404")
 
-    # RUN3. active start cards; confirm finishes the old run, starts new.
+    # RUN3. start with an active run starts at once; the old run is paused.
     j = c.post("/orchestrate", json={"text": "B2 done", "session": "run3"}).json()
     assert j["route"] == "grammar" and sorted(done_wells(api.store.r)) == ["B2"], j
     j = c.post("/runs/start", json={"protocol_id": demo_id, "session": "run3"}).json()
-    assert j["started"] is False and j["card"]["kind"] == "finish_first", j
-    j = c.post("/confirm", json={"card_id": j["card"]["id"], "ok": True,
-                                 "session": "run3"}).json()
-    assert "Run started" in j["message"], j
+    assert j["started"] is True and not j.get("card"), j
     run2 = api.store.r["run"]["run_id"]
     assert run2 != run1 and sorted(done_wells(api.store.r)) == [], api.store.r["run"]
     runs = list((Path(api.store.path).parent / "runs").glob("run-*.json"))
     assert len(runs) == 1, runs
     old = json.loads(runs[0].read_text())
-    assert old["run_id"] == run1 and old["status"] == "finished", old
+    assert old["run_id"] == run1 and old["status"] == "paused", old
     assert sorted(done_wells(old["record"])) == ["B2"], old["record"]["done"]
     j = c.get("/runs").json()
-    assert [r["status"] for r in j["runs"]] == ["active", "finished"], j
+    assert [r["status"] for r in j["runs"]] == ["active", "paused"], j
     assert j["runs"][1]["summary"]["notes"] == 0, j
     j = c.get("/runs", params={"protocol_id": demo_id}).json()
     assert len(j["runs"]) == 2, j
     assert c.get("/runs/nope").status_code == 404
-    print("RUN3 ok: finish-first card + archive + list")
+    print("RUN3 ok: start pauses the old run + archive + list")
 
     # RUN4. yesterday's run opens; writes refused, reads follow the view.
     backdate(run1, 1)
@@ -204,16 +202,18 @@ with patch("httpx.AsyncClient", FakeClient):
     print("RUN4 ok: past-run scope gate + scoped reads")
 
     # RUN5. Import/Discard and Import/Save leave the active run alone.
+    # (another original: the demo PDF is already a protocol, so it wouldn't draft)
+    PDF5 = PDF + b"\n% run5\n"
     FakeClient.spark_payload = extraction(RAW)
     c.post("/protocols/import",
-           files={"file": ("protocol_demo.pdf", PDF, "application/pdf")})
+           files={"file": ("protocol_demo.pdf", PDF5, "application/pdf")})
     assert "draft" in api.store.r
     j = c.request("DELETE", "/protocols/draft", json={"session": "run5"}).json()
     assert j["ok"] is True and "draft" not in api.store.r, j
     assert api.store.r["run"]["run_id"] == run2
     FakeClient.spark_payload = extraction(RAW)
     c.post("/protocols/import",
-           files={"file": ("protocol_demo.pdf", PDF, "application/pdf")})
+           files={"file": ("protocol_demo.pdf", PDF5, "application/pdf")})
     j = c.post("/protocols/save", json={"session": "run5"}).json()
     assert j["saved"] is True and api.store.r["run"]["run_id"] == run2, j
     print("RUN5 ok: discard/save don't touch the run")
@@ -305,4 +305,29 @@ with patch("httpx.AsyncClient", FakeClient):
     assert api.store.r["view"]["current"] == {"screen": "run_view", "target": run1}
     print("RUN11 ok: active run opens its record")
 
+# LIB-merge. Duplicates of one original merge into the earliest import; their
+# runs move under it and number by start order; files go to a backup.
+from server import library as lib  # noqa: E402
+from server import library_merge  # noqa: E402
+
+mroot = Path(tempfile.mkdtemp())
+plan_m = {"conditions": {}, "steps": [{"kind": "wait", "text": "wait 5 min", "wells": []}], "backups": []}
+a = lib.save(plan_m, "Same Title", "a.pdf", mroot)
+plan_b = {**plan_m, "backups": ["B2"]}  # a different extraction of the same document
+b = lib.save(plan_b, "Same Title", "a.pdf", mroot)
+assert a["id"] != b["id"]
+(mroot / "runs").mkdir()
+for i, (pid, t) in enumerate([(b["id"], 200), (a["id"], 100), (b["id"], 300)]):
+    (mroot / "runs" / f"run-{i}.json").write_text(json.dumps(
+        {"run_id": f"run-{i}", "protocol_id": pid, "protocol_name": "Same Title", "started_at": t,
+         "ended_at": t + 1, "status": "finished", "summary": {}, "record": {}}))
+assert [len(g) for g in library_merge.groups(mroot)] == [2]
+library_merge.merge(mroot, apply=True)
+docs = lib.all_docs(mroot)
+assert [d["id"] for d in docs] == [a["id"]], docs
+st_m = RecordStore(path=mroot / "record.json")
+labels_m = sorted((r["started_at"], r["label"]) for r in st_m.run_summaries(st_m.all_run_docs()))
+assert labels_m == [(100, "Run 1"), (200, "Run 2"), (300, "Run 3")], labels_m
+assert list(mroot.glob("backup-merge-*/protocols/*.json")), "the dropped protocol is kept in a backup"
+print("LIB-merge ok: one protocol per original, runs renumbered")
 print("ALL PASS")

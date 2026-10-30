@@ -29,7 +29,7 @@ from server.grammar import (
     where_am_i_reply,
 )
 from server.screens import READ_KINDS as SCREEN_READ_KINDS
-from server.screens import PLANNED, SCREENS, canonical, parent_of, result_of, title_of, ui_of
+from server.screens import FLOWS, PLANNED, SCREENS, canonical, parent_of, result_of, title_of, ui_of
 from server.tone import say, section
 from server import library as lib
 from server import protocol as proto
@@ -192,6 +192,8 @@ class RecordStore:
         self.root = self.path.parent
         self._listeners: list = []
         self._lock = threading.Lock()
+        #: App-side lists on screen now (import_file's files, import_photo's pages).
+        self.screen_items: dict[str, list[dict]] = {}
         self._load_or_seed()
 
     # --- persistence / broadcast ---
@@ -293,8 +295,27 @@ class RecordStore:
         v["current"] = new
         v["sheet"] = {"name": "", "target": ""}
 
+    def _flow_gate(self, screen: str, session: dict) -> str:
+        """A flow has one way in (registry `flows`): a step opens only through
+        the step before it, on the way here in this pass through the flow (the
+        view and its back stack); else the earliest step still needed opens.
+        Each new import starts at Mode. Voice, taps and the model all come
+        through here."""
+        v = self.r["view"]
+        path = {v["current"]["screen"], *[x.get("screen") for x in v.get("stack") or []]}
+        for f in FLOWS:
+            steps = f["steps"]
+            k = next((i for i, st in enumerate(steps) if screen in st), None)
+            if not k:
+                continue
+            need = next((i for i in range(k) if not path & set(steps[i])), None)
+            if need is not None:
+                return steps[need][0]
+        return screen
+
     def _navigate_locked(self, res: dict, session: dict, screen: str, target) -> None:
         """Navigate with target validation; the app renders view."""
+        screen = self._flow_gate(screen, session)
         t = target.strip() if isinstance(target, str) else ""
         if screen == "run_view":
             self._open_run(res, session, t or "latest")
@@ -366,15 +387,33 @@ class RecordStore:
         out: dict = {}
         run = self.r.get("run")
         steps = (self.r.get("plan") or {}).get("steps") or []
-        if screen == "home" and run and steps:
-            out = {"run": self.run_label(self.active_run_doc())["display"], "step": self.current_step()}
+        if screen in ("home", "protocol_detail"):
+            # buttons show by state: Continue while a run goes, Review while a draft waits
+            out = {"running": "yes" if run else "", "draft": "yes" if self.r.get("draft") else ""}
+            if screen == "home" and run and steps:
+                out.update({"run": self.run_label(self.active_run_doc())["display"], "step": self.current_step()})
         elif screen == "main" and run and steps:
             i = min(self.r.get("step_index", 0), len(steps) - 1)
             out = {"step": i + 1, "of": len(steps), "title": labels.step_short_title(steps[i])}
         elif screen == "run_view" and (doc := self._viewing_run()):
             lab = self.run_label(doc)
             out = {"name": lab["display"], "state": lab["state"],
-                   "status": "active" if doc.get("status") == "active" else "finished"}
+                   "status": doc.get("status") if doc.get("status") in ("active", "paused") else "finished"}
+        elif screen == "import_file" and "import_file" in self.screen_items:
+            # only once the app said what's there: never "no files" before the list arrives
+            k = len(self.screen_items["import_file"])
+            out = {"files": n_of(k, "file") if k else "", "app": section("persona").get("app_name") or ""}
+        elif screen == "import_photo" and (k := len(self.screen_items.get("import_photo") or [])):
+            out = {"pages": n_of(k, "page")}
+        elif screen == "web_source":
+            sid, _, n = (target or "").partition(":")
+            doc = next((d for d in self.searches() if d["id"] == sid), None)
+            k = int(n) if n.isdigit() else 1
+            src = ((doc or {}).get("sources") or [None] * k)[k - 1] if doc and 0 < k <= len(doc.get("sources") or []) else None
+            if src:
+                out = {"title": src.get("title") or "", "domain": src.get("domain") or "", "url": src.get("url") or ""}
+                if k == 1 and len(doc["sources"]) > 1:
+                    out["second"] = "2"
         elif screen == "web_searches" and (k := len(self.answered_searches())):
             out = {"searches": n_of(k, "web search")}
         elif screen == "web_answer" and (doc := next((d for d in self.searches() if d["id"] == target), None)):
@@ -557,7 +596,7 @@ class RecordStore:
         return lib.save(plan, proto.resolve_name(draft), meta.get("source") or "", self.root,
                         short_title=proto.resolve_short_title(draft), origin=meta.get("origin") or "pdf",
                         source_text=(meta.get("evidence") or {}).get("text") or "",
-                        original_id=meta.get("original_id") or "")
+                        original_id=meta.get("original_id") or "", source=meta.get("content_hash") or "")
 
     def save_draft_to_library(self):
         """Draft -> resolved plan -> library. (ok, doc|reason). Run untouched."""
@@ -576,18 +615,35 @@ class RecordStore:
         plan = proto.build_start_plan(draft["plan"])
         doc = self._save_protocol(draft, plan)
         self.r.pop("draft", None)
-        self._leave_draft()
+        self._leave_draft(saved=doc["id"])
         return True, doc
 
     #: The draft review screens (Start ⑤b-⑤f); leaving the draft leaves them all.
     DRAFT_SCREENS = ("protocol_review", "draft_steps", "draft_step", "draft_page", "plan_check")
 
-    def _leave_draft(self) -> None:
+    def _leave_draft(self, saved: str = "") -> None:
+        """The draft is done (saved, started or dropped): its screens and the
+        import flow that led to it (Mode, the choice, the file list…) all
+        close. A saved protocol is the one on screen (Home, picked); else
+        the screen before the flow shows, with any card."""
         v = self.r["view"]
-        v["stack"] = [x for x in v.get("stack") or [] if x.get("screen") not in self.DRAFT_SCREENS]
-        if v["current"].get("screen") in self.DRAFT_SCREENS:
+        done = set(self.DRAFT_SCREENS) | {sid for f in FLOWS for step in f["steps"] for sid in step}
+        v["stack"] = [x for x in v.get("stack") or [] if x.get("screen") not in done | {"protocol_detail"}]
+        if v["current"].get("screen") in done:
             v["current"] = v["stack"].pop() if v["stack"] else {"screen": "home", "target": ""}
+        if saved:
+            v["stack"].append(dict(v["current"]))  # Back returns to Home
+            v["current"] = {"screen": "protocol_detail", "target": saved}
         v["sheet"] = {"name": "", "target": ""}
+
+    def open_known_protocol(self, protocol_id: str, session: dict) -> str:
+        """An import of an original already in the library: its protocol opens
+        (the import flow closes), ready to start another run."""
+        with self._lock:
+            self._leave_draft(saved=protocol_id)
+            self._commit()
+            doc = lib.get(protocol_id, self.root) or {}
+            return say("already_saved", session, name=labels.protocol_short(doc))
 
     def request_start_run(self, protocol_id: str, session: dict):
         """Start now, or card when an active run must finish first."""
@@ -598,18 +654,17 @@ class RecordStore:
         doc = lib.get(protocol_id, self.root)
         if doc is None:
             return False, {"reason": f"unknown protocol: {protocol_id}"}
-        if not self.r.get("run"):
-            run = self._begin_locked(doc["plan"], doc["id"], doc.get("name"))
-            return True, {"run": run, "protocol_id": doc["id"],
-                          "conditions": len((doc["plan"] or {}).get("conditions") or {}),
-                          "steps": len((doc["plan"] or {}).get("steps") or [])}
-        res = {"messages": [], "cards": [], "ui": [],
-               "info": {"dropped": 0, "drop_reasons": []}}
-        card = self._card(res, "finish_first",
-                          say("finish_first", session, name=doc.get("name") or "it"),
-                          None, {"op": "start_run", "protocol_id": doc["id"]})
-        self._commit()
-        return False, {"card": card}
+        # Start never asks: a run already going is paused (kept as it is,
+        # Continue picks it up), and the new run opens on its Step 1.
+        paused = None
+        if self.r.get("run"):
+            cur = self.active_run_doc()
+            paused = self.run_label(cur)["display"]
+            self._finish_locked("paused")
+        run = self._begin_locked(doc["plan"], doc["id"], doc.get("name"))
+        return True, {"run": run, "protocol_id": doc["id"], "paused": paused,
+                      "conditions": len((doc["plan"] or {}).get("conditions") or {}),
+                      "steps": len((doc["plan"] or {}).get("steps") or [])}
 
     def request_end_run(self, session: dict):
         """End run always asks first. (ok, card|reason)."""
@@ -663,7 +718,7 @@ class RecordStore:
         doc = self._save_protocol(draft, plan)
         review_n = len(draft["review"])
         self.r.pop("draft", None)
-        self._leave_draft()
+        self._leave_draft(saved=doc["id"])
         ok, info = self._request_start_locked(doc["id"], session)
         if ok:
             info["review"] = review_n
@@ -1045,6 +1100,7 @@ class RecordStore:
                      "outcomes": [], "ui": []}
         evidence = build_evidence(origin, evidence_summary(session.get("turns")),
                                   frozenset(), reads_text)
+        step_before, left_before = self.r.get("step_index"), self._left_now()
         for c in calls:
             m0, c0 = len(res["messages"]), len(res["cards"])
             self._apply_call(c, source, origin, route, session, res, force=False,
@@ -1054,6 +1110,10 @@ class RecordStore:
             res["outcomes"].append({"messages": res["messages"][m0:], "cards": res["cards"][c0:]})
         if calls:
             self.record_recent(route, calls)
+        if left_before and self.r.get("step_index") == step_before and self._left_now() == set():
+            self._offer_next_locked(res, session)  # the step's last target just got done: Milo asks
+        for a in res["ui"]:
+            a.setdefault("id", uuid.uuid4().hex[:8])  # the reply and /events carry it; the app runs it once
         res["info"]["ui"] = res["ui"]
         self._commit()
         for a in res["ui"]:
@@ -1456,6 +1516,12 @@ class RecordStore:
                         res["messages"].append(msg)
         elif name == "open_source":
             self._open_web_source(res, args)
+        elif name == "control":
+            self._control(args, res)
+        elif name == "pick":
+            self._pick(args, res)
+        elif name == "resume_run":
+            self._resume_locked(str(args.get("target") or ""), session, res)
         elif name in self.DRAFT_ACTIONS:
             self._draft_action(name, args, session, res)
         else:
@@ -1536,22 +1602,93 @@ class RecordStore:
         res["messages"].append(self.screen_line("web_answer", doc["id"]))
 
     def _open_web_source(self, res: dict, args: dict) -> None:
+        """A source page inside the app (web_source), from an answer or another source."""
         v = self.r["view"]["current"]
-        doc = next((d for d in self.searches() if d["id"] == v.get("target")), None) \
-            if v.get("screen") == "web_answer" else None
+        sid = (v.get("target") or "").split(":")[0] if v.get("screen") in ("web_answer", "web_source") else ""
+        doc = next((d for d in self.searches() if d["id"] == sid), None) if sid else None
         n = int(_num(args.get("n")) or 1)
         if doc is None or not 1 <= n <= len(doc.get("sources") or []):
             res["messages"].append("There's no source to open here." if doc is None
                                    else f"There's no source {n}.")
             return
-        src = doc["sources"][n - 1]
-        res["ui"].append({"action": "web_source", "target": src["url"]})
-        res["messages"].append(f"Opening {src.get('domain') or src.get('title')}.")
+        if v.get("screen") == "web_source":
+            self._pop_view()  # source 2 from source 1: one page deep, Back returns to the answer
+        self._push_view("web_source", f"{doc['id']}:{n}")
+        res["messages"].append(self.screen_line("web_source", f"{doc['id']}:{n}"))
+
+    # --- the screen's own parts: app-side state, said or tapped the same way ---
+
+    def set_items(self, screen: str, items: list[dict]) -> None:
+        """What a list screen shows now (the app's files, the photos taken):
+        the candidates "number 2" and a file's name pick from."""
+        with self._lock:
+            self.screen_items[screen] = [{"id": str(i.get("id")), "name": str(i.get("name") or "")}
+                                         for i in items or []][:200]
+            self._commit()  # the prompt counts them
+
+    def _control(self, args: dict, res: dict) -> None:
+        cur = self.r["view"]["current"]["screen"]
+        sc = SCREENS.get(cur, {})
+        allowed = {(b.get("args") or {}).get("cmd") for b in sc.get("buttons", []) if b.get("action") == "control"}
+        cmd = str(args.get("cmd") or "")
+        if cmd not in allowed | set(sc.get("controls", [])):
+            res["messages"].append("I can't do that here.")
+            return
+        n = _num(args.get("n"))
+        if cmd == "page" and not n:
+            res["messages"].append("Which page?")
+            return
+        res["ui"].append({"action": "control", "target": cmd, **({"n": int(n)} if n else {})})
+
+    def _pick(self, args: dict, res: dict) -> None:
+        cur = self.r["view"]["current"]["screen"]
+        items = self.screen_items.get(cur) or []
+        if not SCREENS.get(cur, {}).get("pick") or not items:
+            res["messages"].append("There's nothing to pick here.")
+            return
+        n, name = _num(args.get("n")), str(args.get("name") or "").strip().lower()
+        if n:
+            hit = items[int(n) - 1] if 1 <= int(n) <= len(items) else None
+            if hit is None:
+                res["messages"].append(f"There are only {len(items)}.")
+                return
+        else:
+            hits = [it for it in items if name and name in it["name"].lower()]
+            if len(hits) != 1:
+                res["messages"].append(labels.which_one([h["name"] for h in hits]) if len(hits) > 1
+                                       else "I couldn't find that one.")
+                return
+            hit = hits[0]
+        res["ui"].append({"action": "pick", "target": hit["id"]})
+        res["messages"].append(f"Opening {hit['name']}.")
 
     # --- Start: draft review (registry actions; same logic as the REST routes) ---
 
     DRAFT_ACTIONS = ("review_draft", "save_draft", "start_run", "discard_draft", "show_step",
                      "open_source_page")
+
+    def _resume_locked(self, run_id: str, session: dict, res: dict) -> None:
+        """A paused run picks up where it stopped; one going now pauses."""
+        doc = runlog.resolve(run_id, self.all_run_docs()) if run_id else self._viewing_run()
+        if doc is None or doc.get("status") != "paused":
+            res["messages"].append("That run isn't paused.")
+            return
+        paused = None
+        if self.r.get("run"):
+            paused = self.run_label(self.active_run_doc())["display"]
+            self._finish_locked("paused")
+        draft, version, epoch = self.r.get("draft"), self.r.get("version", 0), self.r.get("epoch")
+        self.r = json.loads(json.dumps(doc["record"]))
+        self.r["run"] = {**(self.r.get("run") or {}), "run_id": doc["run_id"]}
+        self.r["version"], self.r["epoch"] = version, epoch or uuid.uuid4().hex[:16]
+        self.r["view"] = self._default_view(True)
+        self.r["cards"] = {}
+        if draft is not None:
+            self.r["draft"] = draft
+        runlog.write_run({**doc, "status": "active"}, self.root)
+        lab = self.run_label(self.active_run_doc())
+        line = say("run_resumed", session, run=lab["display"], step=self.current_step())
+        res["messages"].append(line + (" " + say("run_paused", session, run=paused) if paused else ""))
 
     def _draft_action(self, name: str, args: dict, session: dict, res: dict) -> None:
         draft = self.r.get("draft")
@@ -1559,17 +1696,16 @@ class RecordStore:
         run = self._viewing_run()
         if name == "start_run" and run is not None and run.get("status") != "active" \
                 and not (args.get("target") or "").strip():
-            # a finished run can't go on: offer a new run of its protocol (draft or not)
-            lab, short = self.run_label(run), self.run_short(run)
-            self._card(res, "new_run", say("new_run", session, run=lab["display"], name=short), None,
-                       {"op": "new_run", "protocol_id": run.get("protocol_id")},
-                       slots={"run": lab["display"], "name": short})
-            return  # the card's question is the reply
-        if name == "start_run" and not draft:
-            pid = (args.get("target") or "").strip() or (
+            # a finished run can't go on: its protocol's next run starts (draft or not)
+            self._started(*self._request_start_locked(run.get("protocol_id") or "", session), session, res)
+            return
+        named = (args.get("target") or "").strip()
+        if name == "start_run" and (not draft or named or v.get("screen") in ("protocol_detail", "home", "run_view")):
+            # a protocol (named, on screen, or the run's) beats an open draft; the draft starts from its screens
+            pid = named or (
                 v.get("target") if v.get("screen") == "protocol_detail" else (run or {}).get("protocol_id") or "")
             if not pid:
-                res["messages"].append("Which protocol? Open one from Home.")
+                res["messages"].append("Which protocol? Say its name, or pick one on Home.")
                 return
             doc, cands = labels.select_protocol(pid, lib.all_docs(self.root))
             if doc is None:
@@ -1612,8 +1748,11 @@ class RecordStore:
 
     def _started(self, ok: bool, info: dict, session: dict, res: dict) -> None:
         if ok:
-            doc = lib.get(info.get("protocol_id") or "", self.root)
-            res["messages"].append(say("run_started", session, name=labels.protocol_short(doc), steps=info.get("steps")))
+            steps = (self.r.get("plan") or {}).get("steps") or []
+            first = labels.step_say(steps[0]) if steps else ""
+            run = self.run_label(self.active_run_doc())["display"]
+            key = "run_started_paused" if info.get("paused") else "run_started"
+            res["messages"].append(say(key, session, run=run, step=first, paused=info.get("paused") or ""))
         elif info.get("card"):
             res["cards"].append(info["card"])  # its question is the reply
         elif info.get("errors"):
@@ -1991,7 +2130,14 @@ class RecordStore:
                 events.append({"kind": "timer_done", "label": t["label"], "message": msg,
                                "speak": speak_text(msg)})
                 newly_done.append(t)
-        if newly_done:
+        if newly_done and self._left_now() is None:
+            # a step with no target wells (incubate) is done when its timer is
+            card = self._offer_next_locked({"cards": []}, None)
+            if card and events:
+                last = next(e for e in reversed(events) if e["kind"] == "timer_done")
+                last["message"] = f"{last['message']} {card['question']}"
+                last["speak"] = speak_text(last["message"])
+        elif newly_done:
             self._suggest_next_locked(newly_done, now)
         if events:
             self._commit()
@@ -2014,6 +2160,32 @@ class RecordStore:
                    say("timer_suggest", session, minutes=fmt_minutes(m)),
                    None, {"op": "set_timer", "minutes": m, "on_done": None,
                           "wells": wells or None})
+
+    def _left_now(self) -> set | None:
+        """The current step's targets not done or excluded; None when the step
+        has no target wells (incubate, wait)."""
+        steps = (self.r.get("plan") or {}).get("steps") or []
+        idx = self.r.get("step_index", 0)
+        if not self.r.get("run") or idx >= len(steps):
+            return None
+        targets = set((steps[idx] or {}).get("wells") or [])
+        if not targets:
+            return None
+        return targets - runlog.done_wells(self.r, idx + 1) - set(self.r.get("excluded") or {})
+
+    def _offer_next_locked(self, res: dict, session: dict | None) -> dict | None:
+        """The step is done: Milo asks to move on ("Step 2 done. Move to step
+        3?"), or on the last step to finish the run. One card per question."""
+        steps = (self.r.get("plan") or {}).get("steps") or []
+        idx = self.r.get("step_index", 0)
+        if not self.r.get("run") or not steps:
+            return None
+        if idx >= len(steps) - 1:
+            return self._card(res, "end_run", say("all_steps_done", session), None,
+                              {"op": "end_run", "run_id": (self.r.get("run") or {}).get("run_id")})
+        return self._card(res, "next_step", say("step_done", session, done=idx + 1, step=idx + 2),
+                          steps[idx + 1].get("text") if isinstance(steps[idx + 1], dict) else None,
+                          {"op": "next_step", "target": idx + 2})
 
     def _suggest_next_locked(self, done_timers: list[dict], now: float):
         """Timer-expiry step suggestion; merges into the same-key step card."""

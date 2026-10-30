@@ -128,3 +128,34 @@ class LiveConversation:
         if now - (self.ref_at or self.opened_at) >= self.window_s:
             return "window"
         return None
+
+
+class LiveSender:
+    """The one way out to the app's live socket (/voice/live). Everything
+    (ready, partials, stages, turns, pings, closed) goes through send();
+    after the socket closes, or the app is gone, sends are dropped instead of
+    raising "websocket.send after websocket.close"."""
+
+    def __init__(self, ws):
+        self.ws = ws
+        self.closed = False
+
+    async def send(self, msg: dict) -> bool:
+        if self.closed:
+            return False
+        try:
+            await self.ws.send_json(msg)
+            return True
+        except Exception as e:  # disconnected, or closed under us
+            self.closed = True
+            print(f"live send dropped ({type(e).__name__}): {msg.get('type')}", flush=True)
+            return False
+
+    async def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            await self.ws.close()
+        except Exception:
+            pass  # the app already left

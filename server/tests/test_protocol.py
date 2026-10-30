@@ -339,11 +339,7 @@ with patch("httpx.AsyncClient", FakeClient):
     c.patch("/protocols/draft", json={"path": "conditions.control.replicates", "value": 5})
     r = c.post("/protocols/start", json={"session": "p4"})
     j = r.json()
-    assert j["started"] is False and j["card"], j
-    assert j["card"]["kind"] == "finish_first", j["card"]
-    assert j["protocol_name"] == "Methods", j
-    r = c.post("/confirm", json={"card_id": j["card"]["id"], "ok": True, "session": "p4"})
-    assert "Run started" in r.json()["message"], r.json()
+    assert j["started"] is True and not j.get("card"), j
     runs = list((Path(api.store.path).parent / "runs").glob("run-*.json"))
     assert len(runs) == 1, runs
     archived = json.loads(runs[0].read_text())
@@ -539,4 +535,35 @@ with patch("httpx.AsyncClient", ScriptClient):
     assert ok and doc["origin"] == "photo" and S5 in doc["source_text"], doc
     assert c.post("/protocols/import", files={"file": ("x.gif", b"g", "image/gif")}).status_code == 400
 print("P16 ok: text and photo imports share one path, original = text / transcript")
+# P17. Import is idempotent: the same content joins the extraction in flight
+# (one Spark call for two requests), and later reuses the open draft.
+import asyncio  # noqa: E402
+
+calls.clear()
+with patch("httpx.AsyncClient", ScriptClient):
+    api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+    ScriptClient.queue = [extraction(good)]
+
+    class Up:
+        def __init__(self, name, raw):
+            self.filename, self._raw = name, raw
+
+        async def read(self):
+            await asyncio.sleep(0.05)
+            return self._raw
+
+    async def twice():
+        return await asyncio.gather(*(api.protocol_import(file=[], text=DOC, filename="", original_id="o",
+                                                          session="p17") for _ in range(2)))
+    a, b = asyncio.run(twice())
+    assert len([u for u, _ in calls if u.endswith("/responses")]) == 1, calls
+    assert a["draft"] is b["draft"] or a["draft"] == b["draft"], "both get the one extraction"
+    n = len(calls)
+    again = asyncio.run(api.protocol_import(file=[], text=DOC, filename="", original_id="o", session="p17"))
+    assert len(calls) == n and again["draft"]["meta"]["content_hash"] == a["draft"]["meta"]["content_hash"]
+    # reused, it still lands on Draft ready (iPad: the file list stayed put)
+    api.store.r["view"]["current"] = {"screen": "import_file", "target": ""}
+    asyncio.run(api.protocol_import(file=[], text=DOC, filename="", original_id="o", session="p17"))
+    assert api.store.r["view"]["current"]["screen"] == "protocol_review", api.store.r["view"]
+print("P17 ok: one extraction per content")
 print("ALL PASS")

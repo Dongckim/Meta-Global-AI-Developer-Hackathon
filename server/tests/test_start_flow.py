@@ -94,13 +94,15 @@ print("SF2 ok: prompts from the draft, buttons said == tapped")
 # SF3. Start run: the draft goes to the library, the run starts on the bench.
 j = act("start_run")
 assert api.store.r.get("draft") is None and api.store.r["run"]["protocol_name"] == "Media test", j
-assert here()["screen"] == "main" and j["reply"] == "Media test started. Step 1 of 3.", j
+assert here()["screen"] == "main" and j["reply"] == "Run 1 started. Step 1: add 100 µL media to B2–B6.", j
+assert j["speak"] == "Run 1 started. Step 1: add 100 microliters media to B 2 to B 6.", j  # said as words
 print("SF3 ok: start_run")
 
 # SF4. Later: saved to the library, the draft screens are left for Home.
 api.store = fresh()
 j = said("later")
-assert api.store.r.get("draft") is None and here()["screen"] == "home", (here(), j)
+assert api.store.r.get("draft") is None and here()["screen"] == "protocol_detail", (here(), j)
+assert next(x for x in api.store.protocol_summaries() if x["id"] == here()["target"])["name"] == "Media test"
 assert "Media test" in j["reply"], j
 print("SF4 ok: save_draft")
 
@@ -112,43 +114,49 @@ j = act("show_step", step=1)
 assert j["reply"] == "No draft open — import a protocol from Home.", j
 print("SF5 ok: discard_draft")
 
-# SF6. With a run going, Start asks first (the finish-first card).
+# SF6. With a run going, Start doesn't ask: that run pauses (kept as it is)
+# and the new one opens on Step 1; the reply says both.
 api.store = fresh(run=True)
+old = api.store.r["run"]["run_id"]
+api.store.r["step_index"] = 1
 j = act("start_run")
-assert j["cards"] and api.store.r["run"]["protocol_name"] == "Demo protocol", j
-assert j["reply"].count(j["cards"][0]["question"]) == 1, j  # asked once
-print("SF6 ok: start_run with an active run asks first")
+assert not j["cards"] and api.store.r["run"]["protocol_name"] == "Media test" and here()["screen"] == "main", j
+assert j["reply"] == "Run 1 started, Run 1 is paused. Step 1: add 100 µL media to B2–B6.", j
+was = next(r for r in api.store.run_summaries(api.store.all_run_docs()) if r["run_id"] == old)
+assert (was["status"], was["state"]) == ("paused", "Paused at step 2"), was
+print("SF6 ok: start_run pauses the run going, no card")
 
 # SF7. A finished run's Start run (shown greyed): tap or words, no model ->
-# "Run 1 is finished. Start a new run of <protocol>?"; yes starts one.
-api.store = fresh()
-act("start_run")
-old = api.store.r["run"]["run_id"]
+# the protocol's next run starts at once.
+from server.screens import buttons_for  # noqa: E402
+
+new = api.store.r["run"]["run_id"]
 api.store._finish_locked("finished")
-j = act("open", target=f"run:{old}")
+j = act("open", target=f"run:{new}")
 v = api.store.snapshot()["view"]
 assert (v["current"]["screen"], v["slots"]["status"]) == ("run_view", "finished"), v
-from server.screens import buttons_for  # noqa: E402
-bs = buttons_for("run_view", api.store.view_slots("run_view", old))
+bs = buttons_for("run_view", api.store.view_slots("run_view", new))
 assert [(b["say"], b.get("look")) for b in bs] == [("Start run", "disabled"), ("Back", None)], bs
 j = said("start run")
-assert j["route"] == "grammar" and j["reply"] == "Run 1 is finished. Start a new run of Media test?", j
-card = j["cards"][0]
-assert (card["title"], card["detail"]) == ("Run 1 is finished", "Start a new run of Media test?"), card
-j = act("answer_card", card_id=card["id"], ok=True)
-assert api.store.r["run"]["run_id"] != old and api.store.r["run"]["protocol_name"] == "Media test", j
-print("SF7 ok: a finished run offers a new run")
+assert j["route"] == "grammar" and not j["cards"] and api.store.r["run"]["run_id"] != new, j
+assert j["reply"].startswith("Run 2 started. Step 1: "), j
+print("SF7 ok: a finished run's Start run starts the next one")
 
-# SF8. With a run going, yes to that card still asks to finish it first.
-api.store.r["view"]["current"] = {"screen": "run_view", "target": old}
-j = said("start run")
-j = act("answer_card", card_id=j["cards"][0]["id"], ok=True)
-assert j["cards"] and j["cards"][0]["kind"] == "finish_first", j
-print("SF8 ok: the active run still asks first")
+# SF8. A paused run continues where it stopped; the run going pauses.
+api.store.r["view"]["current"] = {"screen": "home", "target": ""}
+j = act("open", target=f"run:{old}")
+bs = buttons_for("run_view", api.store.view_slots("run_view", old))
+assert [b["say"] for b in bs] == ["Continue", "Back"] and bs[0]["action"] == "resume_run", bs
+going = api.store.r["run"]["run_id"]
+j = said("continue")
+assert api.store.r["run"]["run_id"] == old and api.store.r["step_index"] == 1 and here()["screen"] == "main", j
+assert j["reply"] == "Run 1 picks up at step 2. Run 2 is paused.", j
+assert next(r for r in api.store.run_summaries(api.store.all_run_docs()) if r["run_id"] == going)["status"] == "paused"
+print("SF8 ok: paused runs continue")
 
 # SF9. The active run opens its record too, with Continue / Back.
 api.store.r["view"]["current"] = {"screen": "home", "target": ""}
-act("open", target="run:latest")
+act("open", target=f"run:{api.store.r['run']['run_id']}")
 cur = api.store.r["view"]["current"]
 assert cur == {"screen": "run_view", "target": api.store.r["run"]["run_id"]}, cur
 assert [b["say"] for b in buttons_for("run_view", api.store.view_slots("run_view", cur["target"]))] == \
@@ -156,4 +164,102 @@ assert [b["say"] for b in buttons_for("run_view", api.store.view_slots("run_view
 said("continue")
 assert api.store.r["view"]["current"]["screen"] == "main"
 print("SF9 ok: active run -> Continue / Back")
+# SF10. The import flow has one way in (registry `flows`): Mode, then the
+# choice, then files / camera / text / the iOS picker. Asked for a later
+# step, the earliest one still needed opens; Mode is remembered once passed.
+api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+api.store.start_demo_run()
+api._SESSIONS.clear()
+here = lambda: api.store.r["view"]["current"]["screen"]  # noqa: E731
+for ask in ({"id": "navigate", "args": {"screen": "import_file"}}, {"id": "open", "args": {"target": "importer"}},
+            {"id": "navigate", "args": {"screen": "import_choice"}}):
+    api.store.r["view"]["current"] = {"screen": "home", "target": ""}
+    j = c.post("/input", json={"action": ask, "session": "sf"}).json()
+    assert here() == "mode" and j["reply"] == "Full or Private?" and not j.get("ui"), (ask, j)
+said("full")
+assert here() == "import_choice", here()
+said("file")
+assert here() == "import_file", here()
+said("back")
+assert here() == "import_choice", "back inside the flow keeps the way in"
+said("photo")
+assert here() == "import_photo", here()
+api.store.r["view"] = {**api.store.r["view"], "current": {"screen": "home", "target": ""}, "stack": []}
+j = c.post("/input", json={"action": {"id": "navigate", "args": {"screen": "import_photo"}}, "session": "sf"}).json()
+assert here() == "mode", "a new import starts at Mode again (iPad: an old Full skipped it)"
+print("SF10 ok: the import flow's one way in")
+
+# SF11. A ui action carries one id on the reply and on /events: the app runs it once.
+events: list = []
+api.store.subscribe(events.append)
+api.store.r["view"]["current"] = {"screen": "main", "target": ""}
+j = c.post("/input", json={"action": {"id": "open", "args": {"target": "C5"}}, "session": "sf"}).json()
+sse = [e for e in events if e.get("kind") == "ui"]
+assert j["ui"] and [a["id"] for a in j["ui"]] == [e["id"] for e in sse], (j["ui"], sse)
+print("SF11 ok: one id per ui action")
+# SF12. The app checks its event stream by the reply's record_version: every
+# reply's version is a snapshot /events delivered (iPad: File tapped 12 times,
+# the view changed each time, the app never rendered: a dead stream).
+events.clear()
+api.store.r["view"]["current"] = {"screen": "import_choice", "target": ""}
+api.store.r["view"]["stack"] = [{"screen": "mode", "target": ""}]
+for _ in range(3):
+    j = c.post("/input", json={"text": "file", "session": "sf"}).json()
+    snaps = [e for e in events if e.get("kind") == "snapshot"]
+    assert snaps and snaps[-1]["version"] == j["record_version"], ([e["version"] for e in snaps], j["record_version"])
+    assert snaps[-1]["view"]["current"]["screen"] == "import_file", snaps[-1]["view"]
+    c.post("/input", json={"text": "back", "session": "sf"})
+print("SF12 ok: every reply's version arrives as a snapshot")
+# SF13. Start run after an import (Home -> Mode -> choice -> files -> draft
+# screens) closes the whole flow and opens the new run's bench at once, the
+# run that was going paused.
+api.store = fresh(run=True)
+api.store.r["view"] = {**api.store.r["view"], "current": {"screen": "plan_check", "target": ""},
+                       "stack": [{"screen": "home", "target": ""}, {"screen": "mode", "target": ""},
+                                 {"screen": "import_choice", "target": ""}, {"screen": "import_file", "target": ""},
+                                 {"screen": "protocol_review", "target": ""}, {"screen": "draft_steps", "target": ""}]}
+j = act("start_run")
+assert not j["cards"] and api.store.r["run"]["protocol_name"] == "Media test", j
+assert api.store.r["view"]["current"]["screen"] == "main" and api.store.r["view"]["stack"] == [], api.store.r["view"]
+print("SF13 ok: start run closes the import flow")
+
+# SF14. Again by voice, no model: a saved protocol picked on Home -> Start
+# run is there and on; "run Media test again" / "start a new run of the media
+# one" add the next run under it; a draft waiting shows Review on Home.
+from server.screens import buttons_for  # noqa: E402
+
+api.store = fresh()
+said("later")  # saved: Media test is the protocol on screen
+cur = lambda: api.store.r["view"]["current"]  # noqa: E731
+pid = cur()["target"]
+assert cur()["screen"] == "protocol_detail"
+says = [b["say"] for b in buttons_for("protocol_detail", api.store.view_slots("protocol_detail", pid))]
+assert says == ["Start run", "Import protocol", "Searches"], says
+j = said("start run")
+assert api.store.r["run"]["protocol_id"] == pid and cur()["screen"] == "main", j
+api.store._finish_locked("finished")
+api.store.r["view"] = {**api.store.r["view"], "current": {"screen": "home", "target": ""}, "stack": []}
+for phrase in ("run Media test again", "Start a new run of the media one"):
+    j = said(phrase)
+    assert j["route"] == "grammar" and api.store.r["run"]["protocol_id"] == pid, (phrase, j)
+    api.store._finish_locked("finished")
+    api.store.r["view"] = {**api.store.r["view"], "current": {"screen": "home", "target": ""}, "stack": []}
+nums = [r["label"] for r in api.store.run_summaries(api.store.all_run_docs()) if r["protocol_id"] == pid]
+assert nums == ["Run 3", "Run 2", "Run 1"], nums
+j = said("start a run")  # Home, nothing picked: which one
+assert "Which protocol" in j["reply"] and not api.store.r.get("run"), j
+api.store.save_draft(proto.build_draft(RAW, proto.evidence_from_text(DOC + " v2"), "media2.pdf"))
+api.store.r["view"] = {**api.store.r["view"], "current": {"screen": "home", "target": ""}, "stack": []}
+says = [b["say"] for b in buttons_for("home", api.store.view_slots("home", ""))]
+assert "Review" in says, says
+j = said("review")
+assert cur()["screen"] == "draft_steps", j
+print("SF14 ok: start again by voice, runs stack under one protocol, Review on Home")
+
+# SF15. The same pasted text, spaced differently, is the same original.
+from server import library as lib  # noqa: E402
+
+assert lib.source_hash([], "Add 100 uL\n\n media.  ") == lib.source_hash([], "Add 100 uL media.")
+assert lib.source_hash([b"a"]) != lib.source_hash([b"b"])
+print("SF15 ok: same original, same hash")
 print("ALL PASS")

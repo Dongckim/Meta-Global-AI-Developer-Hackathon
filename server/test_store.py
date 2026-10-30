@@ -260,9 +260,11 @@ class StoreTest(unittest.TestCase):
         self.assertTrue(r["messages"][0].startswith("Step 3 of 5"))
         r = self.apply([T("show", view="plate", target="C")])
         self.assertEqual(r["messages"], ["Here's the bench."])
+        # the import flow has one way in: Mode first (registry `flows`)
         r = self.apply([T("open", target="importer")])
-        self.assertEqual(r["ui"], [{"action": "import"}])
-        self.assertEqual(r["messages"], ["Opening the importer."])
+        self.assertEqual(r["ui"], [])
+        self.assertEqual(r["messages"], ["Full or Private?"])
+        self.assertEqual(self.s.r["view"]["current"]["screen"], "mode")
 
     def test_redo_needs_empty_well(self):
         self.s.r["done"] = ["C9"]
@@ -407,7 +409,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(r["messages"], ["Opened C5."])
         self.assertEqual(self.s.r["view"]["sheet"],
                          {"name": "well_card", "target": "C5"})
-        self.assertEqual(r["ui"], [{"action": "flash", "wells": ["C5"]}])
+        self.assertEqual([{k: v for k, v in a.items() if k != "id"} for a in r["ui"]], [{"action": "flash", "wells": ["C5"]}])
         r = self.apply([T("back")])
         self.assertEqual(r["messages"], ["Closed."])
         self.assertEqual(self.s.r["view"]["sheet"], {"name": "", "target": ""})
