@@ -436,6 +436,7 @@ struct ChoiceCard: View {
     var icon: String
     var button: ScreenButton
     var line: String
+    var detail = ""
     var u: CGFloat
     var perform: (ScreenButton) -> Void
 
@@ -448,8 +449,12 @@ struct ChoiceCard: View {
                  + Text(button.say).font(Theme.ui(64 * u, weight: .semibold)).foregroundStyle(Theme.text1))
                     .tracking(-1.2 * u).lineLimit(1).minimumScaleFactor(0.6)
                     .padding(.top, 70 * u)
-                Text(line).font(Theme.ui(28 * u)).foregroundStyle(Theme.text2).lineLimit(1)
-                    .minimumScaleFactor(0.6).padding(.top, 22 * u)
+                Text(line).font(Theme.ui(28 * u)).foregroundStyle(Theme.text2).lineLimit(2)
+                    .multilineTextAlignment(.center).minimumScaleFactor(0.6).padding(.top, 22 * u)
+                if !detail.isEmpty {
+                    Text(detail).font(Theme.ui(22 * u)).foregroundStyle(Theme.text3).lineLimit(2)
+                        .multilineTextAlignment(.center).minimumScaleFactor(0.6).padding(.top, 10 * u)
+                }
             }
             .padding(.horizontal, 24 * u)
             .frame(maxWidth: .infinity, minHeight: 345 * u)
@@ -478,7 +483,7 @@ struct ModeScreen: View {
             HStack(spacing: 36 * u) {
                 ForEach(Array(buttons.enumerated()), id: \.offset) { i, b in
                     ChoiceCard(icon: b.say.lowercased() == "private" ? "lock.fill" : "cloud.fill", button: b,
-                               line: mode(b)?.line ?? "", u: u, perform: perform)
+                               line: mode(b)?.line ?? "", detail: mode(b)?.detail ?? "", u: u, perform: perform)
                         .enter(i == 0 ? .left : .right, i + 1, u: u)
                 }
             }

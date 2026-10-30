@@ -65,6 +65,7 @@ struct Persona: Decodable, Equatable {
     struct Mode: Decodable, Equatable {
         var label: String
         var line: String
+        var detail = ""
     }
 
     /// full / private (missing file: empty, logged).
@@ -79,7 +80,12 @@ struct Persona: Decodable, Equatable {
             return [:]
         }
         return m.compactMapValues { v in
-            (v as? [String: String]).flatMap { d in d["label"].map { Mode(label: $0, line: d["line"] ?? "") } }
+            // an entry also holds its confirm_* flags, so read the strings one by one
+            (v as? [String: Any]).flatMap { d in
+                (d["label"] as? String).map {
+                    Mode(label: $0, line: d["line"] as? String ?? "", detail: d["detail"] as? String ?? "")
+                }
+            }
         }
     }()
 

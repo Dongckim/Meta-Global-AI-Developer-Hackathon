@@ -23,7 +23,7 @@ Status: **done** = matches ver 2 · **old** = exists in the pre-ver-2 style ·
 | Home | ⓪ Home · Protocols | 37:12877 | done | 2 |
 | Home | ⓪b Home · Run record | 37:12931 | done (Code tab: frame) | 2 |
 | Home | ⓪c Home · Web searches | 37:13104 | done | 2 |
-| Start | ⑤a Mode | 37:13141 | done (Private: frame) | 3 |
+| Start | ⑤a Mode | 37:13141 | done | 3 |
 | Start | ⑤b Import protocol | 37:13167 | done (Text, File, Photo) | 3 |
 | Start | ⑤b Draft ready | 37:13203 | done | 3 |
 | Start | ⑤c Review steps | 37:13230 | done | 3 |

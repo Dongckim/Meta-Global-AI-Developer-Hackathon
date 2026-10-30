@@ -31,7 +31,8 @@ as-run protocol, and code (not the model) proves the robot code matches it.
 
 ⑨a Export and ⑨c Where to stay `planned`. ⑨c's Robot card will read
 "Save for Opentrons App" (a file save, never a push). Private runs skip hand
-off: the run ends as before and `make_robot` says it is off in Private.
+off: the run ends as before and `make_robot` says it is off in Private. Private
+puts only voice commands on Glimmer; this loop is always Spark.
 
 Hand off works on the finished run doc (finishing archives the record), so
 its state lives on that doc (`handoff`), and the snapshot serves it while a

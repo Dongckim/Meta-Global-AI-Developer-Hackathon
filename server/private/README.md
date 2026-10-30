@@ -1,8 +1,20 @@
 # Muse Glimmer on Modal
 
-Private mode's model: llama.cpp with DFlash and `--reasoning-budget 0`, behind
-the guard in `glimmer_modal.py`. There is no key, so the URL is held by the
-guard, `max_containers=1` and the Modal workspace budget.
+Private mode's model: Meta's own GGUFs (`meta-models/Muse-Glimmer-30B-GGUF`,
+revision pinned in `glimmer_modal.py`) on llama.cpp, with the DFlash drafter and
+`--reasoning-budget 0`, behind the guard in `glimmer_modal.py`. There is no key,
+so the URL is held by the guard, `max_containers=1` and the Modal workspace
+budget.
+
+What runs here: voice commands only (`_call_spark` through
+`server/private_chat.py`), transcribed on the iPad. Imports, hand off, photo
+questions and search summaries stay on Spark; search, photos and imports ask
+first. Say it as "not sent to the Meta API, processed on the Meta model we run",
+never "on device". Choose Private on the Mode screen: the choice is saved in
+`run_mode.txt` next to the record and survives a restart.
+
+Changing the weights: edit the constants and `pip_voice.json` `private.files`,
+then `.venv/bin/modal run server/private/glimmer_modal.py::download` and deploy.
 
 **Do not redeploy during a demo or filming.** A request that lands while the
 container is replaced can fail with a 500.

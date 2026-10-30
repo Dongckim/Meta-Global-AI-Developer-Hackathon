@@ -315,9 +315,9 @@
     ]
   },
   "modes": {
-    "_note": "Run modes: header label and the line under each choice on the Mode screen.",
+    "_note": "Run modes: header label, the line under each choice on the Mode screen, an optional smaller detail under it.",
     "full": {"label": "Full", "line": "Cloud model · fastest answers", "confirm_search": false, "confirm_photo": false, "confirm_import": false},
-    "private": {"label": "Private", "line": "Private model · asks before anything leaves", "confirm_search": true, "confirm_photo": true, "confirm_import": true}
+    "private": {"label": "Private", "line": "Voice commands run on our own Meta model (Glimmer).", "detail": "Search, photos and imports ask before using the Meta API.", "confirm_search": true, "confirm_photo": true, "confirm_import": true}
   },
   "also_ask": [
     "Should I also {what}?",
