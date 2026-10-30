@@ -230,8 +230,10 @@ final class GlassesDAT {
     private var liveTokens = ListenerTokenBag()
     private var livePhoto: OnceBox<Data?>?
 
-    /// Starts the glasses' camera stream (glasses only); frames show as the live view.
-    func startLive() {
+    /// Starts the glasses' camera stream (glasses only); frames show as the
+    /// live view. High first (labels read from farther); if no frame comes in
+    /// 6 s (Bluetooth too busy), it restarts at medium.
+    func startLive(resolution: StreamingResolution = .high) {
         guard liveSession == nil else { return }
         liveFrame = nil
         guard let id = devices.first(where: { wearables.deviceForIdentifier($0)?.linkState == .connected }) else {
@@ -258,10 +260,9 @@ final class GlassesDAT {
                     if st == .started { break }
                     if st == .stopped { throw PhotoFailure.notReady("session stopped") }
                 }
-                // medium (decided after the iPad test); the sample drops to low while HFP shares the Bluetooth
                 let hfp = AVAudioSession.sharedInstance().currentRoute.inputs.contains { $0.portType == .bluetoothHFP }
-                let config = StreamConfiguration(videoCodec: .raw, resolution: .medium, frameRate: 15)
-                Log.dat.info("[look] live: stream medium / 15 fps (HFP \(hfp ? "on" : "off", privacy: .public))")
+                let config = StreamConfiguration(videoCodec: .raw, resolution: resolution, frameRate: 15)
+                Log.dat.info("[look] live: stream \(String(describing: resolution), privacy: .public) / 15 fps (HFP \(hfp ? "on" : "off", privacy: .public))")
                 guard liveSession === session, let camera = try session.addCamera(config: config) else {
                     throw PhotoFailure.notReady("no camera")
                 }
@@ -282,6 +283,14 @@ final class GlassesDAT {
                     Task { @MainActor in self?.livePhoto?.set(photo.data) }
                 }.store(in: liveTokens)
                 stream.start()
+                if resolution != .medium {
+                    try? await Task.sleep(for: .seconds(6))
+                    if liveSession === session, liveFrame == nil {
+                        Log.dat.info("[look] live: no frame at \(String(describing: resolution), privacy: .public) in 6 s -> medium")
+                        stopLive()
+                        startLive(resolution: .medium)
+                    }
+                }
             } catch {
                 Log.dat.error("[look] live failed: \(String(describing: error), privacy: .public)")
                 stopLive()

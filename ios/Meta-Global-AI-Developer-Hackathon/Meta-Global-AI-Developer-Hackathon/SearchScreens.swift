@@ -95,12 +95,12 @@ struct WebAnswerScreen: View {
         ZStack {
             Theme.sub
             if item.status != "ok", let shot {
-                // whole, like the live view: the photo's frame and the stream's differ, a fill crops them differently
-                Image(uiImage: shot).resizable().scaledToFit()
+                Image(uiImage: shot).resizable().scaledToFill()  // already the slot's part
             } else if item.status == "looking" {
                 Group {
                     if let live {
-                        Image(uiImage: live).resizable().scaledToFit()  // what the glasses see, whole
+                        // the middle of what the glasses see, closer, so a label reads from farther
+                        Image(uiImage: live).resizable().scaledToFill().scaleEffect(L.photoZoom)
                     } else {
                         VStack(spacing: 14 * u) {
                             Image(systemName: "eyeglasses").font(Theme.ui(56 * u)).foregroundStyle(Theme.text4)
@@ -327,5 +327,18 @@ struct WebSearchesScreen: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+extension UIImage {
+    /// What the photo slot shows of a frame (fill a square, then zoom from
+    /// the middle): the middle square, 1/zoom of the short side.
+    func slotPart(zoom: CGFloat) -> UIImage {
+        let side = (min(size.width, size.height) / zoom).rounded()
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
+            draw(at: CGPoint(x: (side - size.width) / 2, y: (side - size.height) / 2))
+        }
     }
 }

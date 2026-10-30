@@ -261,7 +261,8 @@ struct ContentView: View {
                                   onConnectServer: connectServer,
                                   refreshGen: syncRefreshGen,
                                   onSkip: leaveSync,
-                                  onComplete: closeSync)
+                                  onComplete: closeSync,
+                                  autoClose: syncFromGate)
             case .main:
                 mainBody
                     // the app floor under every part of Main, edge to edge: no black shows through
@@ -286,7 +287,7 @@ struct ContentView: View {
         }
 
         .onAppear {
-            Boot.mark("first frame (root appear) serverAllowed=\(canReachServer)")
+            Boot.mark("first frame (root appear) serverAllowed=\(canReachServer) server=\(Config.baseURL.absoluteString)")
             if canReachServer { connect(); loadLists() }
         }
         .onChange(of: top.front) { old, new in
@@ -349,8 +350,10 @@ struct ContentView: View {
     private func startDevices() {
         guard !devicesStarted else { return }
         devicesStarted = true
+        // after the next screen's entrance (sync: its whole list), so it runs smooth
+        let wait = Theme.Motion.screen + (top.front == .sync ? GlassesSyncScreen.entrance : 0)
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(Theme.Motion.screen))
+            try? await Task.sleep(for: .seconds(wait))
             Boot.time("audio route") { refreshRoute() }
             Boot.time("voice activate (wake listener start is async)") { voice.activate() }
             Boot.time("glasses camera permission check") { dat?.checkCameraPermission() }
@@ -940,19 +943,28 @@ struct ContentView: View {
             _ = uiFail(Persona.line("look_no_glasses"))
             return
         }
+        // what the photo slot shows (the middle of the stream, zoomed) is what's sent:
+        // the glasses photo has another aspect and field of view, so it's only the fallback
         let jpeg: Data
-        do {
-            jpeg = try await dat.takePhoto()
-        } catch {
-            Log.view.error("[look] no photo: \(String(describing: error), privacy: .public)")
-            if lookToken[id] == token { _ = uiFail(Persona.line("look_no_photo")) }
-            return
+        if let part = dat.liveFrame?.slotPart(zoom: Theme.Layout.photoZoom),
+           let data = part.jpegData(compressionQuality: 0.92) {
+            jpeg = data
+        } else {
+            do {
+                jpeg = try await dat.takePhoto()
+            } catch {
+                Log.view.error("[look] no photo: \(String(describing: error), privacy: .public)")
+                if lookToken[id] == token { _ = uiFail(Persona.line("look_no_photo")) }
+                return
+            }
+            guard lookToken[id] == token else {
+                Log.view.info("[look] photo dropped: retaken while the glasses took it")
+                return
+            }
         }
-        guard lookToken[id] == token else {
-            Log.view.info("[look] photo dropped: retaken while the glasses took it")
-            return
-        }
-        lookShots[id] = UIImage(data: jpeg)
+        let shot = UIImage(data: jpeg)
+        Log.view.info("[look] sent \(shot.map { "\($0.size)" } ?? "none", privacy: .public)")
+        lookShots[id] = shot
         do {
             let r = try await PipClient.look(searchId: id, attempt: attempt, jpeg: jpeg)
             guard lookToken[id] == token, r.stale != true else {

@@ -4,6 +4,7 @@ import Foundation
 import Speech
 import MWDATCore
 import Testing
+import UIKit
 @testable import Meta_Global_AI_Developer_Hackathon
 
 struct OrbStyleTests {
@@ -431,5 +432,22 @@ struct TimerChipTests {
         let long = TimerEntry(id: "d", label: "x", minutes: 90, started: now, chip: "Incubate plate")
         #expect(TimerChip.summary([long], now: now)?.left == "1:30:00")  // past an hour: h:mm:ss
         #expect(TimerChip.summary([ts[2]], now: now) == nil) // finished timers don't show
+    }
+}
+
+struct SlotPartTests {
+    /// The sent photo is the slot's view: the middle square, 1/zoom of the short side.
+    @Test func middleSquareOverZoom() {
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 1
+        let frame = UIGraphicsImageRenderer(size: CGSize(width: 720, height: 1280), format: fmt).image { ctx in
+            UIColor.red.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 720, height: 1280))
+            UIColor.green.setFill(); ctx.fill(CGRect(x: 350, y: 630, width: 20, height: 20))  // the middle
+        }
+        let part = frame.slotPart(zoom: 1.8)
+        #expect(part.size == CGSize(width: 400, height: 400))
+        let px = part.cgImage!.dataProvider!.data! as Data
+        let mid = (200 * part.cgImage!.bytesPerRow) + 200 * 4
+        #expect(px[mid + 1] > 200 && px[1] < 50)  // green (byte 1 in RGBA or BGRA) in the middle, not the corner
     }
 }

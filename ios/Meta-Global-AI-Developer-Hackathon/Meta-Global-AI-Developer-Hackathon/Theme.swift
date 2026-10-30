@@ -426,6 +426,9 @@ enum Theme {
         static let widePadV: CGFloat = 60
         static let widePhotoPad: CGFloat = 48
         static let photoSlot: CGFloat = 300
+        /// The photo slot shows the middle of the glasses' view this much
+        /// closer (display only; the server gets the whole photo).
+        static let photoZoom: CGFloat = 1.8
         static let photoRadius: CGFloat = 32
         /// List rows (protocol cards 125 tall, 16 apart).
         static let listRow: CGFloat = 125
