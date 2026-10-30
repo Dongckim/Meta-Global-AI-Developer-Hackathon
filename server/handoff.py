@@ -31,15 +31,28 @@ MAX_ROUNDS = 12
 
 PLATE = "corning_96_wellplate_360ul_flat"
 RESERVOIR = "nest_12_reservoir_15ml"
-DECK = {"robot": "Flex", "api_level": "2.20",
-        "pipette": {"name": "flex_1channel_1000", "mount": "left"},
-        "tips": {"load_name": "opentrons_flex_96_tiprack_1000ul", "slot": "C1"},
-        "reservoir": {"load_name": RESERVOIR, "slot": "D1"},
+#: The highest apiLevel the simulator (opentrons 10.1.0) supports; liquids
+#: (Labware.load_liquid, load_empty) need 2.22+.
+API_LEVEL = "2.31"
+#: Pipette rule (code, not the model): up to 50 µL the 50, else the 1000.
+P50_MAX_UL = 50
+DECK = {"robot": "Flex", "api_level": API_LEVEL,
+        "pipettes": {"p50": {"name": "flex_1channel_50", "mount": "left", "max_ul": 50,
+                             "tips": {"load_name": "opentrons_flex_96_tiprack_50ul", "slot": "C2"}},
+                     "p1000": {"name": "flex_1channel_1000", "mount": "right", "max_ul": 1000,
+                               "tips": {"load_name": "opentrons_flex_96_tiprack_1000ul", "slot": "C1"}}},
+        "reservoir": {"load_name": RESERVOIR, "slot": "D1", "well_max_ul": 15000},
         "plate": {"load_name": PLATE, "slot": "D2"},
         "trash": "A3"}
+#: The app's condition tones (Theme.groupTones, by sorted condition key) and
+#: the neutral for a liquid of no one condition (medium).
+GROUP_TONES = ["#8E8E93", "#1D1D1F", "#5A5A5E"]
+NEUTRAL_TONE = "#AEAEB2"
+#: Reservoir fill: what the steps draw plus 10 %.
+OVERAGE = 1.1
 
 _UL = {"ul": 1.0, "µl": 1.0, "ml": 1000.0}
-_STEP = re.compile(r"^step (\d+)$", re.I)
+_STEP = re.compile(r"^step (\d+)\b", re.I)
 
 
 def _wkey(w: str):
@@ -84,12 +97,28 @@ def _timer(record: dict, i: int) -> dict | None:
     return logs[-1] if logs else None
 
 
+def _run_s(t: dict) -> float:
+    """A logged timer's actual seconds (older logs kept minutes)."""
+    s = t.get("duration_s")
+    return float(s) if isinstance(s, (int, float)) else float(t.get("minutes") or 0) * 60
+
+
+def secs_text(s: float) -> str:
+    """Seconds as people say them: "<1 s", "18 s", "90 s", "30 min", "2 min 5 s"."""
+    if s < 1:
+        return "<1 s"
+    if s < 120:
+        return f"{round(s)} s"
+    m, r = divmod(round(s), 60)
+    return f"{m} min" if not r else f"{m} min {r} s"
+
+
 def _reached(record: dict, steps: list) -> int:
     """Steps the run got to (1-based count)."""
     return min((record.get("step_index") or 0) + 1, len(steps))
 
 
-def changes(record: dict) -> dict:
+def changes(record: dict, timing: dict | None = None) -> dict:
     """What ⑨0 shows: the import review's rows (robot steps) for the run as
     it went, each with `plan`, `run` and its changes, every change with the
     record event it came from."""
@@ -131,20 +160,23 @@ def changes(record: dict) -> dict:
             plan_d = " · ".join(x for x in (vol, where(planned)) if x)
             run_d = " · ".join(x for x in (vol, where(run)) if x)
         else:
-            m = _minutes(st)
+            plan_s = _minutes(st) * 60
             t = _timer(record, i)
-            actual = t.get("minutes") if t else None
-            if isinstance(actual, (int, float)) and abs(actual - m) > 1e-6:
-                ch.append({"kind": "timer", "wells": [], "from": _fmt(m), "to": _fmt(actual), "event": "timer",
-                           "status": t.get("status") or "", "label": t.get("label") or "",
-                           "text": f"{_fmt(m)} → {_fmt(actual)} min (timer {'cancelled' if t.get('status') == 'cancelled' else 'extended' if actual > m else 'shortened'})"})
-            minutes = actual if ch else m
-            plan_d, run_d = f"{_fmt(m)} min", f"{_fmt(minutes)} min"
+            run_s = _run_s(t) if t else None
+            choice = (timing or {}).get(str(i)) or "run"
+            if run_s is not None and abs(run_s - plan_s) > 0.05:
+                said = (f"stopped after {secs_text(run_s)}" if t.get("status") == "cancelled"
+                        else f"ran {secs_text(run_s)}")
+                ch.append({"kind": "timer", "wells": [], "from": secs_text(plan_s), "to": secs_text(run_s),
+                           "event": "timer", "status": t.get("status") or "", "label": t.get("label") or "",
+                           "text": f"{said} (plan {secs_text(plan_s)})" + (" · using plan" if choice == "plan" else "")})
+            seconds = run_s if ch and choice == "run" else plan_s
+            plan_d, run_d = secs_text(plan_s), secs_text(seconds)
         rows.append({"n": len(rows) + 1, "index": i, "title": step_short_title(st), "detail": run_d,
                      "flagged": bool(ch), "reason": "; ".join(c["text"] for c in ch),
                      "quote": st.get("quote") or "", "page": st.get("quote_page"),
                      "plan": plan_d, "run": run_d, "changes": ch,
-                     **({"minutes": minutes} if not st.get("pipette") else {})})
+                     **({"seconds": seconds, "plan_s": plan_s, "timing": choice} if not st.get("pipette") else {})})
     total = sum(1 for s in steps if _robot(s or {}))
     return {"rows": rows, "others": others, "conditions": len(plan.get("conditions") or {}),
             "wells": len(used), "steps": len(steps), "of": total,
@@ -174,14 +206,15 @@ def _change_text(kind: str, ws: list[str], ev: dict) -> str:
             "off_plan": f"{label} marked off plan"}[kind]
 
 
-def as_run(record: dict) -> list[dict]:
+def as_run(record: dict, timing: dict | None = None) -> list[dict]:
     """The approved protocol: one entry per robot step the run reached, in
-    order; a transfer with no wells left drops out."""
+    order; a transfer with no wells left drops out. Each transfer carries the
+    pipette the code picks (≤ 50 µL: p50), each wait its seconds."""
     plan = record.get("plan") or {}
     steps = plan.get("steps") or []
     liquids = _liquids(plan)
     out = []
-    for r in changes(record)["rows"]:
+    for r in changes(record, timing)["rows"]:
         st = steps[r["index"]]
         if st.get("pipette"):
             p = st["pipette"]
@@ -191,19 +224,124 @@ def as_run(record: dict) -> list[dict]:
             vol = p.get("volume")
             ul = vol * _UL[str(p.get("unit") or "ul").lower()] if isinstance(vol, (int, float)) \
                 and str(p.get("unit") or "ul").lower() in _UL else None
-            out.append({"n": 0, "title": r["title"], "kind": "transfer", "liquid": p.get("liquid") or "",
-                        "source": liquids.get(p.get("liquid") or "", ""), "volume_ul": ul, "wells": wells})
+            out.append({"n": 0, "index": r["index"], "title": r["title"], "kind": "transfer",
+                        "liquid": p.get("liquid") or "", "source": liquids.get(p.get("liquid") or "", ""),
+                        "volume_ul": ul, "wells": wells,
+                        "pipette": "p50" if ul is not None and ul <= P50_MAX_UL else "p1000"})
         else:
-            out.append({"n": 0, "title": r["title"], "kind": "delay", "minutes": float(r["minutes"])})
+            temp = st.get("temp_c")
+            what = f"{r['title']} at {_fmt(temp)} °C" if isinstance(temp, (int, float)) else r["title"]
+            out.append({"n": 0, "index": r["index"], "title": r["title"], "kind": "delay",
+                        "seconds": _whole(round(float(r["seconds"]), 1)),
+                        "msg": f"{what} (as run: {secs_text(ran) if (ran := _timer_s(record, r['index'])) is not None else r['plan']}; plan: {r['plan']})"})
     for k, s in enumerate(out):
         s["n"] = k + 1
+        if s["kind"] == "transfer":
+            s["comment"] = f"Step {s['n']}: {s['title']} · {_fmt(s['volume_ul'] or 0)} µL"
+        else:
+            s["comment"] = f"Step {s['n']}: {s['title']} · {secs_text(s['seconds'])}"
     return out
 
 
-def blockers(steps: list[dict]) -> list[str]:
+def _whole(x: float):
+    """18.0 -> 18 (code reads "seconds=18"), 0.3 stays 0.3."""
+    return int(x) if x == int(x) else x
+
+
+def _timer_s(record: dict, i: int) -> float | None:
+    t = _timer(record, i)
+    return _run_s(t) if t else None
+
+
+def liquids(record: dict, steps: list[dict]) -> list[dict]:
+    """Each liquid's reservoir well (A1 on, in plan order), how much to put
+    there (what the steps draw + 10 %) and its color: the tone of the
+    condition it treats, neutral when it goes to several (medium)."""
+    plan = record.get("plan") or {}
+    conds = plan.get("conditions") or {}
+    keys = sorted(conds)
+    need: dict[str, float] = defaultdict(float)
+    wells_of: dict[str, set] = defaultdict(set)
+    for s in steps:
+        if s["kind"] == "transfer" and s.get("volume_ul") is not None:
+            need[s["liquid"]] += len(s["wells"]) * s["volume_ul"]
+            wells_of[s["liquid"]] |= set(s["wells"])
+    out = []
+    for liq, well in _liquids(plan).items():
+        if liq not in need:
+            continue
+        low = liq.lower()
+        k = next((k for k in keys if low in {str(t).lower() for t in (conds[k] or {}).get("treatments") or []}), None)
+        if k is None:
+            k = next((k for k in keys if wells_of[liq] <= set((conds[k] or {}).get("wells") or [])), None)
+        out.append({"name": liq[:1].upper() + liq[1:], "liquid": liq, "well": well,
+                    "volume_ul": float(-(-need[liq] * OVERAGE // 1)),
+                    "color": GROUP_TONES[keys.index(k) % len(GROUP_TONES)] if k else NEUTRAL_TONE,
+                    "description": f"{_fmt(need[liq])} µL drawn by the run + 10 %"})
+    return out
+
+
+def setup_code(steps: list[dict], liqs: list[dict], title: str, run_n: int, date: str) -> str:
+    """The protocol's fixed head (metadata, deck, pipettes, liquids, empty
+    plate wells), made from the approved run; Spark copies it as is and
+    writes only the steps after it."""
+    d, p = DECK, DECK["pipettes"]
+    used = _sorted({w for s in steps if s["kind"] == "transfer" for w in s["wells"]})
+    lines = [
+        "from opentrons import protocol_api", "",
+        "metadata = {",
+        f"    \"protocolName\": {json.dumps(f'{title} — Run {run_n} (as-run)', ensure_ascii=False)},",
+        "    \"author\": \"Glassistant (Milo)\",",
+        f"    \"description\": {json.dumps(f'{date}. Generated from the recorded run; simulated with opentrons_simulate.')},",
+        "}",
+        f"requirements = {{\"robotType\": \"Flex\", \"apiLevel\": \"{d['api_level']}\"}}", "", "",
+        "def run(protocol: protocol_api.ProtocolContext):",
+        "    # --- setup: from the approved run record (do not edit) ---",
+        f"    tips50 = protocol.load_labware(\"{p['p50']['tips']['load_name']}\", \"{p['p50']['tips']['slot']}\")",
+        f"    tips1000 = protocol.load_labware(\"{p['p1000']['tips']['load_name']}\", \"{p['p1000']['tips']['slot']}\")",
+        f"    res = protocol.load_labware(\"{d['reservoir']['load_name']}\", \"{d['reservoir']['slot']}\")",
+        f"    plate = protocol.load_labware(\"{d['plate']['load_name']}\", \"{d['plate']['slot']}\")",
+        f"    protocol.load_trash_bin(\"{d['trash']}\")",
+        f"    p50 = protocol.load_instrument(\"{p['p50']['name']}\", \"{p['p50']['mount']}\", tip_racks=[tips50])",
+        f"    p1000 = protocol.load_instrument(\"{p['p1000']['name']}\", \"{p['p1000']['mount']}\", tip_racks=[tips1000])",
+    ]
+    for k, lq in enumerate(liqs):
+        lines.append(f"    liquid_{k + 1} = protocol.define_liquid({json.dumps(lq['name'], ensure_ascii=False)}, "
+                     f"description={json.dumps(lq['description'], ensure_ascii=False)}, display_color=\"{lq['color']}\")")
+        lines.append(f"    res.load_liquid([\"{lq['well']}\"], {lq['volume_ul']:.0f}, liquid_{k + 1})")
+    if used:
+        lines.append(f"    plate.load_empty({json.dumps(used)})")
+    lines.append("    # --- steps ---")
+    return "\n".join(lines) + "\n"
+
+
+def expected_seconds(record: dict, steps: list[dict], timing: dict | None = None) -> dict[str, float]:
+    """The verifier's own reading of each wait, straight from the record
+    (timer_log seconds, or the plan's minutes when the plan was chosen); it
+    shares nothing with how as_run turns times into code."""
+    out: dict[str, float] = {}
+    plan_steps = (record.get("plan") or {}).get("steps") or []
+    for s in steps:
+        if s["kind"] != "delay":
+            continue
+        i = s["index"]
+        logs = [t for t in record.get("timer_log") or [] if t.get("step_index") == i]
+        planned = float(plan_steps[i].get("minutes") or 0) * 60
+        if (timing or {}).get(str(i)) == "plan" or not logs:
+            out[str(s["n"])] = planned
+        else:
+            t = logs[-1]
+            out[str(s["n"])] = float(t["duration_s"]) if "duration_s" in t else float(t.get("minutes") or 0) * 60
+    return out
+
+
+def blockers(steps: list[dict], liqs: list[dict] | None = None) -> list[str]:
     """Why an as-run protocol can't go to the robot (said, never guessed)."""
+    cap = DECK["reservoir"]["well_max_ul"]
     return [f"Step {s['n']} ({s['title']}) has no volume in µL." for s in steps
-            if s["kind"] == "transfer" and s.get("volume_ul") is None]
+            if s["kind"] == "transfer" and s.get("volume_ul") is None] + \
+        [f"{lq['name']} needs {lq['volume_ul']:.0f} µL, more than a reservoir well holds ({cap} µL)."
+         for lq in liqs or [] if lq["volume_ul"] > cap]
 
 
 def record_hash(record: dict) -> str:
@@ -214,10 +352,12 @@ def record_hash(record: dict) -> str:
 
 # --- the match: simulator run log vs the approved protocol ---
 
-def check(events: list[dict], steps: list[dict]) -> dict:
-    """Pass = every step, in order, under its `step N` comment: a transfer
+def check(events: list[dict], steps: list[dict], seconds: dict[str, float] | None = None) -> dict:
+    """Pass = every step, in order, under its `Step N` comment: a transfer
     dispenses exactly its wells into the plate at its volume from its
-    reservoir well; a delay waits its minutes; nothing else moves liquid."""
+    reservoir well, with its pipette and a new tip per well; a wait waits
+    the seconds the record holds (`seconds`, the verifier's own reading);
+    nothing else moves liquid."""
     segs: dict[int, list] = {}
     order: list[int] = []
     cur = None
@@ -239,7 +379,7 @@ def check(events: list[dict], steps: list[dict]) -> dict:
     per = []
     for s in steps:
         seg = segs.get(s["n"], [])
-        why = _check_step(s, seg)
+        why = _check_step(s, seg, (seconds or {}).get(str(s["n"])))
         per.append({"n": s["n"], "title": s["title"], "ok": not why, "why": why})
     extra = sorted(set(segs) - set(want))
     if extra:
@@ -247,14 +387,15 @@ def check(events: list[dict], steps: list[dict]) -> dict:
     return {"ok": not problems and all(p["ok"] for p in per), "steps": per, "problems": problems}
 
 
-def _check_step(s: dict, seg: list[dict]) -> str:
+def _check_step(s: dict, seg: list[dict], want_s: float | None) -> str:
     if not seg and s["kind"] == "transfer":
         return "missing"
     if s["kind"] == "delay":
         if any(e["op"] in ("aspirate", "dispense") for e in seg):
             return "liquid moved during a wait"
-        got = sum(e.get("minutes") or 0 for e in seg if e["op"] == "delay")
-        return "" if abs(got - s["minutes"]) < 0.01 else f"waits {_fmt(got)} min, not {_fmt(s['minutes'])}"
+        got = sum(e.get("seconds") or 0 for e in seg if e["op"] == "delay")
+        want = s["seconds"] if want_s is None else want_s
+        return "" if abs(got - want) < 0.06 else f"waits {_fmt(round(got, 1))} s, not {_fmt(round(want, 1))} s"
     vols: dict[str, float] = defaultdict(float)
     for e in seg:
         if e["op"] == "dispense" and e.get("labware") == PLATE:
@@ -268,7 +409,14 @@ def _check_step(s: dict, seg: list[dict]) -> str:
         return "; ".join(x for x in (f"missing {wells_label(miss)}" if miss else "",
                                      f"extra {wells_label(more)}" if more else "") if x)
     bad = [w for w in s["wells"] if abs(vols[w] - s["volume_ul"]) > 0.01]
-    return f"{wells_label(bad)} got {_fmt(vols[bad[0]])} µL, not {_fmt(s['volume_ul'])}" if bad else ""
+    if bad:
+        return f"{wells_label(bad)} got {_fmt(vols[bad[0]])} µL, not {_fmt(s['volume_ul'])}"
+    max_ul = DECK["pipettes"][s["pipette"]]["max_ul"]
+    wrong = {e.get("pipette") for e in seg if e["op"] in ("aspirate", "dispense")} - {max_ul}
+    if wrong:
+        return f"uses the {'/'.join(str(x) for x in sorted(wrong, key=str))} µL pipette, not the {max_ul} µL"
+    tips = sum(1 for e in seg if e["op"] == "pick_up_tip")
+    return "" if tips == len(s["wells"]) else f"{tips} tips for {len(s['wells'])} wells (a new tip per well)"
 
 
 # --- the simulator ---
@@ -331,11 +479,23 @@ def _simulate_modal(code: str) -> dict:
     return _parse(proc.stdout[-SIM_OUTPUT:], proc.stderr[-SIM_OUTPUT:])
 
 
+def tips_used(events: list[dict]) -> dict[str, int]:
+    """Tips picked up per tip rack (the simulation's summary)."""
+    out: dict[str, int] = defaultdict(int)
+    for e in events or []:
+        if e.get("op") == "pick_up_tip":
+            out[e.get("labware") or "?"] += 1
+    return dict(out)
+
+
 # --- files ---
 
-def plate_csv(record: dict) -> str:
-    """plate_map.csv: one row per well the run touched."""
+def plate_csv(record: dict, title: str = "", run_n: int = 0, date: str = "") -> str:
+    """plate_map.csv: a commented head (protocol, run, date), then one row per
+    well the run touched: what went in by hand (each done step's liquid and
+    volume), the total, status, why excluded, who logged it, notes."""
     plan = record.get("plan") or {}
+    psteps = plan.get("steps") or []
     group = {w: (c or {}).get("label") or k for k, c in (plan.get("conditions") or {}).items()
              for w in (c or {}).get("wells") or []}
     excluded, redo = record.get("excluded") or {}, record.get("redo") or {}
@@ -349,13 +509,22 @@ def plate_csv(record: dict) -> str:
         marks[m["well"]].append(m)
     wells = _sorted(set(marks) | set(excluded) | set(redo) | skipped)
     q = lambda s: '"{}"'.format(str(s).replace('"', '""'))  # noqa: E731
-    lines = ["well,group,status,steps,source,note"]
+    lines = [f"# protocol: {title}", f"# run: Run {run_n}", f"# date: {date}",
+             "well,group,contents,total_uL,status,excluded_reason,logged_by,note"]
     for w in wells:
+        parts, total = [], 0.0
+        for m in marks[w]:
+            p = ((psteps[m["step"] - 1] if 0 < m["step"] <= len(psteps) else {}) or {}).get("pipette") or {}
+            vol, unit = p.get("volume"), str(p.get("unit") or "ul").lower()
+            if p.get("liquid") and isinstance(vol, (int, float)) and unit in _UL:
+                ul = vol * _UL[unit]
+                parts.append(f"{p['liquid'][:1].upper() + p['liquid'][1:]} {_fmt(ul)} µL")
+                total += ul
         status = "excluded" if w in excluded else "redo" if w in redo else "done" if w in marks else "skipped"
-        steps = " ".join(str(m["step"]) for m in marks[w])
         src = sorted({m.get("source") or "" for m in marks[w]} - {""})
-        note = "; ".join(x for x in [excluded.get(w) or "", redo.get(w) or "", *notes[w]] if x)
-        lines.append(",".join([w, q(group.get(w, "")), status, steps, " ".join(src), q(note)]))
+        note = "; ".join(x for x in [redo.get(w) or "", *notes[w]] if x)
+        lines.append(",".join([w, q(group.get(w, "")), q("; ".join(parts)), _fmt(total), status,
+                               q(excluded.get(w) or ""), " ".join(src), q(note)]))
     return "\n".join(lines) + "\n"
 
 
@@ -363,11 +532,13 @@ def plate_csv(record: dict) -> str:
 
 INSTRUCTIONS = (
     "You write Opentrons Python API v2 protocols for a Flex robot. "
-    "Call read_run first. Use exactly the deck it gives (load names, slots, mount, API level) "
-    "and only the steps it gives, in order. Put protocol.comment(\"step N\") right before step N, "
-    "with N the step's n. A transfer moves volume_ul µL from its source well of the reservoir into "
-    "each of its wells of the plate (a new tip per well is fine). A delay step is "
-    "protocol.delay(minutes=...). Do nothing else: no mixing, no other liquid moves. "
+    "Call read_run first. The file starts with setup_code exactly as given (metadata, deck, pipettes "
+    "p50 and p1000, liquids, empty wells): copy it character for character, never change it. "
+    "After it, inside run(), write only the steps, in order. Each step starts with "
+    "protocol.comment(<its comment>). A transfer: with its pipette variable (p50 or p1000), move "
+    "volume_ul µL from res[<source>] into each of its wells of plate, a new tip per well "
+    "(new_tip=\"always\"). A delay: protocol.delay(seconds=<seconds>, msg=<msg>). "
+    "Do nothing else: no mixing, no other liquid moves. "
     "Then call generate_protocol with the whole file, then simulate. If simulate fails, read the "
     "error and the diff, fix the code, and generate_protocol + simulate again. When simulate "
     "passes, call finish."
@@ -388,17 +559,19 @@ TOOLS = [
 ]
 
 
-async def run_loop(call, steps: list[dict], sim, on_stage) -> dict:
-    """Spark drives; code keeps the stage and decides pass. `call(body)` posts
-    one Responses API request and returns its JSON; `sim(code)` simulates;
+async def run_loop(call, approved: dict, sim, on_stage) -> dict:
+    """Spark drives; code keeps the stage and decides pass. `approved` is the
+    approval (steps, liquids, setup, seconds); `call(body)` posts one
+    Responses API request and returns its JSON; `sim(code)` simulates;
     `on_stage(stage, **state)` saves and shows where it is.
-    Returns {stage: passed | needs_you, code, check, error, attempt}."""
-    st = {"code": "", "fails": 0, "sims": 0, "passed": False, "check": None, "error": ""}
+    Returns {stage: passed | needs_you, code, check, error, attempt, tips}."""
+    steps, setup = approved["steps"], approved["setup"]
+    st = {"code": "", "fails": 0, "sims": 0, "passed": False, "check": None, "error": "", "tips": {}}
     inp: list = [{"role": "user", "content": "Write the robot protocol for this run."}]
 
     def end(stage: str, error: str = "") -> dict:
         out = {"stage": stage, "code": st["code"], "check": st["check"], "error": error or st["error"],
-               "attempt": st["sims"]}
+               "attempt": st["sims"], "tips": st["tips"]}
         on_stage(stage, **{k: v for k, v in out.items() if k != "stage"})
         return out
 
@@ -419,7 +592,7 @@ async def run_loop(call, steps: list[dict], sim, on_stage) -> dict:
                 args = {}
             name = c.get("name")
             if name == "read_run":
-                out = {"deck": DECK, "steps": steps}
+                out = {"setup_code": setup, "steps": steps, "liquids": approved.get("liquids") or []}
             elif name == "generate_protocol":
                 st["code"], st["passed"] = str(args.get("code") or ""), False
                 on_stage("fixing" if st["fails"] else "generating", code=st["code"], attempt=st["sims"])
@@ -430,8 +603,14 @@ async def run_loop(call, steps: list[dict], sim, on_stage) -> dict:
                 else:
                     st["sims"] += 1
                     on_stage("simulating", attempt=st["sims"])
-                    res = await sim(st["code"])
-                    st["check"] = check(res.get("events") or [], steps) if res.get("ok") else None
+                    if setup not in st["code"]:
+                        # names, wells, volumes and colors come from the record: the head is checked as text
+                        res = {"ok": False, "error": "setup_code was changed: copy it exactly as read_run gave it."}
+                    else:
+                        res = await sim(st["code"])
+                    st["check"] = check(res.get("events") or [], steps, approved.get("seconds")) \
+                        if res.get("ok") else None
+                    st["tips"] = tips_used(res.get("events") or [])
                     st["passed"] = bool(res.get("ok")) and st["check"]["ok"]
                     st["error"] = "" if st["passed"] else res.get("error") or _diff_text(st["check"])
                     out = {"ok": st["passed"], "error": st["error"], "match": st["check"]}

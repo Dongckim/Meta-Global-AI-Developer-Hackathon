@@ -3,8 +3,9 @@
 Runs inside the simulator's Python (.venv-sim or the Modal image), never in
 the API process: `python robot_runner.py protocol.py`. One JSON line out:
 {"ok": true, "events": [...]} or {"ok": false, "error": "..."}.
-Events: comment {text}; aspirate / dispense {volume, well, labware};
-delay {minutes}. Mix strokes are left out (they move no liquid between wells).
+Events: comment {text}; aspirate / dispense {volume, well, labware,
+pipette}; pick_up_tip {labware, pipette}; delay {seconds}. Mix strokes
+are left out (they move no liquid between wells).
 """
 
 import json
@@ -15,6 +16,12 @@ def _well(loc):
     lab = getattr(loc, "labware", None)
     w = lab.as_well() if lab is not None and hasattr(lab, "as_well") else loc
     return getattr(w, "well_name", None), getattr(getattr(w, "parent", None), "load_name", None)
+
+
+def _pipette(p):
+    """The pipette's size in µL (50 or 1000)."""
+    v = getattr(p.get("instrument"), "max_volume", None)
+    return int(v) if v else None
 
 
 def _walk(entries, out, mix=None):
@@ -29,9 +36,14 @@ def _walk(entries, out, mix=None):
         elif text.startswith(("Aspirating", "Dispensing")) and "location" in p:
             well, labware = _well(p["location"])
             out.append({"op": "aspirate" if text.startswith("Aspirating") else "dispense",
-                        "volume": float(p.get("volume") or 0), "well": well, "labware": labware})
+                        "volume": float(p.get("volume") or 0), "well": well, "labware": labware,
+                        "pipette": _pipette(p)})
+        elif text.startswith("Picking up tip") and "location" in p:
+            well, labware = _well(p["location"])
+            out.append({"op": "pick_up_tip", "labware": labware, "pipette": _pipette(p)})
         elif text.startswith("Delaying") and "minutes" in p:
-            out.append({"op": "delay", "minutes": float(p["minutes"]) + float(p.get("seconds") or 0) / 60})
+            # seconds throughout (a wait of 0.3 s stays 0.3 s, never a fraction of a minute)
+            out.append({"op": "delay", "seconds": float(p["minutes"]) * 60 + float(p.get("seconds") or 0)})
         elif set(p) == {"text"}:
             out.append({"op": "comment", "text": text})
         _walk(e.get("subsequent") or [], out, mix)

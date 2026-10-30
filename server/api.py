@@ -88,7 +88,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 20
+API_VERSION = 21
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -178,7 +178,7 @@ PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "open", "back", "make_robot", "edit_draft", "retry_sync",
                    "skip_sync", "review_draft", "save_draft", "start_run", "discard_draft", "look", "retake_look",
                    "show_step", "open_source_page", "web_search", "open_source", "control", "pick",
-                   "resume_run", "approve_handoff", "retry_handoff", "export_handoff"]
+                   "resume_run", "approve_handoff", "retry_handoff", "export_handoff", "set_timing"]
 #: Actions that aren't record writes; the coverage check counts only writes.
 VIEW_ACTIONS = frozenset(a for a in PERFORM_ACTIONS if a not in RecordStore.RUN_WRITES) \
     - {"edit_draft"} | {"read_record", "ask"}
@@ -202,7 +202,8 @@ TOOLS = [
         "open{target} (well/screen/original/importer, or \"run <as said>\" e.g. \"run 2\", "
         "\"run latest of Drug A/B\"; a well is always open{target}); "
         "back; make_robot (a finished run's final protocol, for the robot); "
-        "approve_handoff / retry_handoff / export_handoff (the hand off screens' Looks right, Try again, Export); "
+        "approve_handoff / retry_handoff / export_handoff (the hand off screens' Looks right, Fix it, Export); "
+        "set_timing{choice: run|plan} (a final protocol step's timer: Keep as run / Use plan); "
         "edit_draft{path,value} (draft_open only); review_draft; save_draft (later); "
         "start_run{target?} (the open draft, else the protocol on screen or named); discard_draft; "
         "show_step{step} / open_source_page{step?} (a draft's pipetting step, 1-based); "
@@ -351,8 +352,8 @@ _HANDOFFS: dict[str, asyncio.Task] = {}
 async def _handoff_task(run_id: str) -> None:
     """The approved run's robot code: Spark writes, the simulator runs, code
     checks (server/handoff.py); progress lands on the run (store)."""
-    steps = store.handoff_steps(run_id)
-    if not steps:
+    plan = store.handoff_plan(run_id)
+    if not plan:
         return
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         async def call(body: dict) -> dict:
@@ -360,9 +361,9 @@ async def _handoff_task(run_id: str) -> None:
                 "model": SPARK_MODEL, "reasoning": {"effort": HANDOFF_EFFORT},
                 "max_output_tokens": HANDOFF_MAX_TOKENS, **body})
 
-        out = await handoff.run_loop(call, steps, lambda code: asyncio.to_thread(handoff.simulate, code),
+        out = await handoff.run_loop(call, plan, lambda code: asyncio.to_thread(handoff.simulate, code),
                                      lambda stage, **st: store.handoff_stage(run_id, stage, **st))
-    print(f"handoff {run_id}: {out['stage']} after {out['attempt']} simulation(s)", flush=True)
+    print(f"handoff {run_id}: {out['stage']} after {out['attempt']} simulation(s), tips {out['tips']}", flush=True)
 
 
 def _spawn_handoff(run_id: str) -> None:

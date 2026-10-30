@@ -104,6 +104,32 @@ the same dispense wells with the same volume, the liquid's reservoir well
 as source, delay minutes equal, and nothing dispensed into a well that is
 not in that step (so never into an excluded one).
 
+## The robot file (as-run, readable, liquids in the Opentrons App)
+
+- apiLevel 2.31 (the highest opentrons 10.1.0 simulates). `Labware.load_liquid`,
+  `load_liquid_by_well`, `load_empty` need 2.22+, `define_liquid` 2.14+.
+  Opentrons documents liquids at setup (Initial Liquid Setup, deck map,
+  `display_color`); it doesn't document liquids shown building up in wells
+  during a run.
+- The head is code-made (`setup_code`): metadata ("{title} — Run {n}
+  (as-run)", author Glassistant (Milo), date + "Generated from the recorded
+  run; simulated with opentrons_simulate"), both pipettes, one
+  `define_liquid` per liquid (reservoir well A1 on, what the steps draw +
+  10 %, the app's condition tone or neutral) + `res.load_liquid`, and
+  `plate.load_empty` on the plate wells used. Spark copies it as is; a
+  changed head fails before simulating.
+- Pipettes by code: ≤ 50 µL `flex_1channel_50` (left, 50 µL tips), else
+  `flex_1channel_1000` (right, 1000 µL tips); a new tip per well. The
+  verifier checks the pipette and one tip per well.
+- Waits in seconds throughout: timer_log `duration_s` / `planned_s`, code
+  `protocol.delay(seconds=N, msg="… (as run: …; plan: …)")`. The verifier
+  reads the seconds from the record on its own (`expected_seconds`).
+  ⑨0's step offers Keep as run (default) / Use plan; a new choice clears
+  the approval.
+- plate_map.csv: `# protocol / run / date` head, then well, group, contents
+  ("Medium 100 µL; Drug A 10 µL", from the done marks), total_uL, status,
+  excluded_reason, logged_by, note. ⑨b shows the reservoir line under it.
+
 ## Simulator
 
 `ROBOT_SIM=local|modal`, default `local`, so judges need no outside account.

@@ -62,46 +62,50 @@ def ran(mode: str = "full") -> RecordStore:
     return st
 
 
+def approved_for(rec, timing=None, title="Hand test", n=1, date="2026-10-30"):
+    """What approve_handoff stores: steps, liquids, the setup head, the verifier's seconds."""
+    steps = hand.as_run(rec, timing)
+    liqs = hand.liquids(rec, steps)
+    return {"steps": steps, "liquids": liqs, "setup": hand.setup_code(steps, liqs, title, n, date),
+            "seconds": hand.expected_seconds(rec, steps, timing)}
+
+
 def events_for(steps, wrong=None):
     """The simulator's events for exactly these steps (optionally broken)."""
     ev = []
     for s in steps:
-        ev.append({"op": "comment", "text": f"step {s['n']}"})
+        ev.append({"op": "comment", "text": s["comment"]})
         if s["kind"] == "delay":
-            ev.append({"op": "delay", "minutes": s["minutes"]})
+            ev.append({"op": "delay", "seconds": s["seconds"]})
             continue
+        size = hand.DECK["pipettes"][s["pipette"]]["max_ul"]
+        rack = hand.DECK["pipettes"][s["pipette"]]["tips"]["load_name"]
         for w in s["wells"]:
-            ev.append({"op": "aspirate", "volume": s["volume_ul"], "well": s["source"], "labware": hand.RESERVOIR})
-            ev.append({"op": "dispense", "volume": s["volume_ul"], "well": w, "labware": hand.PLATE})
+            ev.append({"op": "pick_up_tip", "labware": rack, "pipette": size})
+            ev.append({"op": "aspirate", "volume": s["volume_ul"], "well": s["source"], "labware": hand.RESERVOIR,
+                       "pipette": size})
+            ev.append({"op": "dispense", "volume": s["volume_ul"], "well": w, "labware": hand.PLATE, "pipette": size})
     return wrong(ev) if wrong else ev
 
 
-def code_for(steps) -> str:
-    """Protocol code that does exactly these steps (what Spark should write)."""
-    d = hand.DECK
-    lines = ["from opentrons import protocol_api", "",
-             f'requirements = {{"robotType": "Flex", "apiLevel": "{d["api_level"]}"}}', "",
-             "def run(protocol):",
-             f'    tips = protocol.load_labware("{d["tips"]["load_name"]}", "{d["tips"]["slot"]}")',
-             f'    res = protocol.load_labware("{d["reservoir"]["load_name"]}", "{d["reservoir"]["slot"]}")',
-             f'    plate = protocol.load_labware("{d["plate"]["load_name"]}", "{d["plate"]["slot"]}")',
-             f'    protocol.load_trash_bin("{d["trash"]}")',
-             f'    p = protocol.load_instrument("{d["pipette"]["name"]}", "{d["pipette"]["mount"]}", tip_racks=[tips])']
-    for s in steps:
-        lines.append(f'    protocol.comment("step {s["n"]}")')
+def code_for(approved) -> str:
+    """Protocol code that does exactly these steps (what Spark should write): the head, then the steps."""
+    lines = []
+    for s in approved["steps"]:
+        lines.append(f"    protocol.comment({json.dumps(s['comment'], ensure_ascii=False)})")
         if s["kind"] == "delay":
-            lines.append(f'    protocol.delay(minutes={s["minutes"]})')
+            lines.append(f"    protocol.delay(seconds={s['seconds']}, msg={json.dumps(s['msg'], ensure_ascii=False)})")
         else:
-            lines.append(f'    for w in {s["wells"]}:')
-            lines.append(f'        p.transfer({s["volume_ul"]}, res["{s["source"]}"], plate[w])')
-    return "\n".join(lines) + "\n"
+            lines.append(f"    {s['pipette']}.transfer({s['volume_ul']}, res[\"{s['source']}\"], "
+                         f"[plate[w] for w in {s['wells']}], new_tip=\"always\")")
+    return approved["setup"] + "\n".join(lines) + "\n"
 
 
 # HO1. Changes, each with the record event it came from; step 5 never reached.
 st = ran()
 doc = st._finish_locked("finished")
 rec = doc["record"]
-assert rec["timers"] == [] and rec["timer_log"][0]["minutes"] == 35, rec["timer_log"]  # actual time kept
+assert rec["timers"] == [] and rec["timer_log"][0]["duration_s"] == 2100, rec["timer_log"]  # actual time kept
 d = hand.changes(rec)
 assert (d["of"], len(d["rows"]), d["changed"]) == (5, 4, 4), d
 r1, r2, r3, r4 = d["rows"]
@@ -112,18 +116,40 @@ assert r1["plan"] != r1["run"] and r1["detail"] == r1["run"], r1
 assert [(c["kind"], c["wells"]) for c in r2["changes"]] == [("skipped", ["B3"])], r2
 assert [(c["kind"], c["wells"]) for c in r3["changes"]] == [("excluded", ["C3"]), ("redo", ["C9"])], r3
 assert r3["changes"][1]["why"] == "retry for C3", r3
-assert [(c["kind"], c["from"], c["to"]) for c in r4["changes"]] == [("timer", "30", "35")], r4
+assert [(c["kind"], c["from"], c["to"], c["text"]) for c in r4["changes"]] == [
+    ("timer", "30 min", "35 min", "ran 35 min (plan 30 min)")], r4
 assert (r4["plan"], r4["run"]) == ("30 min", "35 min"), r4
-steps = hand.as_run(rec)
-assert [(s["kind"], s.get("source"), s.get("volume_ul"), s.get("wells"), s.get("minutes")) for s in steps] == [
-    ("transfer", "A1", 100, ["B2", "B3", "B4", "C2", "C4"], None),
-    ("transfer", "A2", 10, ["B2", "B4"], None),
-    ("transfer", "A3", 10.0, ["C2", "C9"], None),  # 0.01 mL in µL
-    ("delay", None, None, None, 35.0)], steps
-assert hand.blockers(steps) == []
-print("HO1 ok: changes with their events; as-run steps; step 5 not reached")
+approved = approved_for(rec)
+steps = approved["steps"]
+assert [(s["kind"], s.get("source"), s.get("volume_ul"), s.get("wells"), s.get("pipette"), s.get("seconds"))
+        for s in steps] == [
+    ("transfer", "A1", 100, ["B2", "B3", "B4", "C2", "C4"], "p1000", None),
+    ("transfer", "A2", 10, ["B2", "B4"], "p50", None),
+    ("transfer", "A3", 10.0, ["C2", "C9"], "p50", None),  # 0.01 mL in µL; ≤ 50 µL: the 50
+    ("delay", None, None, None, None, 2100.0)], steps
+assert steps[0]["comment"] == "Step 1: Add medium · 100 µL" and steps[3]["comment"] == "Step 4: Incubate · 35 min"
+assert steps[3]["msg"] == "Incubate (as run: 35 min; plan: 30 min)", steps[3]
+assert hand.blockers(steps, approved["liquids"]) == []
+print("HO1 ok: changes with their events; as-run steps with pipettes and seconds; step 5 not reached")
 
-# HO1b. Timers keep their actual time when they leave: done (extended) and cancelled.
+# HO1c. Liquids: reservoir well in plan order, what's drawn + 10 %, condition tone (medium neutral);
+# the head is code-made (metadata, both pipettes, define_liquid / load_liquid, empty plate wells).
+assert [(lq["name"], lq["well"], lq["volume_ul"], lq["color"]) for lq in approved["liquids"]] == [
+    ("Medium", "A1", 550.0, hand.NEUTRAL_TONE),  # 5 wells x 100 µL x 1.1
+    ("PBS", "A2", 22.0, hand.GROUP_TONES[0]),     # ctrl (sorted first) wells
+    ("Drug A", "A3", 22.0, hand.NEUTRAL_TONE)], approved["liquids"]  # C9 is outside Drug A's wells
+head = approved["setup"]
+assert '"protocolName": "Hand test — Run 1 (as-run)"' in head and '"author": "Glassistant (Milo)"' in head
+assert "2026-10-30. Generated from the recorded run; simulated with opentrons_simulate." in head
+assert '"apiLevel": "2.31"' in head and 'load_instrument("flex_1channel_50", "left"' in head
+assert 'load_instrument("flex_1channel_1000", "right"' in head
+assert 'res.load_liquid(["A1"], 550, liquid_1)' in head and 'display_color="#AEAEB2"' in head
+assert 'plate.load_empty(["B2", "B3", "B4", "C2", "C4", "C9"])' in head
+big = hand.liquids(rec, [{**steps[0], "volume_ul": 3000.0}])
+assert hand.blockers(steps, big) == ["Medium needs 16500 µL, more than a reservoir well holds (15000 µL)."]
+print("HO1c ok: liquids, colors and the code-made head")
+
+# HO1b. Timers keep their actual time in seconds when they leave: done (extended) and cancelled.
 st = RecordStore(path=tempfile.mkdtemp() + "/r.json")
 st._begin_locked(json.loads(json.dumps(PLAN)), None, "Timer test")
 st.r["timers"] = [{"id": "a", "label": "A", "minutes": 12, "planned": 10, "started_at": 0.0, "step_index": 3,
@@ -131,27 +157,67 @@ st.r["timers"] = [{"id": "a", "label": "A", "minutes": 12, "planned": 10, "start
 st._purge(12 * 60 + 61)
 st.r["timers"] = [{"id": "b", "label": "B", "minutes": 10, "planned": 10, "started_at": 0.0, "step_index": 3,
                    "step": "x", "wells": "", "warned": False, "notified": False, "on_done": None}]
-st._cancel({"messages": []}, "B", "voice", 4 * 60)
-assert [(t["planned"], t["minutes"], t["status"]) for t in st.r["timer_log"]] == [
-    (10, 12, "done"), (10, 4.0, "cancelled")], st.r["timer_log"]
-print("HO1b ok: timer_log keeps planned and actual minutes")
+st._cancel({"messages": []}, "B", "voice", 18.04)
+assert [(t["planned_s"], t["duration_s"], t["status"]) for t in st.r["timer_log"]] == [
+    (600, 720, "done"), (600, 18.0, "cancelled")], st.r["timer_log"]
+print("HO1b ok: timer_log keeps planned and actual seconds (18 s stays 18 s, not 0.3 min)")
 
-# HO6. The match: right code passes; an excluded well, a wrong volume, a wrong order don't.
-assert hand.check(events_for(steps), steps)["ok"]
+
+# HO4b. Waits of 0.3 s, 18 s, 90 s and 30 min: seconds in the code, said as people say them,
+# checked against the record; Use plan swaps in the plan's time.
+def waited(secs, status="cancelled"):
+    r = json.loads(json.dumps(rec))
+    r["timer_log"] = [{"step_index": 3, "label": "Incubate", "planned_s": 1800, "duration_s": secs,
+                       "started_at": 0, "ended_at": secs, "status": status}]
+    return r
+
+
+for secs, said, run_txt in [(0.3, "stopped after <1 s", "<1 s"), (18, "stopped after 18 s", "18 s"),
+                            (90, "stopped after 90 s", "90 s")]:
+    r = waited(secs)
+    row = hand.changes(r)["rows"][3]
+    assert row["changes"][0]["text"] == f"{said} (plan 30 min)" and row["run"] == run_txt, row
+    a = approved_for(r)
+    w = a["steps"][3]
+    assert w["seconds"] == secs and a["seconds"]["4"] == secs, (w, a["seconds"])
+    assert f"protocol.delay(seconds={secs}," in code_for(a), code_for(a)
+    assert w["msg"] == f"Incubate (as run: {run_txt}; plan: 30 min)", w
+    assert hand.check(events_for(a["steps"]), a["steps"], a["seconds"])["ok"]
+    wrong = hand.check(events_for(a["steps"], lambda ev: [{**e, "seconds": secs * 60} if e["op"] == "delay" else e
+                                                           for e in ev]), a["steps"], a["seconds"])
+    assert not wrong["ok"] and "waits" in wrong["steps"][3]["why"], wrong  # minutes for seconds: caught
+r = waited(1800, "done")
+assert not hand.changes(r)["rows"][3]["changes"] and approved_for(r)["steps"][3]["seconds"] == 1800
+plan_a = approved_for(waited(18), {"3": "plan"})
+assert plan_a["steps"][3]["seconds"] == 1800 and plan_a["seconds"]["4"] == 1800, plan_a["steps"][3]
+assert hand.changes(waited(18), {"3": "plan"})["rows"][3]["run"] == "30 min"
+print("HO4b ok: 0.3 s, 18 s, 90 s, 30 min waits; Keep as run / Use plan")
+
+# HO6. The match: right code passes; an excluded well, a wrong volume, order, pipette, tips don't.
+S = approved["seconds"]
+assert hand.check(events_for(steps), steps, S)["ok"]
 bad_well = events_for(steps, lambda ev: ev[:1] + [
-    {"op": "aspirate", "volume": 100, "well": "A1", "labware": hand.RESERVOIR},
-    {"op": "dispense", "volume": 100, "well": "C3", "labware": hand.PLATE}] + ev[1:])  # C3 was excluded
-chk = hand.check(bad_well, steps)
+    {"op": "pick_up_tip", "labware": "x", "pipette": 1000},
+    {"op": "aspirate", "volume": 100, "well": "A1", "labware": hand.RESERVOIR, "pipette": 1000},
+    {"op": "dispense", "volume": 100, "well": "C3", "labware": hand.PLATE, "pipette": 1000}] + ev[1:])  # C3 excluded
+chk = hand.check(bad_well, steps, S)
 assert not chk["ok"] and "extra C3" in chk["steps"][0]["why"], chk
 bad_vol = events_for(steps, lambda ev: [{**e, "volume": 50} if e.get("well") == "B4" and e["op"] == "dispense"
                                         and e["volume"] == 10 else e for e in ev])
-chk = hand.check(bad_vol, steps)
+chk = hand.check(bad_vol, steps, S)
 assert not chk["ok"] and chk["steps"][1]["why"] == "B4 got 50 µL, not 10", chk
 swapped = events_for([steps[1], steps[0], steps[2], steps[3]])
-chk = hand.check(swapped, steps)
+chk = hand.check(swapped, steps, S)
 assert not chk["ok"] and chk["problems"], chk
-assert not hand.check(events_for(steps)[:-1], steps)["ok"]  # no delay
-print("HO6 ok: run-log match catches excluded wells, volumes, order, waits")
+assert not hand.check(events_for(steps)[:-1], steps, S)["ok"]  # no delay
+big_pip = events_for(steps, lambda ev: [{**e, "pipette": 1000} if e.get("volume") == 10 else e for e in ev])
+chk = hand.check(big_pip, steps, S)
+assert not chk["ok"] and chk["steps"][1]["why"] == "uses the 1000 µL pipette, not the 50 µL", chk
+one_tip = events_for(steps, lambda ev: [e for k, e in enumerate(ev)
+                                        if not (e["op"] == "pick_up_tip" and k > 1 and ev[k - 1]["op"] == "dispense")])
+chk = hand.check(one_tip, steps, S)
+assert not chk["ok"] and "tips for" in chk["steps"][0]["why"], chk
+print("HO6 ok: run-log match catches excluded wells, volumes, order, waits, pipettes, tips")
 
 
 # HO3-5, HO7. The loop: Spark is scripted, the simulator faked.
@@ -176,35 +242,45 @@ def loop(call, sims):
 
     async def sim(code):
         return next(it)
-    out = asyncio.run(hand.run_loop(call, steps, sim, lambda s, **k: stages.append(s)))
+    out = asyncio.run(hand.run_loop(call, approved, sim, lambda s, **k: stages.append(s)))
     return out, stages
 
 
+GOOD = code_for(approved)
 OK = {"ok": True, "events": events_for(steps)}
 BAD = {"ok": True, "events": events_for(steps)[:-1]}
 ERR = {"ok": False, "error": "NameError: name 'plat' is not defined"}
 
-call, sent = script([fc("read_run")], [fc("generate_protocol", {"code": "c1"})], [fc("simulate")], [fc("finish", {"summary": "ok"})])
+call, sent = script([fc("read_run")], [fc("generate_protocol", {"code": GOOD})], [fc("simulate")],
+                   [fc("finish", {"summary": "ok"})])
 out, stages = loop(call, [OK])
 assert out["stage"] == "passed" and stages == ["generating", "simulating", "passed"], stages
-assert sent[0]["tools"][0]["name"] == "read_run" and "comment(\"step N\")" in sent[0]["instructions"]
-first = [i for i in sent[1]["input"] if i.get("type") == "function_call_output"][0]
-assert json.loads(first["output"])["steps"] == steps  # read_run hands over the approved steps
+assert out["tips"] == {"opentrons_flex_96_tiprack_1000ul": 5, "opentrons_flex_96_tiprack_50ul": 4}, out["tips"]
+assert sent[0]["tools"][0]["name"] == "read_run" and "setup_code exactly" in sent[0]["instructions"]
+first = json.loads([i for i in sent[1]["input"] if i.get("type") == "function_call_output"][0]["output"])
+assert first["steps"] == steps and first["setup_code"] == approved["setup"]  # read_run hands over the approval
 print("HO3 ok: passes first try")
 
-call, _ = script([fc("generate_protocol", {"code": "c1"})], [fc("simulate")],
-                 [fc("generate_protocol", {"code": "c2"})], [fc("simulate")], [fc("finish", {"summary": "ok"})])
+# The head is the record's: code that changes it never reaches the simulator.
+call, sent = script([fc("generate_protocol", {"code": GOOD.replace("550", "500")})], [fc("simulate")])
+out, stages = loop(call, [OK])
+assert out["stage"] == "needs_you" and "setup_code was changed" in out["error"], out
+print("HO3b ok: an edited setup head fails before simulating")
+print("HO3 ok: passes first try")
+
+call, _ = script([fc("generate_protocol", {"code": GOOD + "# 1"})], [fc("simulate")],
+                 [fc("generate_protocol", {"code": GOOD})], [fc("simulate")], [fc("finish", {"summary": "ok"})])
 out, stages = loop(call, [ERR, OK])
 assert out["stage"] == "passed" and stages == ["generating", "simulating", "fixing", "simulating", "passed"], stages
-assert out["code"] == "c2" and out["attempt"] == 2, out
+assert out["code"] == GOOD and out["attempt"] == 2, out
 print("HO4 ok: one failure, fixing, then passed")
 
-call, sent = script(*[t for _ in range(3) for t in ([fc("generate_protocol", {"code": "c"})], [fc("simulate")])])
+call, sent = script(*[t for _ in range(3) for t in ([fc("generate_protocol", {"code": GOOD})], [fc("simulate")])])
 out, stages = loop(call, [ERR, BAD, ERR])
 assert out["stage"] == "needs_you" and stages[-1] == "needs_you" and "NameError" in out["error"], out
 print("HO5 ok: three failures go to the person")
 
-call, sent = script([fc("finish", {"summary": "done"})], [fc("generate_protocol", {"code": "c"})],
+call, sent = script([fc("finish", {"summary": "done"})], [fc("generate_protocol", {"code": GOOD})],
                     [fc("simulate")], [fc("finish", {"summary": "done"})])
 out, stages = loop(call, [OK])
 rejected = json.loads([i for i in sent[1]["input"] if i.get("type") == "function_call_output"][0]["output"])
@@ -243,20 +319,27 @@ before = hand.record_hash(runlog.get(run_id, st.root)["record"])
 j = c.post("/input", json={"text": "looks right", "session": "ho"}).json()  # the list's: approve
 assert st.r["view"]["current"] == {"screen": "simulate", "target": run_id}, st.r["view"]
 assert spawned == [run_id] and j["reply"] == "Writing the robot code…", j
-assert st.handoff_steps(run_id) == steps
+plan = st.handoff_plan(run_id)
+assert plan["steps"] == steps and plan["liquids"] == approved["liquids"] and plan["seconds"] == approved["seconds"]
+assert '"protocolName": "Hand test — Run 1 (as-run)"' in plan["setup"], plan["setup"][:300]
 
 # the loop's progress lands on the run and the screen; the run record stays as it was (HO8)
 st.handoff_stage(run_id, "simulating", attempt=1)
 assert c.get("/record").json()["view"]["prompt"] == "Running it on a virtual robot…"
-st.handoff_stage(run_id, "passed", code=code_for(steps), check=hand.check(events_for(steps), steps), attempt=1)
+st.handoff_stage(run_id, "passed", code=code_for(plan), check=hand.check(events_for(steps), steps, plan["seconds"]),
+                 attempt=1)
 doc = runlog.get(run_id, st.root)
 assert hand.record_hash(doc["record"]) == before
-assert doc["handoff"]["csv"].startswith("well,group,status,steps,source,note\nB2,"), doc["handoff"]["csv"]
-assert 'C3,"Drug A",excluded,1,voice,"bubbles"' in doc["handoff"]["csv"], doc["handoff"]["csv"]
+csv = doc["handoff"]["csv"].splitlines()
+assert csv[:2] == ["# protocol: Hand test", "# run: Run 1"] and csv[2].startswith("# date: 20"), csv[:3]
+assert csv[3] == "well,group,contents,total_uL,status,excluded_reason,logged_by,note", csv[3]
+assert csv[4] == 'B2,"Control","Medium 100 µL; PBS 10 µL",110,done,"",voice,""', csv[4]
+assert 'C3,"Drug A","Medium 100 µL",100,excluded,"bubbles",voice,""' in csv, csv
+assert 'C9,"","Drug A 10 µL",10,redo,"",voice,"retry for C3"' in csv, csv
 snap = c.get("/record").json()
 assert snap["view"]["prompt"] == "All 4 steps match your record. Export?", snap["view"]
-assert snap["handoff"]["stage"] == "passed" and "protocol.comment(\"step 1\")" in snap["handoff"]["code"]
-assert snap["handoff"]["steps"] == steps  # what ⑨ replays
+assert snap["handoff"]["stage"] == "passed" and 'protocol.comment("Step 1: Add medium · 100 µL")' in snap["handoff"]["code"]
+assert snap["handoff"]["steps"] == steps and snap["handoff"]["liquids"] == approved["liquids"]  # ⑨ replays, ⑨b's line
 j = c.post("/input", json={"text": "export", "session": "ho"}).json()
 assert st.r["view"]["current"] == {"screen": "export_files", "target": run_id}, st.r["view"]
 # ⑨b Export: the iPad share sheet gets both files (named by protocol and run); the screen holds
@@ -266,8 +349,8 @@ assert j["reply"] == "Pick where to send them.", j
 share = [a for a in j["ui"] if a["action"] == "share"][0]
 assert [f["name"] for f in share["files"]] == ["HandTest_Run1_protocol.py", "HandTest_Run1_plate_map.csv"], share
 r = c.get(share["files"][0]["url"])
-assert r.status_code == 200 and r.text == code_for(steps), r.text[:80]
-assert c.get(share["files"][1]["url"]).text.startswith("well,group,status")
+assert r.status_code == 200 and r.text == code_for(plan), r.text[:80]
+assert c.get(share["files"][1]["url"]).text.startswith("# protocol: Hand test")
 for bad in (f"/handoff/{run_id}/files/record.json", "/handoff/..%2F..%2Fserver/files/protocol.py",
             "/handoff/run-nope/files/protocol.py"):
     assert c.get(bad).status_code == 404, bad  # known names under a finished run only
@@ -289,7 +372,7 @@ print("HO9 ok: step, open PDF, looks right, export (share sheet, cancel, again, 
 doc = runlog.get(run_id, st.root)
 doc["record"]["excluded"]["B2"] = "late note"
 runlog.write_run(doc, st.root)
-assert st.handoff_steps(run_id) is None
+assert st.handoff_plan(run_id) is None
 j = c.post("/input", json={"action": {"id": "navigate", "args": {"screen": "simulate", "target": run_id}},
                            "session": "ho"}).json()
 assert st.r["view"]["current"] == {"screen": "final_protocol", "target": run_id}, st.r["view"]
@@ -310,8 +393,11 @@ seed = RecordStore(path=tempfile.mkdtemp() + "/r.json")
 seed.start_demo_run()
 seed.r["done"] = [m for i, stp in enumerate(seed.r["plan"]["steps"]) for m in mark(i + 1, *stp.get("wells") or [])]
 seed.r["step_index"] = len(seed.r["plan"]["steps"]) - 1
-seed_steps = hand.as_run(seed._finish_locked("finished")["record"])
-assert hand.blockers(seed_steps) == [] and [s.get("volume_ul") for s in seed_steps] == [100, 10, 10, 10, None], seed_steps
+seed_a = approved_for(seed._finish_locked("finished")["record"], title="Demo protocol")
+seed_steps = seed_a["steps"]
+assert hand.blockers(seed_steps, seed_a["liquids"]) == [] and \
+    [s.get("volume_ul") for s in seed_steps] == [100, 10, 10, 10, None], seed_steps
+assert [s.get("pipette") for s in seed_steps] == ["p1000", "p50", "p50", "p50", None]
 print("HO-seed ok: the demo protocol has every volume")
 
 # HO10. Private runs have no hand off.
@@ -323,14 +409,39 @@ j = c.post("/input", json={"action": {"id": "make_robot", "args": {}}, "session"
 assert j["reply"] == "Hand off is off in Private mode." and st.r["view"]["current"]["screen"] != "final_protocol", j
 print("HO10 ok: private runs skip hand off")
 
+# HO4c. On ⑨0's step: a timer that ran off plan offers Keep as run / Use plan (voice and tap alike).
+api.store = st = ran()
+st.r["timers"][0].update({"minutes": 30, "started_at": 0.0})
+st._cancel({"messages": []}, "Incubate", "voice", 18.0)  # stopped after 18 s
+card = st.request_end_run({})[1]["card"]
+c.post("/confirm", json={"card_id": card["id"], "ok": True, "session": "ho"})
+run_id = st.r["view"]["current"]["target"]
+c.post("/input", json={"action": {"id": "show_step", "args": {"step": "4"}}, "session": "ho"})
+snap = c.get("/record").json()
+assert snap["view"]["slots"].get("timer") == "changed", snap["view"]["slots"]
+assert snap["handoff"]["summary"]["rows"][3]["run"] == "18 s"
+j = c.post("/input", json={"text": "use plan", "session": "ho"}).json()
+assert j["reply"] == "Step 4 uses the plan's time.", j
+assert c.get("/record").json()["handoff"]["summary"]["rows"][3]["run"] == "30 min"
+j = c.post("/input", json={"text": "keep as run", "session": "ho"}).json()
+assert j["reply"] == "Step 4 keeps the time it ran." and \
+    c.get("/record").json()["handoff"]["summary"]["rows"][3]["run"] == "18 s", j
+print("HO4c ok: Keep as run / Use plan on the step")
+
 # Live: the local simulator on the code for these steps (skipped when .venv-sim isn't installed).
 if hand.SIM_PYTHON.exists():
-    res = hand.simulate(code_for(steps))
+    res = hand.simulate(code_for(approved))
     assert res["ok"], res
-    chk = hand.check(res["events"], steps)
+    chk = hand.check(res["events"], steps, approved["seconds"])
     assert chk["ok"], chk
-    res = hand.simulate(code_for(seed_steps))
-    assert res["ok"] and hand.check(res["events"], seed_steps)["ok"], res
+    res = hand.simulate(code_for(seed_a))
+    assert res["ok"] and hand.check(res["events"], seed_steps, seed_a["seconds"])["ok"], res
+    assert hand.tips_used(res["events"]) == {"opentrons_flex_96_tiprack_1000ul": 21,
+                                              "opentrons_flex_96_tiprack_50ul": 21}, hand.tips_used(res["events"])
+    short = waited(0.3)
+    a = approved_for(short)
+    res = hand.simulate(code_for(a))
+    assert res["ok"] and hand.check(res["events"], a["steps"], a["seconds"])["ok"], res
     print("HO-live ok: opentrons_simulate run log matches the approved steps (test plan, demo seed)")
 else:
     print("HO-live skipped: .venv-sim not installed")

@@ -88,6 +88,13 @@ def fresh(sid: str, b: dict | None = None) -> RecordStore:
         # a finished run's hand off, approved, at the stage the button shows in
         target = finished + (":1" if sid in ("final_step", "final_page") else "")
         doc = runlog.get(finished, st.root)
+        if ((b or {}).get("when") or {}).get("timer") == "changed":
+            # the run reached its incubate step and stopped its timer early
+            doc["record"]["step_index"] = 4
+            doc["record"]["timer_log"] = [{"step_index": 4, "label": "Incubate", "planned_s": 1800,
+                                           "duration_s": 18, "started_at": 0, "ended_at": 18,
+                                           "status": "cancelled"}]
+            target = f"{finished}:5"
         doc["handoff"] = {"approved": {"hash": handoff.record_hash(doc["record"]), "ts": 1, "steps": []},
                           "stage": ((b or {}).get("when") or {}).get("stage") or "passed", "attempt": 1}
         runlog.write_run(doc, st.root)

@@ -209,11 +209,17 @@ struct HandoffFilesScreen: View {
     /// Where the Export button is (screen points): the iPad share sheet's arrow.
     var onAnchor: (CGRect) -> Void = { _ in }
 
-    /// plate_map.csv rows as v36 shows them: Well, Group, Status, Source.
+    /// The columns ⑨b shows of plate_map.csv, by header name.
+    private static let shown = [("well", "Well"), ("group", "Group"), ("contents", "Contents"), ("status", "Status")]
+
+    /// plate_map.csv rows (its "# ..." head left out), the shown columns only.
     private var table: [[String]] {
-        handoff.csv.split(separator: "\n").dropFirst().map { line in
-            let f = Self.fields(String(line))
-            return [f[safe: 0], f[safe: 1], f[safe: 2], f[safe: 4]].map { $0 ?? "" }
+        let lines = handoff.csv.split(separator: "\n").map(String.init).filter { !$0.hasPrefix("#") }
+        guard let head = lines.first.map(Self.fields) else { return [] }
+        let cols = Self.shown.map { head.firstIndex(of: $0.0) }
+        return lines.dropFirst().map { line in
+            let f = Self.fields(line)
+            return cols.map { $0.flatMap { f[safe: $0] } ?? "" }
         }
     }
 
@@ -225,7 +231,7 @@ struct HandoffFilesScreen: View {
                     ScrollView {
                         Grid(alignment: .leading, horizontalSpacing: 24 * u, verticalSpacing: 0) {
                             GridRow {
-                                ForEach(["Well", "Group", "Status", "Source"], id: \.self) { Text($0) }
+                                ForEach(Self.shown, id: \.0) { Text($0.1) }
                             }
                             .font(Theme.ui(20 * u, weight: .medium)).foregroundStyle(Theme.text2)
                             .padding(.vertical, 16 * u)
@@ -233,8 +239,8 @@ struct HandoffFilesScreen: View {
                                 Divider()
                                 GridRow {
                                     ForEach(Array(row.enumerated()), id: \.offset) { k, v in
-                                        Text(v.capitalized).foregroundStyle(k == 3 ? Theme.text2 : Theme.text1)
-                                            .lineLimit(1)
+                                        Text(k == 3 ? v.capitalized : v).foregroundStyle(k == 2 ? Theme.text2 : Theme.text1)
+                                            .lineLimit(1).minimumScaleFactor(0.7)
                                     }
                                 }
                                 .font(Theme.ui(26 * u)).padding(.vertical, 16 * u)
@@ -245,6 +251,7 @@ struct HandoffFilesScreen: View {
                 }
                 .padding(48 * u).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .benchCard(radius: 44 * u).enter(.left, 0, u: u)
+                .overlay(alignment: .bottomLeading) { reservoir }
                 VStack(alignment: .leading, spacing: 28 * u) {
                     Text("protocol.py").font(Theme.ui(43 * u, weight: .semibold)).foregroundStyle(Theme.text1)
                     ScrollView {
@@ -265,6 +272,23 @@ struct HandoffFilesScreen: View {
                             .onChange(of: g.frame(in: .global)) { _, f in onAnchor(f) }
                     }
                 }
+        }
+    }
+
+    /// Under the table: where each liquid goes in the reservoir, in its Opentrons App color.
+    @ViewBuilder private var reservoir: some View {
+        if let liqs = handoff.liquids, !liqs.isEmpty {
+            HStack(spacing: 18 * u) {
+                Text("Reservoir").foregroundStyle(Theme.text2)
+                ForEach(liqs, id: \.well) { lq in
+                    HStack(spacing: 8 * u) {
+                        Circle().fill(Color(hex: UInt32(lq.color.dropFirst(), radix: 16) ?? 0)).frame(width: 14 * u, height: 14 * u)
+                        Text(lq.line).foregroundStyle(Theme.text1)
+                    }
+                }
+            }
+            .font(Theme.ui(20 * u)).lineLimit(1).minimumScaleFactor(0.6)
+            .padding(.horizontal, 48 * u).padding(.bottom, 24 * u)
         }
     }
 

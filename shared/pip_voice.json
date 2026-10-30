@@ -237,6 +237,8 @@
   "handoff_fixing": ["Fixing the code, try {attempt}…"],
   "handoff_passed": ["All {of} steps match your record. Export?"],
   "handoff_needs_you": ["It didn't pass: {error}. Fix it?"],
+  "handoff_timing_run": ["Step {step} keeps the time it ran."],
+  "handoff_timing_plan": ["Step {step} uses the plan's time."],
   "handoff_share": ["Pick where to send them."],
   "handoff_not_shared": ["Not shared. Say export to try again."],
   "handoff_sharing": ["Finish sharing first."],

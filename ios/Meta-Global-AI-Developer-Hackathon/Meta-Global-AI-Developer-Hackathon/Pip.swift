@@ -639,6 +639,8 @@ struct Handoff: Decodable {
     var exported: Double?
     /// The approved steps the virtual robot replays on ⑨ (empty until approved).
     var steps: [Step]?
+    /// The reservoir: each liquid's well, volume and color (⑨b's line).
+    var liquids: [Liquid]?
 
     struct Step: Decodable {
         var n: Int
@@ -647,14 +649,38 @@ struct Handoff: Decodable {
         var kind: String
         var wells: [String]?
         var volumeUl: Double?
-        var minutes: Double?
-        enum CodingKeys: String, CodingKey { case n, title, kind, wells, volumeUl = "volume_ul", minutes }
+        /// A wait, in seconds (0.3 s stays 0.3 s).
+        var seconds: Double?
+        enum CodingKeys: String, CodingKey { case n, title, kind, wells, volumeUl = "volume_ul", seconds }
 
-        /// "10 µL" / "30 min", as v36's sim rows read.
+        /// "10 µL" / "18 s" / "30 min", as v36's sim rows read.
         var amount: String {
-            if kind == "delay" { return "\((minutes ?? 0).formatted()) min" }
+            if kind == "delay" { return Handoff.secondsText(seconds ?? 0) }
             return volumeUl.map { "\($0.formatted()) µL" } ?? ""
         }
+    }
+
+    struct Liquid: Decodable {
+        var name: String
+        var well: String
+        var volumeUl: Double
+        var color: String
+        enum CodingKeys: String, CodingKey { case name, well, volumeUl = "volume_ul", color }
+
+        /// "A1 Medium 2.3 mL" / "A2 PBS 77 µL".
+        var line: String {
+            let v = volumeUl >= 1000 ? "\((volumeUl / 1000).formatted(.number.precision(.fractionLength(0...1)))) mL"
+                : "\(Int(volumeUl)) µL"
+            return "\(well) \(name) \(v)"
+        }
+    }
+
+    /// Seconds as people say them (server handoff.secs_text): "<1 s", "18 s", "30 min".
+    static func secondsText(_ s: Double) -> String {
+        if s < 1 { return "<1 s" }
+        if s < 120 { return "\(Int(s.rounded())) s" }
+        let t = Int(s.rounded()), m = t / 60, r = t % 60
+        return r == 0 ? "\(m) min" : "\(m) min \(r) s"
     }
 
     struct Check: Decodable {
@@ -665,7 +691,8 @@ struct Handoff: Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case runId = "run_id", label, summary, meta, approved, stage, attempt, error, check, code, csv, exported, steps
+        case runId = "run_id", label, summary, meta, approved, stage, attempt, error, check, code, csv, exported, steps,
+             liquids
     }
 }
 

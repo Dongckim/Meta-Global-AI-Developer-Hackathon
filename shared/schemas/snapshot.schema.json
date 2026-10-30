@@ -197,10 +197,10 @@
     },
     "timer_log": {
       "type": "array",
-      "description": "Timers that ended or were cancelled, with their actual minutes (timers leave `timers` a minute after they end); hand off reads a timed step's real time here.",
-      "items": {"type": "object", "required": ["step_index", "minutes", "status"],
+      "description": "Timers that ended or were cancelled, with their actual seconds (timers leave `timers` a minute after they end); hand off reads a timed step's real time here.",
+      "items": {"type": "object", "required": ["step_index", "duration_s", "status"],
                 "properties": {"step_index": {"type": ["integer", "null"]}, "label": {"type": ["string", "null"]},
-                               "planned": {"type": ["number", "null"]}, "minutes": {"type": "number"},
+                               "planned_s": {"type": "number"}, "duration_s": {"type": "number"},
                                "started_at": {"type": "number"}, "ended_at": {"type": "number"},
                                "status": {"enum": ["done", "cancelled"]}}}
     },
@@ -237,7 +237,8 @@
         "stage": {"enum": [null, "generating", "simulating", "fixing", "passed", "needs_you"]},
         "attempt": {"type": "integer"}, "error": {"type": "string"}, "check": {"type": ["object", "null"]},
         "code": {"type": "string"}, "csv": {"type": "string"}, "exported": {"type": ["number", "null"]},
-        "steps": {"type": "array", "description": "The approved as-run steps (n, title, kind transfer | delay, wells, volume_ul, minutes); empty unless approved."},
+        "steps": {"type": "array", "description": "The approved as-run steps (n, title, kind transfer | delay, wells, volume_ul, pipette, seconds, comment); empty unless approved."},
+        "liquids": {"type": "array", "description": "The reservoir: each liquid's name, well, volume_ul and color; empty unless approved."},
         "meta": {"type": "object"},
         "summary": {"type": "object", "required": ["rows", "others", "of", "changed"],
                     "properties": {
