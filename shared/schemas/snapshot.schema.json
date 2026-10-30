@@ -6,6 +6,16 @@
   "required": ["epoch", "version", "view", "plan", "step_index", "done", "excluded", "redo",
                "notes", "tips", "timers", "stamps", "cards", "recent"],
   "properties": {
+    "header": {
+      "type": "object",
+      "required": ["mode"],
+      "description": "Served snapshots only (not the stored record): what the header draws besides Milo, `mode` on screens after the run mode was chosen (screens.json `header_mode`), else null.",
+      "properties": {
+        "mode": {"type": ["object", "null"],
+                 "required": ["id", "label"],
+                 "properties": {"id": {"type": "string"}, "label": {"type": "string"}}}
+      }
+    },
     "epoch": {"type": "string",
               "description": "Record lineage id: minted when record.json is created, carried across start/end, new only on data reset or server move. The app resets its stale guard on change."},
     "version": {"type": "integer"},
@@ -159,7 +169,11 @@
           "on_done": {"type": ["string", "null"]},
           "started_at": {"type": "number"},
           "step": {"type": "string"},
-          "wells": {"type": "string"}
+          "wells": {"type": "string"},
+          "step_index": {"type": "integer",
+                         "description": "The step the timer was set on (0-based)."},
+          "chip": {"type": "string",
+                   "description": "The header chip's name: that step's short title (<= 4 words). The app draws it as is."}
         }
       }
     },

@@ -30,7 +30,7 @@ from server.grammar import (
 )
 from server.screens import READ_KINDS as SCREEN_READ_KINDS
 from server.screens import FLOWS, PLANNED, SCREENS, canonical, card_choices, item_off, ITEMS, parent_of, result_of, title_of, ui_of
-from server.tone import say, section
+from server.tone import run_mode, say, section
 from server import library as lib
 from server import protocol as proto
 from server import labels
@@ -588,7 +588,7 @@ class RecordStore:
                       protocol_name: str | None) -> dict:
         draft = self.r.get("draft")
         run = {"run_id": runlog.new_run_id(), "protocol_id": protocol_id,
-               "protocol_name": protocol_name, "started_at": time.time()}
+               "protocol_name": protocol_name, "started_at": time.time(), "mode": run_mode()}
         prev_version = self.r.get("version", 0)
         prev_epoch = self.r.get("epoch") or uuid.uuid4().hex[:16]
         self.r = self._fresh_record(plan, 1, run)
@@ -893,9 +893,26 @@ class RecordStore:
             dconds = (snap["draft"].get("plan") or {}).get("conditions") or {}
             for key, abbr in labels.condition_abbrs(dconds).items():
                 dconds[key]["abbr"] = abbr  # plate letters for the plan check, same rule
+        steps = (self.r.get("plan") or {}).get("steps") or []
+        for t in snap.get("timers") or []:
+            # the header chip's name: its step's short title (older timers: the step, shortened)
+            i = t.get("step_index")
+            t["chip"] = labels.step_short_title(steps[i]) if isinstance(i, int) and 0 <= i < len(steps) \
+                else labels.shorten_title(t.get("step") or t.get("label") or "")
+        snap["header"] = {"mode": self.header_mode(cur.get("screen") or ("main" if snap.get("run") else "home"))}
         if snap.get("run"):  # what the app shows instead of the run id
             snap["run"]["label"] = self.run_label(self.active_run_doc() or snap["run"])["display"]
         return snap
+
+    def header_mode(self, screen: str) -> dict | None:
+        """The header's mode label, on screens after the mode was chosen
+        (registry `header_mode`): a run's own screens show that run's mode,
+        the start flow the mode chosen now; else None (not drawn)."""
+        if not SCREENS.get(screen, {}).get("header_mode"):
+            return None
+        mode = (self.r.get("run") or {}).get("mode") if parent_of(screen) == "main" else None
+        mode = mode or run_mode()
+        return {"id": mode, "label": (section("modes").get(mode) or {}).get("label") or mode.capitalize()}
 
     # --- plan helpers ---
 
@@ -1914,6 +1931,7 @@ class RecordStore:
         self.r["timers"].append({
             "id": uuid.uuid4().hex[:8], "label": label, "minutes": minutes, "on_done": on_done,
             "started_at": now, "step": step, "wells": frozen, "warned": False, "notified": False,
+            "step_index": self.r["step_index"],
         })
         if wells:
             self._tell(res, "timer_start", session, list(wells), minutes=fmt_minutes(minutes))

@@ -74,7 +74,7 @@ from server.grammar import match_session_end
 from server.live_session import LiveSender, LiveConversation, live_keywords
 from server.live_session import settings as live_settings
 from server.tone import keys as tone_keys
-from server.tone import say, section
+from server.tone import run_mode, say, section
 
 import httpx
 from dotenv import load_dotenv
@@ -86,7 +86,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 15
+API_VERSION = 16
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -594,8 +594,8 @@ def _resolve_cards(targets: list, session: dict):
 
 
 def search_mode() -> str:
-    """The run mode searches follow (settings: RUN_MODE; only Full exists yet)."""
-    return os.environ.get("RUN_MODE", "full")
+    """The run mode searches follow (tone.run_mode)."""
+    return run_mode()
 
 
 def _confirm_search() -> bool:

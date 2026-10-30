@@ -77,4 +77,26 @@ evs = api.store.check_timers(time.time())
 assert evs[-1]["message"].endswith("All steps done. Finish the run?"), evs
 assert [x["payload"]["op"] for x in step_cards()] == ["end_run"]
 print("SD4 ok: wells-less step -> card on timer end")
+
+# SD5. The header chip's name comes from the server: the timer's step short
+# title (no total time, no sentence); older timers fall back to a short label.
+fresh()
+api.store.r["step_index"] = 1
+api.store.apply_calls([{"name": "set_timer", "args": {"minutes": 30}}], "voice", "x", "grammar", {})
+snap = api.store.snapshot()
+assert [t["chip"] for t in snap["timers"]] == [snap["plan"]["steps"][1]["short_title"]], snap["timers"]
+api.store.r["timers"][0].pop("step_index")
+assert len(api.store.snapshot()["timers"][0]["chip"].split()) <= 4
+print("SD5 ok: timer chip names from the server")
+
+# SD6. The header's mode label shows only after the mode was chosen
+# (registry `header_mode`): the run's screens and the start flow from Import
+# on; Home, a run record, web searches and Mode itself have none.
+for screen, shown in (("main", True), ("well_card", True), ("import_choice", True), ("plan_check", True),
+                      ("home", False), ("protocol_detail", False), ("run_view", False),
+                      ("web_searches", False), ("mode", False)):
+    api.store.r["view"]["current"] = {"screen": screen, "target": ""}
+    m = api.store.snapshot()["header"]["mode"]
+    assert (m == {"id": "full", "label": "Full"}) if shown else m is None, (screen, m)
+print("SD6 ok: header mode by screen from the registry")
 print("ALL PASS")

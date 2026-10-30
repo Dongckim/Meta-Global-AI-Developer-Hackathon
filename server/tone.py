@@ -23,6 +23,13 @@ def keys() -> list[str]:
     return [k for k, v in _data().items() if not k.startswith("_") and isinstance(v, list)]
 
 
+def run_mode() -> str:
+    """The run mode now (settings: RUN_MODE; only Full exists yet), a key of
+    pip_voice.json `modes`."""
+    import os
+    return os.environ.get("RUN_MODE", "full")
+
+
 def section(name: str) -> dict:
     """A settings block of pip_voice.json (persona, live, ...); {} if absent."""
     v = _data().get(name)
