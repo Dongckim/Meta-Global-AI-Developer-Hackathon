@@ -79,6 +79,7 @@ from server.labels import protocol_short
 from server.live_session import LiveSender, LiveConversation, device_hints, live_keywords
 from server.live_session import settings as live_settings
 from server.tone import keys as tone_keys
+from server.private_chat import from_chat, to_chat
 from server.private_wake import wake_up, weights_gb
 from server.tone import run_mode, say, section
 
@@ -396,10 +397,14 @@ HF_TREE = "https://huggingface.co/api/models/{repo}/tree/main"
 _wake_tasks: set[asyncio.Task] = set()
 
 
+def _private_url() -> str:
+    return os.environ["PRIVATE_LLM_URL"].rstrip("/") + "/v1/chat/completions"
+
+
 async def _wake_post() -> None:
     """One token from the private model: its container is up when this returns."""
     async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
-        resp = await client.post(os.environ["PRIVATE_LLM_URL"].rstrip("/") + "/v1/chat/completions",
+        resp = await client.post(_private_url(),
                                  json={"messages": [{"role": "user", "content": "hi"}], "max_tokens": 1})
         resp.raise_for_status()
 
@@ -537,7 +542,8 @@ async def _call_spark(
     echo_calls: list | None = None, nudge: str = "",
 ) -> tuple[list, str, int, bool, dict, list]:
     """Returns (calls, text, ms, truncated, usage). Chat calls never search
-    (web search is its own call: server/search.py).
+    (web search is its own call: server/search.py). In Private the model is
+    Glimmer (server/private_chat.py); everything else here is the same.
 
     Chained turns carry function_call_outputs for the previous turn's calls.
     Lookup rounds replay round 1 inline (question, calls, outputs) so the
@@ -546,6 +552,7 @@ async def _call_spark(
     a recent-actions summary; a second failure answers sorry instead of a 502.
     """
     mem: Memory = session["memory"]
+    private = run_mode() == "private"
     if isinstance(mem, SparkChainMemory) and mem.needs_reanchor:
         mem.reset(store.session_summary())
         session["pending_outputs"] = []
@@ -554,7 +561,7 @@ async def _call_spark(
         seed = getattr(mem, "seed", "")
         if seed:
             mem.seed = ""
-        chained = "previous_response_id" in mem.params()
+        chained = "previous_response_id" in mem.params() and not private
         pend = session.get("pending_outputs") or []
         if pend and chained:
             req_input: object = [
@@ -596,14 +603,20 @@ async def _call_spark(
             **mem.params(),
         }
         t0 = time.perf_counter()
-        resp = await _post(
-            client,
-            "spark",
-            f"{BASE_URL}/responses",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json=body,
-        )
+        if private:
+            resp = await _post(client, "private model", _private_url(), json=to_chat(body))
+        else:
+            resp = await _post(
+                client,
+                "spark",
+                f"{BASE_URL}/responses",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json=body,
+            )
         ms = int((time.perf_counter() - t0) * 1000)
+        if private and resp.status_code >= 400 and attempt == 0:
+            print(f"private model {resp.status_code}: {resp.text[:300]}; retrying", flush=True)
+            continue  # a container just replaced can 500 once
         if chained and 400 <= resp.status_code < 500 and attempt == 0:
             print(f"spark chain {resp.status_code}: {resp.text[:500]}; restarting chain", flush=True)
             mem.reset(store.session_summary())
@@ -614,6 +627,9 @@ async def _call_spark(
             return [], "Sorry, say that again?", ms, True, {}
         _check("spark", resp)
         payload = resp.json()
+        if private:
+            payload = from_chat(payload)
+            store.wake.touch()
         mem.note_response(payload.get("id"))
         usage = payload.get("usage") or {}
         in_tok = usage.get("input_tokens", usage.get("prompt_tokens", "?"))

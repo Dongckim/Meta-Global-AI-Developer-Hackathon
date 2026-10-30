@@ -183,11 +183,11 @@ print("S5 ok: slow search times out")
 
 # S6. A mode that asks first (setting, not a branch): card, then yes searches.
 st = fresh()
-with patch.dict(os.environ, {"RUN_MODE": "private"}):
+with patch.dict(os.environ, {"RUN_MODE": "private", "PRIVATE_LLM_URL": "http://glimmer.test"}):
     api.store.wake.begin()
     api.store.wake.finish(True)  # the private model is up
     ScriptClient.queue = [perform("web_search", "c4", query="max DMSO for HeLa cells")]
-    with patch("httpx.AsyncClient", ScriptClient):
+    with patch("httpx.AsyncClient", ScriptClient), patch.object(api, "from_chat", lambda p: p):
         j = c.post("/input", json={"text": "Max DMSO for HeLa cells?", "session": "s"}).json()
     assert j["reply"] == "Search the web for 'max DMSO for HeLa cells'?" and len(sent) == 1, j
     card = j["cards"][0]

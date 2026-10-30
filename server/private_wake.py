@@ -66,6 +66,10 @@ class PrivateWake:
         self.state = "idle"
         self.gen += 1
 
+    def touch(self) -> None:
+        """The model just answered: its idle clock restarts."""
+        self.ready_at = self.clock()
+
     def fresh(self) -> bool:
         """Ready and not gone back to sleep since."""
         return self.state == "ready" and self.clock() - self.ready_at < section("private")["ready_ttl_s"]
