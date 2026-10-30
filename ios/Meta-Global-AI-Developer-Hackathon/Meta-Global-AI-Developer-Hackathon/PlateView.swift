@@ -234,7 +234,7 @@ struct StepCard: View {
             Text("Step \(lab.stepIndex + 1) of \(lab.steps.count)")
                 .font(.system(size: 28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text2)
             Text(title)
-                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u)
+                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                 .foregroundStyle(Theme.text1)
                 .lineLimit(2).truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)

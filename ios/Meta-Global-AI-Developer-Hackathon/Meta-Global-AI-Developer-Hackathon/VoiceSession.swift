@@ -923,12 +923,12 @@ struct TopHeaderView: View {
                 Text(Theme.modeLabel).font(Theme.ui(px(22))).tracking(-0.012 * px(22))
             }
             .foregroundStyle(Theme.mutSay)
-            .frame(height: px(64))
-            .padding(.leading, px(64))
+            .frame(height: px(Theme.Layout.headerRow))
+            .padding(.leading, px(Theme.Layout.side))
             .frame(maxWidth: .infinity, alignment: .leading)
             TimerChip(timers: timers, size: px(22))
-                .frame(height: px(64))
-                .padding(.trailing, px(64))
+                .frame(height: px(Theme.Layout.headerRow))
+                .padding(.trailing, px(Theme.Layout.side))
                 .frame(maxWidth: .infinity, alignment: .trailing)
             HStack(spacing: px(16)) {
                 OrbDisc(style: style, diameter: px(52), bright: hearing)
@@ -947,7 +947,7 @@ struct TopHeaderView: View {
                            prefix: you ? "You" : nil, weight: status ? .medium : .regular,
                            dotColor: status ? Theme.blue : Theme.mutT)
             }
-            .frame(minHeight: px(64))
+            .frame(minHeight: px(Theme.Layout.headerRow))
             // design `.pip.live`: rgba(255,255,255,.94), padding 0 30 0 8,
             // shadow 0 1 2 rgba(0,0,0,.05) + 0 12 34 -14 rgba(0,113,227,.45)
             .padding(.leading, live ? px(8) : 0)
@@ -968,8 +968,8 @@ struct TopHeaderView: View {
             .accessibilityAddTraits(blocked ? .isButton : [])
             .frame(maxWidth: .infinity)
         }
-        .padding(.top, px(44)) // from the screen top, like the design canvas
-        .padding(.bottom, px(24))
+        .padding(.top, px(Theme.Layout.headerTop)) // from the screen top, like the design canvas
+        .padding(.bottom, px(Theme.Layout.headerGap))
         .ignoresSafeArea(edges: .top)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
     }

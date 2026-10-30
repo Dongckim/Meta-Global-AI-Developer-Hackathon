@@ -32,7 +32,7 @@ private struct StartTitle: View {
     var text: String
     var u: CGFloat
     var body: some View {
-        Text(text).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u)
+        Text(text).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
             .foregroundStyle(Theme.text1).lineLimit(1).minimumScaleFactor(0.6)
     }
 }
@@ -179,7 +179,7 @@ struct DraftStepScreen: View {
             HStack(alignment: .top, spacing: 36 * u) {
                 VStack(alignment: .leading, spacing: 4 * u) {
                     Text("Step \(step) of \(rows.count)").font(.system(size: 28 * u)).foregroundStyle(Theme.text2)
-                    Text(r?.title ?? "").font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u)
+                    Text(r?.title ?? "").font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                         .foregroundStyle(Theme.text1).lineLimit(1).minimumScaleFactor(0.6)
                     if let r, !r.detail.isEmpty {
                         Text(r.detail).font(.system(size: 22 * u)).foregroundStyle(Theme.text2).lineLimit(1)
@@ -332,7 +332,7 @@ struct PlanCheckScreen: View {
                 }
                 .font(.system(size: 28 * u)).foregroundStyle(Theme.text2).enter(.rise, 0, u: u)
                 if let s {
-                    Text("\(s.steps) steps").font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u)
+                    Text("\(s.steps) steps").font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                         .foregroundStyle(Theme.text1).enter(.text, 1, u: u)
                     Text("\(s.conditions) conditions · \(s.wells) wells").font(.system(size: 28 * u))
                         .foregroundStyle(Theme.text1).enter(.rise, 2, u: u)
@@ -353,9 +353,9 @@ struct PlanCheckScreen: View {
                 SayRow(buttons: buttons, u: u, perform: perform).padding(.top, 36 * u)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 700 * u)
+            .frame(height: Theme.Layout.benchHeight * u)
         }
-        .padding(.top, 32 * u)
+        .padding(.top, Theme.Layout.benchTop * u)
         .onAppear { load() }
         .onChange(of: draft.plan.conditions.keys.sorted()) { _, _ in load() }
     }

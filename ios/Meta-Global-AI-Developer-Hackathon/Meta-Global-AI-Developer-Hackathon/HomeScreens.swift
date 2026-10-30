@@ -56,8 +56,9 @@ struct ProtocolsHome: View {
     var perform: (ScreenButton) -> Void
     /// The open draft's title (shown with Review while it waits).
     var draftTitle = ""
-    /// Registry `items.protocol` buttons: what an off row keeps ("Run again").
-    var rowButtons: [ScreenButton] = []
+    /// The run record just left: its page of runs shows again (this view is
+    /// rebuilt after a run record, so its own page state starts over).
+    var lastRunId: String? = nil
 
     private var selected: ProtocolSummary? {
         protocols.first { $0.id == selectedId }
@@ -87,14 +88,18 @@ struct ProtocolsHome: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 60 * u) {
-                left.frame(width: 476 * u)
+            HStack(alignment: .top, spacing: Theme.Layout.listGap * u) {
+                left.frame(width: Theme.Layout.listWidth * u)
                     .onChange(of: selected?.id) { _, _ in runPage = 0 }
                     .onChange(of: selectedId, initial: true) { _, id in
                         // the protocol on the right is always one of the cards on the left
                         if let i = protocols.firstIndex(where: { $0.id == id }) { page = i / perPage }
                     }
                 right.frame(maxWidth: .infinity, alignment: .leading)
+                    .onAppear {
+                        let rs = Array(runsOf(selected?.id, in: runs).reversed())
+                        if let i = rs.firstIndex(where: { $0.runId == lastRunId }) { runPage = i / runsPerPage }
+                    }
             }
             Spacer(minLength: 24 * u)
             SayRow(buttons: row, u: u, perform: perform)
@@ -102,7 +107,7 @@ struct ProtocolsHome: View {
     }
 
     private var left: some View {
-        VStack(spacing: 18 * u) {
+        VStack(spacing: Theme.Layout.listRowGap * u) {
             if let review {
                 // not saved yet: why it isn't a protocol here, and the way on
                 Button { perform(review) } label: {
@@ -125,9 +130,8 @@ struct ProtocolsHome: View {
                 let live = p.inProgress ?? 0
                 // the server says whether the row is on (a done protocol isn't); nothing is worked out here
                 let on = p.enabled ?? true
-                // a list row shows its name only (Say belongs to buttons); an off row
-                // keeps its registry buttons (Run again) fixed on the right, the title
-                // truncating before them
+                // a list row shows its name only (Say belongs to buttons); an off
+                // row (done) takes no tap, as the server takes no words for it
                 HStack(spacing: 16 * u) {
                     Button { onProtocol(p.id) } label: {
                         VStack(alignment: .leading, spacing: 4 * u) {
@@ -144,15 +148,9 @@ struct ProtocolsHome: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!on)
-                    if !on {
-                        ForEach(rowButtons.compactMap { $0.filled(["status": p.status ?? "", "id": p.id]) },
-                                id: \.say) { b in
-                            SayButton(button: b, kind: .secondary, size: 22 * u, perform: perform)
-                                .fixedSize().layoutPriority(1)
-                        }
-                    }
                 }
-                .padding(.horizontal, 32 * u).padding(.vertical, 26 * u)
+                .padding(.horizontal, 32 * u)
+                .frame(minHeight: Theme.Layout.listRow * u)
                 .background {
                     if p.id == selected?.id {
                         Color.clear.benchCard(radius: 32 * u)
@@ -173,6 +171,7 @@ struct ProtocolsHome: View {
                 .buttonStyle(.plain)
             }
             Rectangle().fill(Theme.cardOff).frame(height: 2 * u).padding(.horizontal, 8 * u)
+                .padding(.vertical, 4 * u)  // 20 from the last card and to Searches
             if let b = searches {
                 Button { perform(b) } label: {
                     HStack(spacing: 18 * u) {
@@ -193,7 +192,7 @@ struct ProtocolsHome: View {
     @ViewBuilder private var right: some View {
         if let p = selected {
             VStack(alignment: .leading, spacing: 0) {
-                Text(p.title).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u)
+                Text(p.title).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                     .foregroundStyle(Theme.text1).lineLimit(2).minimumScaleFactor(0.6)
                     .enter(.text, 0, u: u)
                 HStack(spacing: 12 * u) {
@@ -281,13 +280,14 @@ struct RunRecordScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 36 * u) {
+            HStack(alignment: .top, spacing: Theme.Layout.column * u) {
                 PlateView(lab: rlab, selected: $selected)
                     .padding(28 * u)
                     .frame(width: 800 * u, height: 566 * u)
                     .benchCard(radius: 44 * u)
                 side.frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(.top, Theme.Layout.benchTop * u)  // the bench kind: plate at 222
             Spacer(minLength: 24 * u)
             SayRow(buttons: buttons, u: u, perform: perform)
         }
@@ -299,7 +299,7 @@ struct RunRecordScreen: View {
             Text(doc?.protocolName ?? summary?.protocolName ?? "")
                 .font(.system(size: 28 * u)).foregroundStyle(Theme.text2).lineLimit(1)
             Text(summary?.label ?? "")
-                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1)
+                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1).displayLine(u)
                 .padding(.top, 8 * u)
             Text([summary?.day, summary?.state].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
                 .font(.system(size: 28 * u)).foregroundStyle(Theme.text1).padding(.top, 14 * u)
@@ -453,9 +453,9 @@ struct ModeScreen: View {
     private func mode(_ b: ScreenButton) -> Persona.Mode? { Persona.modes[b.say.lowercased()] }
 
     var body: some View {
-        VStack(spacing: 44 * u) {
+        VStack(spacing: Theme.Layout.titleGap * u) {
             Text(buttons.map { mode($0)?.label ?? $0.say }.joined(separator: " or ") + "?")
-                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1)
+                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1).displayLine(u)
                 .enter(.text, u: u)
             HStack(spacing: 36 * u) {
                 ForEach(Array(buttons.enumerated()), id: \.offset) { i, b in
@@ -466,6 +466,7 @@ struct ModeScreen: View {
             }
             .frame(width: 1122 * u)
         }
+        .padding(.bottom, Theme.Layout.choiceLift * u)
         .frame(maxHeight: .infinity)
     }
 }
@@ -477,11 +478,11 @@ struct ImportChoiceScreen: View {
     var perform: (ScreenButton) -> Void
 
     var body: some View {
-        VStack(spacing: 44 * u) {
+        VStack(spacing: Theme.Layout.titleGap * u) {
             // "Text, file, or photo?" from the choices themselves
             let words = buttons.enumerated().map { $0.offset == 0 ? $0.element.say : $0.element.say.lowercased() }
             Text(words.dropLast().joined(separator: ", ") + (words.count > 1 ? ", or " : "") + (words.last ?? "") + "?")
-                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1)
+                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1).displayLine(u)
                 .enter(.text, u: u)
             HStack(spacing: 36 * u) {
                 ForEach(Array(buttons.enumerated()), id: \.offset) { i, b in
@@ -492,6 +493,7 @@ struct ImportChoiceScreen: View {
             }
             .frame(width: 1248 * u)
         }
+        .padding(.bottom, Theme.Layout.choiceLift * u)
         .frame(maxHeight: .infinity)
     }
 }

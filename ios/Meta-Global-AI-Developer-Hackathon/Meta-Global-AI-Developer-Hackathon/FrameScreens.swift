@@ -32,7 +32,7 @@ struct FrameLayout<Body: View>: View {
                         .foregroundStyle(Theme.polishBlue)
                         .enter(.pop, 0, u: u)
                 }
-                Text(title).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u)
+                Text(title).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                     .foregroundStyle(Theme.text1).multilineTextAlignment(.center)
                     .lineLimit(2).minimumScaleFactor(0.6)
                     .enter(.text, 1, u: u)

@@ -71,6 +71,8 @@ struct ContentView: View {
     @State private var showHome = false
     @State private var selectedProtocol: String?
     @State private var viewingRun: String?
+    /// The run record opened last: Home's run list comes back on its page.
+    @State private var lastRun: String?
     @State private var viewingSource: ViewingSource?
     @State private var protocols: [ProtocolSummary] = []
     @State private var runs: [RunSummary] = []
@@ -134,6 +136,7 @@ struct ContentView: View {
             selectedWell = nil
         }
         viewingRun = cur == "run_view" && !tgt.isEmpty ? tgt : nil
+        if let r = viewingRun { lastRun = r }
         selectedProtocol = cur == "protocol_detail" && !tgt.isEmpty ? tgt : nil
         if cur == "protocol_source", !tgt.isEmpty {
             if viewingSource?.target != tgt { openSourceTarget(tgt) }
@@ -455,7 +458,7 @@ struct ContentView: View {
                                       onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
                                       onRun: { sendAction("open", ["target": "run:\($0)"]) },
                                       perform: performButton, draftTitle: lab.draft?.plan.title ?? "",
-                                          rowButtons: registry.rows["protocol"] ?? [])
+                                      lastRunId: lastRun)
                     } else {
                         // "Run 3 of Drug A/B is going. Finish it and start MTT?"
                         ConfirmScreen(lab: lab, buttons: registry.cards, u: u,
@@ -473,7 +476,7 @@ struct ContentView: View {
                                           onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
                                           onRun: { sendAction("open", ["target": "run:\($0)"]) },
                                           perform: performButton, draftTitle: lab.draft?.plan.title ?? "",
-                                          rowButtons: registry.rows["protocol"] ?? [])
+                                          lastRunId: lastRun)
                         } else {
                             ConfirmScreen(lab: lab, buttons: registry.cards, u: u,
                                           onAnswer: answer(id:ok:), onAnswerAll: answerAll, onChoice: choose(id:answer:))
@@ -552,12 +555,15 @@ struct ContentView: View {
         GeometryReader { g in
             // the first measure can be zero: draw once the size is real (no scale from 0)
             if g.size.width > 0, g.size.height > 0 {
-                let u = min(g.size.width / 1376, g.size.height / 764)
+                let u = Theme.Layout.unit(g.size)
                 content(u)
-                    .padding(.horizontal, 64 * u).padding(.vertical, 32 * u)
+                    .padding(.horizontal, Theme.Layout.side * u)
+                    .padding(.top, Theme.Layout.contentTop * u).padding(.bottom, Theme.Layout.contentBottom * u)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
+        // the design's bottom margin counts from the screen edge, not above the home indicator
+        .ignoresSafeArea(.container, edges: .bottom)
         .background { BenchCanvas() }
         .background { LayoutProbe(name: "stage") }
     }
@@ -577,8 +583,7 @@ struct ContentView: View {
         GeometryReader { g in
             let w = g.size.width, h = g.size.height
             let wide = w >= h
-            // design px: landscape 1376 wide x (32 + 700 + 32) tall; portrait 928 x 1410
-            let u = wide ? min(w / 1376, h / 764) : min(w / 928, h / 1410)
+            let u = Theme.Layout.unit(g.size, bench: true)
             Group {
                 if !lab.cards.isEmpty {
                     // ③ a waiting card takes the bench (Figma 37:13714...)
@@ -587,12 +592,12 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if wide {
                     // the side column takes what the margins, plate and gap leave
-                    let side = max(0, w - 2 * 64 * u - 800 * u - 36 * u)
-                    HStack(alignment: .top, spacing: 36 * u) {
+                    let side = max(0, w - 2 * Theme.Layout.side * u - 800 * u - Theme.Layout.column * u)
+                    HStack(alignment: .top, spacing: Theme.Layout.column * u) {
                         plateColumn(u)
                         benchSide(u).frame(width: side)
                     }
-                    .frame(height: 700 * u)
+                    .frame(height: Theme.Layout.benchHeight * u)
                 } else {
                     VStack(spacing: 40 * u) {
                         plateColumn(u)
@@ -601,9 +606,14 @@ struct ContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(.top, lab.cards.isEmpty ? 32 * u : 0)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: lab.cards.isEmpty ? .top : .center)
+            // landscape: the bench block and the cards center in the content box
+            // (bench top 222, cards on 572); portrait keeps its top-aligned bench
+            .padding(.top, (wide || !lab.cards.isEmpty ? Theme.Layout.contentTop : 32) * u)
+            .padding(.bottom, (wide || !lab.cards.isEmpty ? Theme.Layout.contentBottom : 0) * u)
+            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                   alignment: wide || !lab.cards.isEmpty ? .center : .top)
         }
+        .ignoresSafeArea(.container, edges: .bottom)
         .background { BenchCanvas() }
     }
 

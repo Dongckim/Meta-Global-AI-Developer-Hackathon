@@ -366,6 +366,63 @@ enum Theme {
         return designPx * width / canvasWidth
     }
 
+    /// Screen layout in design px on the 1376 x 1032 canvas (Figma "ver 2 -
+    /// Final", docs/design/ref/ver2_layout.json). Screens take their gaps
+    /// from here, never their own numbers. The canvas top is the screen top:
+    /// the status bar is hidden and the header ignores the top safe area, so
+    /// no inset is added to these values; the stage runs under the bottom
+    /// safe area (home indicator) for the same reason.
+    enum Layout {
+        /// Header: Milo's orb and line in a 64 row, 44 from the top (orb y 50).
+        static let headerTop: CGFloat = 44
+        static let headerRow: CGFloat = 64
+        /// Header row to the stage (the stage starts at 132).
+        static let headerGap: CGFloat = 24
+        static var headerBlock: CGFloat { headerTop + headerRow + headerGap }
+        /// Stage height under the header (900): the canvas fits it.
+        static var stageHeight: CGFloat { canvasHeight - headerBlock }
+
+        /// Left and right margins.
+        static let side: CGFloat = 64
+        /// Content box: lists start at 156, bottom buttons end at 988; centered
+        /// screens (cards, choices, confirm) center in it (572).
+        static let contentTop: CGFloat = 24
+        static let contentBottom: CGFloat = 44
+        /// Bench kind (plate card + right column: main, well card, plan
+        /// check, run record): its block starts at 222.
+        static let benchTop: CGFloat = 66
+        static let benchHeight: CGFloat = 700
+        /// Bench columns (plate 800, gap, right column from x 900).
+        static let column: CGFloat = 36
+        /// List kind (Home): the list column and the gap to its detail (x 594).
+        static let listWidth: CGFloat = 470
+        static let listGap: CGFloat = 60
+        /// Bottom button row (Say buttons 93 tall) and its gap to what's above.
+        static let buttonRow: CGFloat = 93
+        static let rowGap: CGFloat = 36
+        /// Choice kind (Mode, Import): the question and its cards center in
+        /// the box above where a button row would be (cards 40 under it).
+        static var choiceLift: CGFloat { buttonRow + rowGap }
+        static let titleGap: CGFloat = 40
+        /// List rows (protocol cards 125 tall, 16 apart).
+        static let listRow: CGFloat = 125
+        static let listRowGap: CGFloat = 16
+
+        /// Design px -> points, the one place: landscape fits the canvas
+        /// (1376 wide, the stage 900 tall under the header); portrait keeps
+        /// its rule (the bench 928 x 1410, other screens by width).
+        static func unit(_ size: CGSize, bench: Bool = false) -> CGFloat {
+            if size.width >= size.height {
+                return min(size.width / canvasWidth, size.height / stageHeight)
+            }
+            return bench ? min(size.width / 928, size.height / 1410) : size.width / canvasWidth
+        }
+
+        /// A 64 pt title takes the design's 68 px line box (SF's own is ~76),
+        /// so what follows sits where the design puts it.
+        static let displayTrim: CGFloat = (UIFont.systemFont(ofSize: 64, weight: .semibold).lineHeight - 68) / 2
+    }
+
     // MARK: - Voice state -> orb style (fullscreen Pip screens, shrunk)
 
     /// Render recipe for the top orb + aurora, from st-ready/listening/
@@ -554,4 +611,9 @@ extension Color {
             opacity: 1
         )
     }
+}
+
+extension View {
+    /// A 64 pt title in the design's line box (Theme.Layout.displayTrim).
+    func displayLine(_ u: CGFloat) -> some View { padding(.vertical, -Theme.Layout.displayTrim * u) }
 }

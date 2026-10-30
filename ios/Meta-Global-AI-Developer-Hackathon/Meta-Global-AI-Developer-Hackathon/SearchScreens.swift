@@ -76,7 +76,7 @@ struct WebAnswerScreen: View {
 
     private func answer(_ second: ScreenButton?) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(item.answerShort).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u)
+            Text(item.answerShort).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                 .foregroundStyle(Theme.text1).lineLimit(2).minimumScaleFactor(0.6)
                 .padding(.top, 14 * u).enter(.text, 0, u: u)
             Text(item.detail).font(.system(size: 28 * u)).foregroundStyle(Theme.text2)

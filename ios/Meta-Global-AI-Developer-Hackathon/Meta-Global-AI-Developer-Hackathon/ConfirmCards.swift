@@ -68,7 +68,7 @@ struct ConfirmScreen: View {
                     .padding(.bottom, 20 * u)
             }
             Text(c.title ?? c.question)
-                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u)
+                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                 .foregroundStyle(Theme.text1).multilineTextAlignment(.center)
                 .lineLimit(2).minimumScaleFactor(0.6)
             if c.kind == "next_step" {
@@ -88,7 +88,7 @@ struct ConfirmScreen: View {
     private var checklist: some View {
         VStack(alignment: .leading, spacing: 18 * u) {
             Text("\(cards.count) changes")
-                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u)
+                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                 .foregroundStyle(Theme.text1)
                 .frame(maxWidth: .infinity)
             ForEach(Array(cards.enumerated()), id: \.element.id) { i, c in

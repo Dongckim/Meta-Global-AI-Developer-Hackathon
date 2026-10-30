@@ -32,7 +32,7 @@ struct WellCardSide: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Well").font(.system(size: 28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text2)
                 .enter(.rise, 0, u: u)
-            Text(well).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u)
+            Text(well).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                 .foregroundStyle(Theme.text1).padding(.top, 8 * u)
                 .enter(.text, 1, u: u)
             Text(line).font(.system(size: 28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text1)
