@@ -4,6 +4,7 @@ before its confirm card. Every outgoing model call is recorded here.
 Run: python -m server.tests.test_private_voice (runs on import).
 """
 
+import asyncio
 import json
 import os
 import sys
@@ -50,6 +51,7 @@ def private(awake=True):
     tone.set_run_mode("private")
     api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
     api.store.spawn_wake = lambda session, gen: None
+    api.store.spawn_import = api._spawn_import
     api.store.start_demo_run()
     api._SESSIONS.clear()
     if awake:
@@ -130,6 +132,72 @@ with patch.object(api, "_post", calls):
     j = say(c, "how long can the cells sit out")
 assert j["route"] == "wait" and not calls.glimmer and not calls.meta, j
 print("PV7 ok: asleep: the turn waits for the wake-up")
+
+# Nothing reaches Meta before its card --------------------------------------
+c = private()
+calls = Calls(chat(("web_search", {"query": "max DMSO for HeLa cells"})))
+searched = []
+
+
+async def fake_search(client, key, question, query, session):
+    searched.append(query)
+    return "Found it.", []
+
+with patch.object(api, "_post", calls), patch.object(api, "_run_search", fake_search):
+    j = say(c, "what's the max DMSO for HeLa cells")
+    assert [x["kind"] for x in j["cards"]] == ["confirm_search"] and not searched and not calls.meta, j
+    j = say(c, "yes")
+assert searched == ["max DMSO for HeLa cells"], j
+print("PV8 ok: web_search chosen on Glimmer: card first, search only after yes")
+
+c = private()
+calls = Calls()
+with patch.object(api, "_post", calls):
+    j = say(c, "what does this label say")
+    assert [x["kind"] for x in j["cards"]] == ["confirm_photo"] and not j.get("ui") and not calls.meta, j
+    j = say(c, "yes")
+assert [d["status"] for d in api.store.searches()] == ["looking"], j
+print("PV9 ok: a photo question: card first, the camera only after yes")
+
+
+extracted = []
+
+
+async def fake_once(uploads, text, filename, original_id, h):
+    extracted.append(text)
+    raise api.HTTPException(502, "stop here")
+
+
+def import_text(c, text):
+    return c.post("/protocols/import", data={"text": text, "session": "t"}).json()
+
+
+async def after_yes():
+    """A yes spawns the extraction on the running loop."""
+    api._spawn_import()
+    await asyncio.sleep(0.01)
+
+c = private()
+with patch.object(api, "_import_once", fake_once):
+    j = import_text(c, "Add 10 uL to C2.")
+    assert [j["card"]["kind"], j["draft"], extracted] == ["confirm_import", None, []], j
+    say(c, "no")
+    assert extracted == [], extracted
+    print("PV10 ok: an import waits for its card; no sends nothing")
+    j = import_text(c, "Add 20 uL to C3.")
+    assert j["card"]["kind"] == "confirm_import" and extracted == [], j
+    asyncio.run(after_yes())
+assert extracted == ["Add 20 uL to C3."], extracted
+print("PV11 ok: yes reads the held import, once")
+
+c = private()
+calls = Calls(chat(("perform", {"action": "mark_done", "wells": ["B7"]})))
+with patch.object(api, "_post", calls):
+    j = c.post("/voice", data={"transcript": "the seventh one in row B, tick it off", "session": "t"}).json()
+    k = c.post("/voice", files={"audio": ("c.wav", b"RIFF", "audio/wav")}, data={"session": "t"}).json()
+assert "B7" in done_wells(api.store.r) and not calls.meta, (j, calls.meta)
+assert k["transcript"] == "" and k["reply"], k
+print("PV12 ok: /voice takes the iPad's words; audio sent anyway stops here, ASR 0")
 
 tone.set_run_mode(None)
 print("ALL PASS")

@@ -203,6 +203,8 @@ class RecordStore:
         #: The private model's wake-up; its task lives in api (None in plain store tests).
         self.wake = PrivateWake()
         self.spawn_wake = None
+        #: Runs an import held for its confirm card (api; None in plain store tests).
+        self.spawn_import = None
         self._load_or_seed()
         self._restore_mode()
 
@@ -863,6 +865,14 @@ class RecordStore:
             name = labels.protocol_short(doc)
             card = self._card({"cards": []}, "import_known", say("import_known", session, name=name), None,
                               {"op": "known_import", "protocol_id": protocol_id}, {"name": name})
+            self._commit()
+            return card
+
+    def ask_import(self, session: dict) -> dict:
+        """The card a mode that asks first shows before a file goes to be read."""
+        with self._lock:
+            card = self._card({"cards": []}, "confirm_import", say("confirm_import", session), None,
+                              {"op": "import"})
             self._commit()
             return card
 
@@ -2754,6 +2764,9 @@ class RecordStore:
                     self._saved(self._save_draft_locked(), session, res)
         elif op == "web_search":
             res["messages"].append(say("looking_up", session))
+        elif op == "import":
+            self.spawn_import()
+            res["messages"].append(say("import_reading", session))
         elif op == "look":
             self._start_look(p.get("question") or "", res, session, confirmed=True)
             p["search_id"] = (res["info"].get("look") or {}).get("search_id")

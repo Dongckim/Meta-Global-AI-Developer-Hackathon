@@ -181,6 +181,7 @@
     "new_run": {"title": "{run} is finished", "detail": "Start a new run of {name}?"},
     "confirm_search": {"title": "Search the web?", "detail": "“{query}”"},
     "confirm_photo": {"title": "Send a photo?", "detail": "Only the part you ask about leaves the iPad"},
+    "confirm_import": {"title": "Send this to the Meta API?", "detail": "That's how it gets read into a protocol"},
     "unmarked": {"context": "Step {now} · {now_title}", "title": "{wells} not marked", "detail": "Mark all {n} done and go to step {step}?", "header": "{wells} not marked."},
     "import_known": {"title": "Already saved as {name}", "detail": "Open it or review again?"},
     "save_as": {"title": "{name} already exists", "detail": "Save as version {version}, or keep it separate?"},
@@ -277,6 +278,8 @@
   "look_no_glasses": ["Connect your glasses first."],
   "look_send_failed": ["I couldn't check the photo. Try again."],
   "confirm_photo": ["Send a photo to answer that?"],
+  "confirm_import": ["Send this to the Meta API to read it?"],
+  "import_reading": ["Reading it now."],
   "looking_up": ["Looking it up."],
   "still_looking": ["Still looking…"],
   "search_stopped": ["Okay, I stopped looking."],
@@ -313,8 +316,8 @@
   },
   "modes": {
     "_note": "Run modes: header label and the line under each choice on the Mode screen.",
-    "full": {"label": "Full", "line": "Cloud model · fastest answers", "confirm_search": false, "confirm_photo": false},
-    "private": {"label": "Private", "line": "Private model · asks before anything leaves", "confirm_search": true, "confirm_photo": true}
+    "full": {"label": "Full", "line": "Cloud model · fastest answers", "confirm_search": false, "confirm_photo": false, "confirm_import": false},
+    "private": {"label": "Private", "line": "Private model · asks before anything leaves", "confirm_search": true, "confirm_photo": true, "confirm_import": true}
   },
   "also_ask": [
     "Should I also {what}?",

@@ -2286,6 +2286,41 @@ async def protocol_import(file: list[UploadFile] = File(default=[]), text: str =
         return {"draft": None, "review": [], "errors": [], "reply": card["question"],
                 "speak": speak_text(card["question"]), "card": card, "ms": 0, "protocol_id": known["id"],
                 "record_version": store.r["version"]}
+    if (section("modes").get(run_mode()) or {}).get("confirm_import"):
+        _held_import[:] = [sess, uploads, text, filename, original_id, h]
+        card = store.ask_import(sess)
+        return {"draft": None, "review": [], "errors": [], "reply": card["question"],
+                "speak": speak_text(card["question"]), "card": card, "ms": 0,
+                "record_version": store.r["version"]}
+    return await _extract_import(sess, uploads, text, filename, original_id, h)
+
+
+#: An import waiting for its card's yes: the session, then _extract_import's
+#: arguments. shortcut: a no leaves the bytes here until the next import.
+_held_import: list = []
+
+
+def _spawn_import() -> None:
+    """A yes to the import card: the extraction runs on its own, like a tap on Import."""
+    args, _held_import[:] = list(_held_import), []
+    if args:
+        task = asyncio.get_running_loop().create_task(_extract_import(*args))
+        _wake_tasks.add(task)
+        task.add_done_callback(_import_done)
+
+
+def _import_done(task: asyncio.Task) -> None:
+    _wake_tasks.discard(task)
+    if not task.cancelled() and task.exception():  # its stage said failed
+        print(f"import after card failed: {task.exception()!r}", flush=True)
+
+
+store.spawn_import = _spawn_import
+
+
+async def _extract_import(sess: dict, uploads: list, text: str, filename: str, original_id: str,
+                          h: str) -> dict:
+    """① and ④: the one extraction, joined by the same content in flight."""
     if h in _IMPORTS:
         print(f"import {h}: joining the extraction in flight", flush=True)
         return await asyncio.shield(_IMPORTS[h])
