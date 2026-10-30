@@ -894,7 +894,7 @@ def short_list(text: str, more: str = "{n} more on screen.") -> str:
     return " ".join(out)
 
 
-def speak_text(text: str, limit: int = 140, more: str | None = None) -> str:
+def speak_text(text: str, limit: int = 140, more: str | None = None, sentences: int | None = 2) -> str:
     """Spoken form (the one place): lists say their first item and a count
     (pip_voice.json live.more_on_screen), at most two whole sentences within
     limit, spelled wells, no glyphs. The full text stays on screen."""
@@ -905,7 +905,7 @@ def speak_text(text: str, limit: int = 140, more: str | None = None) -> str:
     s = s.translate({ord(c): None for c in _SPEAK_STRIP}).replace("·", ",")
     s = re.sub(r"\s+", " ", s)
     s = re.sub(r"\s+,", ",", s).strip(" ,")
-    return whole_sentences(s, limit, max_count=2)
+    return whole_sentences(s, limit, max_count=sentences)
 
 
 _SPAN_STOPWORDS = {"a", "an", "the"}

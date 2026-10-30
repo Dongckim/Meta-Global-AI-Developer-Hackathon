@@ -128,6 +128,7 @@ with patch("httpx.AsyncClient", ScriptClient):
     ScriptClient.queue = [sam(((10, 10, 60, 40), 0.4), ((100, 50, 300, 250), 0.9)), read("DMSO, 10 mM.", "Stock.")]
     j = send(sid).json()
     assert j["ok"] is True and j["reply"] == "DMSO, 10 mM. Read from photo.", j
+    assert j["speak"] == "DMSO, 10 millimolar. Stock.", j["speak"]  # the answer, then its summary (units spoken)
     rec = item(sid)
     assert (rec["status"], rec["basis"], rec["answer_short"], rec["read"]) == ("ok", "photo", "DMSO, 10 mM.",
                                                                                  "DMSO 10 mM"), rec
@@ -164,6 +165,7 @@ with patch("httpx.AsyncClient", ScriptClient):
     rec = item(sid)
     assert rec["target"] == "tube" and rec["basis"] == "cited" and rec["query"] == "DMSO shelf life", rec
     assert rec["answer_short"] == "Keep it under 0.5%." and rec["sources"], rec
+    assert j["speak"] == "Keep it under 0.5%. Stock lasts a year.", j["speak"]
     print("LK5 ok: what was read goes to the web search when it must")
 
     # LK6. Private mode asks before a photo leaves; yes opens the camera.
@@ -221,4 +223,21 @@ with patch("httpx.AsyncClient", ScriptClient):
     assert j["stale"] is True and (rec["status"], rec["attempt"], rec["outline"]) == ("looking", 3, []), (j, rec)
     assert not ScriptClient.queue and not api.store.look_crop_path(sid).exists(), "no read, no crop for it"
 print("LK8 ok: retake drops the photo, late replies ignored")
+# LK9. A photo that can't be read (the API fails, or the crop): back to
+# looking, so Take it works again; "Show me." is said once (the reply, not
+# the stage too).
+with patch("httpx.AsyncClient", ScriptClient):
+    fresh()
+    stages = []
+    with patch.object(api, "_stage", lambda s, st, **kw: stages.append((st, kw))):
+        sid = said("what does this say?")["ui"][0]["search_id"]
+        assert [kw.get("say") for st, kw in stages if st == "looking"] == [None], stages
+        bad = FakeResp(text="boom")
+        bad.status_code = 500
+        ScriptClient.queue = [bad]
+        assert send(sid).status_code >= 500
+    assert item(sid)["status"] == "looking" and api.store.view_slots("web_answer", sid)["camera"] == "on"
+    ScriptClient.queue = [sam(((100, 50, 300, 250), 0.9)), read("DMSO, 10 mM.")]
+    assert send(sid).json()["ok"] is True
+print("LK9 ok: a failed read brings the camera back; Show me said once")
 print("ALL PASS")
