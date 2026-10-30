@@ -127,7 +127,7 @@ assert [(s["kind"], s.get("source"), s.get("volume_ul"), s.get("wells"), s.get("
     ("transfer", "A2", 10, ["B2", "B4"], "p50", None),
     ("transfer", "A3", 10.0, ["C2", "C9"], "p50", None),  # 0.01 mL in µL; ≤ 50 µL: the 50
     ("delay", None, None, None, None, 2100.0)], steps
-assert steps[0]["comment"] == "Step 1: Add medium · 100 µL" and steps[3]["comment"] == "Step 4: Incubate · 35 min"
+assert steps[0]["comment"] == "Step 1: Add medium · 100 µL" and steps[3]["comment"] == "Step 4: Incubate · as run 35 min (plan 30 min)"
 assert steps[3]["msg"] == "Incubate (as run: 35 min; plan: 30 min)", steps[3]
 assert hand.blockers(steps, approved["liquids"]) == []
 print("HO1 ok: changes with their events; as-run steps with pipettes and seconds; step 5 not reached")
@@ -135,15 +135,15 @@ print("HO1 ok: changes with their events; as-run steps with pipettes and seconds
 # HO1c. Liquids: reservoir well in plan order, what's drawn + 10 %, condition tone (medium neutral);
 # the head is code-made (metadata, both pipettes, define_liquid / load_liquid, empty plate wells).
 assert [(lq["name"], lq["well"], lq["volume_ul"], lq["color"]) for lq in approved["liquids"]] == [
-    ("Medium", "A1", 550.0, hand.NEUTRAL_TONE),  # 5 wells x 100 µL x 1.1
-    ("PBS", "A2", 22.0, hand.GROUP_TONES[0]),     # ctrl (sorted first) wells
-    ("Drug A", "A3", 22.0, hand.NEUTRAL_TONE)], approved["liquids"]  # C9 is outside Drug A's wells
+    ("Medium", "A1", 550.0, hand.NEUTRAL_COLOR),  # 5 wells x 100 µL x 1.1
+    ("PBS", "A2", 22.0, hand.LIQUID_COLORS[0]),     # ctrl (sorted first) wells
+    ("Drug A", "A3", 22.0, hand.NEUTRAL_COLOR)], approved["liquids"]  # C9 is outside Drug A's wells
 head = approved["setup"]
 assert '"protocolName": "Hand test — Run 1 (as-run)"' in head and '"author": "Glassistant (Milo)"' in head
 assert "2026-10-30. Generated from the recorded run; simulated with opentrons_simulate." in head
-assert '"apiLevel": "2.31"' in head and 'load_instrument("flex_1channel_50", "left"' in head
+assert '"apiLevel": "2.22"' in head and 'load_instrument("flex_1channel_50", "left"' in head
 assert 'load_instrument("flex_1channel_1000", "right"' in head
-assert 'res.load_liquid(["A1"], 550, liquid_1)' in head and 'display_color="#AEAEB2"' in head
+assert 'res.load_liquid(["A1"], 550, liquid_1)' in head and f'display_color="{hand.NEUTRAL_COLOR}"' in head
 assert 'plate.load_empty(["B2", "B3", "B4", "C2", "C4", "C9"])' in head
 big = hand.liquids(rec, [{**steps[0], "volume_ul": 3000.0}])
 assert hand.blockers(steps, big) == ["Medium needs 16500 µL, more than a reservoir well holds (15000 µL)."]
@@ -398,6 +398,9 @@ seed_steps = seed_a["steps"]
 assert hand.blockers(seed_steps, seed_a["liquids"]) == [] and \
     [s.get("volume_ul") for s in seed_steps] == [100, 10, 10, 10, None], seed_steps
 assert [s.get("pipette") for s in seed_steps] == ["p1000", "p50", "p50", "p50", None]
+assert (seed_steps[4]["comment"], seed_steps[4]["msg"]) == (
+    "Step 5: Incubate · 30 min", "Incubate at 37 °C (as run: 30 min; plan: 30 min)"), seed_steps[4]
+assert [lq["color"] for lq in seed_a["liquids"]] == [hand.NEUTRAL_COLOR, *hand.LIQUID_COLORS[:3]]
 print("HO-seed ok: the demo protocol has every volume")
 
 # HO10. Private runs have no hand off.

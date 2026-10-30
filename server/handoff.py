@@ -31,9 +31,9 @@ MAX_ROUNDS = 12
 
 PLATE = "corning_96_wellplate_360ul_flat"
 RESERVOIR = "nest_12_reservoir_15ml"
-#: The highest apiLevel the simulator (opentrons 10.1.0) supports; liquids
-#: (Labware.load_liquid, load_empty) need 2.22+.
-API_LEVEL = "2.31"
+#: The lowest apiLevel with what the file uses (Labware.load_liquid and
+#: load_empty need 2.22): the reader's Opentrons App and robot aren't ours to pick.
+API_LEVEL = "2.22"
 #: Pipette rule (code, not the model): up to 50 µL the 50, else the 1000.
 P50_MAX_UL = 50
 DECK = {"robot": "Flex", "api_level": API_LEVEL,
@@ -44,10 +44,12 @@ DECK = {"robot": "Flex", "api_level": API_LEVEL,
         "reservoir": {"load_name": RESERVOIR, "slot": "D1", "well_max_ul": 15000},
         "plate": {"load_name": PLATE, "slot": "D2"},
         "trash": "A3"}
-#: The app's condition tones (Theme.groupTones, by sorted condition key) and
-#: the neutral for a liquid of no one condition (medium).
-GROUP_TONES = ["#8E8E93", "#1D1D1F", "#5A5A5E"]
-NEUTRAL_TONE = "#AEAEB2"
+#: Liquid colors in the Opentrons App (the one place they're set): a liquid
+#: that treats one condition takes that condition's color (conditions in
+#: sorted key order: control, drug A, drug B, ...); one that goes to several
+#: (medium) takes the neutral.
+LIQUID_COLORS = ["#9E9E9E", "#2F80ED", "#F2994A", "#27AE60", "#9B51E0", "#EB5757"]
+NEUTRAL_COLOR = "#F7C6D0"
 #: Reservoir fill: what the steps draw plus 10 %.
 OVERAGE = 1.1
 
@@ -233,13 +235,16 @@ def as_run(record: dict, timing: dict | None = None) -> list[dict]:
             what = f"{r['title']} at {_fmt(temp)} °C" if isinstance(temp, (int, float)) else r["title"]
             out.append({"n": 0, "index": r["index"], "title": r["title"], "kind": "delay",
                         "seconds": _whole(round(float(r["seconds"]), 1)),
+                        # the comment: "as run 18 s (plan 30 min)" when the run's time is kept, else the time
+                        "said": f"as run {r['run']} (plan {r['plan']})" if r["flagged"] and r["timing"] == "run"
+                        else r["run"],
                         "msg": f"{what} (as run: {secs_text(ran) if (ran := _timer_s(record, r['index'])) is not None else r['plan']}; plan: {r['plan']})"})
     for k, s in enumerate(out):
         s["n"] = k + 1
         if s["kind"] == "transfer":
             s["comment"] = f"Step {s['n']}: {s['title']} · {_fmt(s['volume_ul'] or 0)} µL"
         else:
-            s["comment"] = f"Step {s['n']}: {s['title']} · {secs_text(s['seconds'])}"
+            s["comment"] = f"Step {s['n']}: {s['title']} · {s['said']}"
     return out
 
 
@@ -276,7 +281,7 @@ def liquids(record: dict, steps: list[dict]) -> list[dict]:
             k = next((k for k in keys if wells_of[liq] <= set((conds[k] or {}).get("wells") or [])), None)
         out.append({"name": liq[:1].upper() + liq[1:], "liquid": liq, "well": well,
                     "volume_ul": float(-(-need[liq] * OVERAGE // 1)),
-                    "color": GROUP_TONES[keys.index(k) % len(GROUP_TONES)] if k else NEUTRAL_TONE,
+                    "color": LIQUID_COLORS[keys.index(k) % len(LIQUID_COLORS)] if k else NEUTRAL_COLOR,
                     "description": f"{_fmt(need[liq])} µL drawn by the run + 10 %"})
     return out
 

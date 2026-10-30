@@ -106,8 +106,9 @@ not in that step (so never into an excluded one).
 
 ## The robot file (as-run, readable, liquids in the Opentrons App)
 
-- apiLevel 2.31 (the highest opentrons 10.1.0 simulates). `Labware.load_liquid`,
-  `load_liquid_by_well`, `load_empty` need 2.22+, `define_liquid` 2.14+.
+- apiLevel 2.22: the lowest with everything the file uses (`Labware.load_liquid`,
+  `load_empty` need 2.22, `define_liquid` 2.14), since the reader's Opentrons
+  App and robot version aren't ours to choose.
   Opentrons documents liquids at setup (Initial Liquid Setup, deck map,
   `display_color`); it doesn't document liquids shown building up in wells
   during a run.
@@ -115,7 +116,8 @@ not in that step (so never into an excluded one).
   (as-run)", author Glassistant (Milo), date + "Generated from the recorded
   run; simulated with opentrons_simulate"), both pipettes, one
   `define_liquid` per liquid (reservoir well A1 on, what the steps draw +
-  10 %, the app's condition tone or neutral) + `res.load_liquid`, and
+  10 %, a color the Opentrons App tells apart: the condition's in
+  `handoff.LIQUID_COLORS`, light pink for medium) + `res.load_liquid`, and
   `plate.load_empty` on the plate wells used. Spark copies it as is; a
   changed head fails before simulating.
 - Pipettes by code: ≤ 50 µL `flex_1channel_50` (left, 50 µL tips), else

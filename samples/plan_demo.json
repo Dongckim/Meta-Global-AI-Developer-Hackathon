@@ -47,9 +47,10 @@
     },
     {
       "kind": "incubate",
-      "text": "30 min incubation",
+      "text": "Incubate the plate for 30 min at 37 °C before reading.",
+      "short_title": "Incubate",
       "minutes": 30,
-      "temp_c": null,
+      "temp_c": 37,
       "tip": null,
       "caution": null,
       "pipette": null,
