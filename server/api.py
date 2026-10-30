@@ -1998,8 +1998,22 @@ async def look_photo(file: UploadFile = File(...), search_id: str = Form(...), s
             resp = await _post(client, "sam", f"{BASE_URL}/responses", headers={**headers, "Accept": "text/event-stream"},
                                json=lookmod.build_sam_body(target, lookmod.data_url(raw, file.content_type or "image/jpeg")))
             _check("sam", resp)
-            found = lookmod.matches(lookmod.sse_text(resp.text))
+            sam_text = lookmod.sse_text(resp.text)
+            found = lookmod.matches(sam_text)
             if not found:
+                # why SAM found nothing: what it was asked, the photo it got, what it said;
+                # the photo is kept beside the looks (server/data, never committed)
+                miss = store.root / "looks" / f"{re.sub(r'[^0-9a-f]', '', search_id)}-{int(a)}-miss.jpg"
+                miss.parent.mkdir(parents=True, exist_ok=True)
+                miss.write_bytes(raw)
+                try:
+                    from PIL import Image
+                    import io as _io
+                    size = "x".join(map(str, Image.open(_io.BytesIO(raw)).size))
+                except Exception:
+                    size = "?"
+                print(f"look none target={target!r} q={question[:60]!r} photo={len(raw)}B {size} "
+                      f"kept={miss.name} sam={sam_text[:400]!r}", flush=True)
                 line = say("look_none", sess, target=target)
                 if store.update_look(search_id, a, status="looking") is None:
                     return _look_stale()
