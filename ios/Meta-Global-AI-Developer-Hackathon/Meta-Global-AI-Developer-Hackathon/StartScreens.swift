@@ -9,6 +9,23 @@ import SwiftUI
 // "volume · wells", flagged + reason, quote page; other steps; counts).
 // Buttons are the registry's, filled from view.slots ("Say Step {step}").
 // Server to do: value edits by voice (Fix it opens the tap editor for now).
+// The same ⑤c-⑤e views show a finished run's final protocol (⑨0, no design
+// of its own): ReviewSource carries the mode; what only the final protocol
+// draws (plan → run, its changes) stays in FinalChanges / rowDetail.
+
+/// Which review the ⑤c-⑤e views show.
+enum ReviewMode { case importReview, finalProtocol }
+
+/// What the review views draw: an import's draft, or a finished run's final
+/// protocol (snapshot handoff), in the same summary shape.
+struct ReviewSource {
+    var meta: DraftMeta
+    var summary: DraftSummary?
+    var mode: ReviewMode
+
+    init(_ draft: ProtocolDraft) { (meta, summary, mode) = (draft.meta, draft.summary, .importReview) }
+    init(_ handoff: Handoff) { (meta, summary, mode) = (handoff.meta, handoff.summary, .finalProtocol) }
+}
 
 /// Where a draft's text came from, said honestly on every quote: the PDF,
 /// the photo transcript, or the pasted text.
@@ -72,7 +89,7 @@ struct DraftReadyScreen: View {
 // MARK: - ⑤c Check the steps
 
 struct DraftStepsScreen: View {
-    var draft: ProtocolDraft
+    var review: ReviewSource
     var buttons: [ScreenButton]
     var u: CGFloat
     var onRow: (Int) -> Void
@@ -82,13 +99,14 @@ struct DraftStepsScreen: View {
     private let maxRows = 5
 
     var body: some View {
-        let origin = DraftOrigin(draft.meta)
-        let rows = draft.summary?.rows ?? []
+        let origin = DraftOrigin(review.meta)
+        let rows = review.summary?.rows ?? []
+        let final = review.mode == .finalProtocol
         VStack(spacing: 0) {
-            StartTitle(text: "Check the steps", u: u).enter(.text, 0, u: u)
+            StartTitle(text: final ? "Final protocol" : "Check the steps", u: u).enter(.text, 0, u: u)
             HStack(spacing: 12 * u) {
-                Image(systemName: origin.icon).foregroundStyle(Theme.polishBlue)
-                Text("From \(origin.label) · pipetting only").foregroundStyle(Theme.text2)
+                Image(systemName: final ? "checklist" : origin.icon).foregroundStyle(Theme.polishBlue)
+                Text(final ? finalLine : "From \(origin.label) · pipetting only").foregroundStyle(Theme.text2)
             }
             .font(Theme.ui(28 * u)).lineLimit(1).minimumScaleFactor(0.6)
             .padding(.top, 14 * u).enter(.rise, 1, u: u)
@@ -100,7 +118,7 @@ struct DraftStepsScreen: View {
                     Text("+\(rows.count - maxRows) more").font(Theme.ui(22 * u)).foregroundStyle(Theme.polishBlue)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22 * u)
                 }
-                if let others = draft.summary?.others, !others.isEmpty {
+                if let others = review.summary?.others, !others.isEmpty {
                     Line().stroke(Theme.text4, style: StrokeStyle(lineWidth: 1, dash: [4 * u, 4 * u]))
                         .frame(height: 1).padding(.top, 14 * u)
                     HStack(spacing: 16 * u) {
@@ -121,6 +139,14 @@ struct DraftStepsScreen: View {
         .frame(maxHeight: .infinity)
     }
 
+    /// The final protocol's line: the run as it went, how much of it changed.
+    private var finalLine: String {
+        let s = review.summary
+        let n = s?.rows.count ?? 0, of = s?.of ?? n, changed = s?.changed ?? 0
+        let steps = n == of ? "\(n) robot steps" : "\(n) of \(of) robot steps"
+        return "As the run went · \(steps) · " + (changed == 0 ? "as planned" : "\(changed) changed")
+    }
+
     private func row(_ r: DraftRow) -> some View {
         Button { onRow(r.n) } label: {
             HStack(spacing: 0) {
@@ -131,11 +157,11 @@ struct DraftStepsScreen: View {
                 Text(r.title).font(Theme.ui(30 * u, weight: .semibold)).foregroundStyle(Theme.text1)
                     .lineLimit(1).minimumScaleFactor(0.6)
                     .frame(width: 270 * u, alignment: .leading).padding(.leading, 23 * u)
-                Text(r.detail).font(Theme.ui(28 * u)).foregroundStyle(Theme.text2)
+                Text(rowDetail(r)).font(Theme.ui(28 * u)).foregroundStyle(Theme.text2)
                     .lineLimit(1).minimumScaleFactor(0.6)
                 Spacer(minLength: 12 * u)
                 if r.flagged {
-                    Text("Check").font(Theme.ui(22 * u, weight: .semibold)).foregroundStyle(.white)
+                    Text(review.mode == .finalProtocol ? "Changed" : "Check").font(Theme.ui(22 * u, weight: .semibold)).foregroundStyle(.white)
                         .padding(.horizontal, 22 * u).frame(height: 44 * u)
                         .background(Capsule().fill(Theme.polishBlue))
                 } else {
@@ -152,6 +178,43 @@ struct DraftStepsScreen: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Step \(r.n), \(r.title)")
     }
+
+    /// A changed final protocol step reads plan → run; every other row its detail.
+    private func rowDetail(_ r: DraftRow) -> String {
+        guard review.mode == .finalProtocol, r.flagged, let plan = r.plan, let run = r.run else { return r.detail }
+        return "\(plan) → \(run)"
+    }
+}
+
+/// A final protocol step's changes, each with the record event it came from.
+/// Kept apart from the review layout: ⑨0 has no design yet and may change.
+struct FinalChanges: View {
+    var changes: [RunChange]
+    var u: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10 * u) {
+            ForEach(changes, id: \.self) { c in
+                HStack(alignment: .firstTextBaseline, spacing: 12 * u) {
+                    Image(systemName: Self.icon(c.event)).foregroundStyle(Theme.polishBlue)
+                    Text(c.text).foregroundStyle(Theme.text1).lineLimit(2).minimumScaleFactor(0.7)
+                }
+                .font(Theme.ui(22 * u))
+            }
+        }
+    }
+
+    /// Where the change came from in the record.
+    static func icon(_ event: String) -> String {
+        switch event {
+        case "excluded": "xmark.circle"
+        case "skipped": "forward"
+        case "redo": "arrow.counterclockwise"
+        case "done": "hand.tap"
+        case "timer": "timer"
+        default: "circle.dashed"
+        }
+    }
 }
 
 private struct Line: Shape {
@@ -163,7 +226,7 @@ private struct Line: Shape {
 // MARK: - ⑤d Step source
 
 struct DraftStepScreen: View {
-    var draft: ProtocolDraft
+    var review: ReviewSource
     var step: Int
     /// Registry buttons: Looks right, Fix it (the row), Open {doc} (inline).
     var buttons: [ScreenButton]
@@ -171,9 +234,9 @@ struct DraftStepScreen: View {
     var perform: (ScreenButton) -> Void
 
     var body: some View {
-        let rows = draft.summary?.rows ?? []
+        let rows = review.summary?.rows ?? []
         let r = rows.first { $0.n == step }
-        let origin = DraftOrigin(draft.meta)
+        let origin = DraftOrigin(review.meta)
         let open = buttons.first { $0.action == "open_source_page" }
         VStack(spacing: 36 * u) {
             HStack(alignment: .top, spacing: 36 * u) {
@@ -181,7 +244,11 @@ struct DraftStepScreen: View {
                     Text("Step \(step) of \(rows.count)").font(Theme.ui(28 * u)).foregroundStyle(Theme.text2)
                     Text(r?.title ?? "").font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                         .foregroundStyle(Theme.text1).lineLimit(1).minimumScaleFactor(0.6)
-                    if let r, !r.detail.isEmpty {
+                    if review.mode == .finalProtocol, let r, let ch = r.changes, !ch.isEmpty {
+                        Text([r.plan, r.run].compactMap { $0 }.joined(separator: " → "))
+                            .font(Theme.ui(22 * u)).foregroundStyle(Theme.text2).lineLimit(1)
+                        FinalChanges(changes: ch, u: u).padding(.top, 12 * u)
+                    } else if let r, !r.detail.isEmpty {
                         Text(r.detail).font(Theme.ui(22 * u)).foregroundStyle(Theme.text2).lineLimit(1)
                     }
                 }
@@ -224,7 +291,7 @@ struct DraftStepScreen: View {
 // MARK: - ⑤e Original page
 
 struct DraftPageScreen: View {
-    var draft: ProtocolDraft
+    var review: ReviewSource
     var step: Int
     var buttons: [ScreenButton]
     var u: CGFloat
@@ -233,16 +300,16 @@ struct DraftPageScreen: View {
     var commands: ScreenCommands
     @State private var paging = OriginalPaging(page: 1)
 
-    private var row: DraftRow? { draft.summary?.rows.first { $0.n == step } }
-    private var oid: String { draft.meta.originalId ?? "" }
+    private var row: DraftRow? { review.summary?.rows.first { $0.n == step } }
+    private var oid: String { review.meta.originalId ?? "" }
     private var pdfURL: URL? {
         let u = OriginalStore.url(protocolId: oid)
-        return draft.meta.origin ?? "pdf" == "pdf" && !oid.isEmpty
+        return review.meta.origin ?? "pdf" == "pdf" && !oid.isEmpty
             && FileManager.default.fileExists(atPath: u.path) ? u : nil
     }
-    private var photos: [URL] { draft.meta.origin == "photo" ? OriginalStore.photos(oid) : [] }
+    private var photos: [URL] { review.meta.origin == "photo" ? OriginalStore.photos(oid) : [] }
     private var pages: [String] {
-        let e = draft.meta.evidence
+        let e = review.meta.evidence
         return e?.pages ?? (e.map { [$0.text] } ?? [])
     }
     private var pageCount: Int {
@@ -251,7 +318,7 @@ struct DraftPageScreen: View {
     }
 
     var body: some View {
-        let origin = DraftOrigin(draft.meta)
+        let origin = DraftOrigin(review.meta)
         let page = paging.page
         VStack(spacing: 24 * u) {
             VStack(spacing: 0) {

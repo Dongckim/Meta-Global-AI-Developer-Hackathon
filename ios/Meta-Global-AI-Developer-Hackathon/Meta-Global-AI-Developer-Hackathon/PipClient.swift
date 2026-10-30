@@ -49,7 +49,6 @@ struct OrchestrateResponse: Decodable {
     let record_version: Int
     let sources: [Source]
     let saved_memo: SavedMemo?
-    let robot: Bool?
     let dropped: Int?
     let ui: [UIAction]?
     let speak: String?
@@ -66,7 +65,6 @@ struct VoiceResponse: Decodable {
     let record_version: Int
     let sources: [Source]
     let saved_memo: SavedMemo?
-    let robot: Bool?
     let dropped: Int?
     let ui: [UIAction]?
     let speak: String?
@@ -132,33 +130,6 @@ struct SearchListResponse: Decodable {
 struct RunDetailResponse: Decodable {
     let run: RunDoc
     let label: String?
-}
-
-struct RobotCheck: Decodable {
-    let expected: [String]
-    let simulated: [String]
-    let missing: [String]
-    let extra: [String]
-    let ok: Bool
-}
-
-struct RobotSim: Decodable {
-    let ok: Bool
-    let exit: Int?
-    let log: String
-}
-
-struct RobotPreview: Decodable {
-    let csv_head: String
-    let code_head: String
-}
-
-struct RobotResponse: Decodable {
-    let csv: String
-    let code: String
-    let sim: RobotSim
-    let check: RobotCheck
-    let preview: RobotPreview
 }
 
 enum SSEvent {
@@ -355,15 +326,6 @@ enum PipClient {
         let (data, resp) = try await URLSession.shared.data(from: Config.baseURL.appending(path: "record"))
         try check(resp, data)
         return try JSONDecoder().decode(RecordSnapshot.self, from: data)
-    }
-
-    static func robot() async throws -> RobotResponse {
-        var req = URLRequest(url: Config.baseURL.appending(path: "robot"))
-        req.httpMethod = "POST"
-        req.timeoutInterval = 400
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        try check(resp, data)
-        return try JSONDecoder().decode(RobotResponse.self, from: data)
     }
 
     /// Server-sent events: snapshots and timer pushes. Runs until cancelled.

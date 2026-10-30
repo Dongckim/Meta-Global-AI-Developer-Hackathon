@@ -590,7 +590,22 @@ struct DraftRow: Decodable, Identifiable {
     var reason: String
     var quote: String
     var page: Int?
+    /// A final protocol's row (⑨0): the plan's and the run's "volume · wells",
+    /// and what changed with the record event it came from.
+    var plan: String?
+    var run: String?
+    var changes: [RunChange]?
     var id: Int { n }
+}
+
+/// One change from the plan on a final protocol step (server handoff.changes).
+struct RunChange: Decodable, Hashable {
+    /// excluded | skipped | not_marked | redo | off_plan | timer
+    var kind: String
+    var wells: [String]
+    var text: String
+    /// The record event: excluded | skipped | redo | done | timer | none.
+    var event: String
 }
 
 /// Server-made view of a draft (store snapshot draft.summary).
@@ -600,6 +615,39 @@ struct DraftSummary: Decodable {
     var conditions: Int
     var wells: Int
     var steps: Int
+    /// A final protocol: robot steps in the plan, and how many rows changed.
+    var of: Int?
+    var changed: Int?
+}
+
+/// Snapshot `handoff`: the finished run a hand off screen shows (⑨0-⑨d).
+struct Handoff: Decodable {
+    var runId: String
+    var label: String
+    /// ⑨0's rows: the import review's shape, rows with plan / run / changes.
+    var summary: DraftSummary
+    /// The protocol's original (Open PDF), as a draft's meta.
+    var meta: DraftMeta
+    var approved: Bool
+    /// generating | simulating | fixing | passed | needs_you (nil: not approved).
+    var stage: String?
+    var attempt: Int
+    var error: String
+    var check: Check?
+    var code: String
+    var csv: String
+    var exported: Double?
+
+    struct Check: Decodable {
+        var ok: Bool
+        var steps: [Step]
+        var problems: [String]
+        struct Step: Decodable { var n: Int; var title: String; var ok: Bool; var why: String }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case runId = "run_id", label, summary, meta, approved, stage, attempt, error, check, code, csv, exported
+    }
 }
 
 struct ProtocolDraft: Decodable {
@@ -634,6 +682,7 @@ struct RecordSnapshot: Decodable {
     var stamps: [String: Stamp]
     var cards: [ServerCard]
     var draft: ProtocolDraft?
+    var handoff: Handoff?
     var run: RunBlock?
     var recent: [HistoryEntry]
     /// The header's mode label, decided by the server (nil: not drawn).
@@ -661,7 +710,7 @@ struct RecordSnapshot: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case epoch, view, version, plan, stepIndex = "step_index", done, excluded, redo,
-             notes, tips, timers, stamps, cards, draft, run, recent, header, bench
+             notes, tips, timers, stamps, cards, draft, handoff, run, recent, header, bench
     }
 
     init(from decoder: Decoder) throws {
@@ -684,6 +733,7 @@ struct RecordSnapshot: Decodable {
         cards = (try c.decodeIfPresent([String: ServerCard].self, forKey: .cards) ?? [:])
             .values.sorted { $0.ts > $1.ts }
         draft = (try? c.decodeIfPresent(ProtocolDraft.self, forKey: .draft)) ?? nil
+        handoff = (try? c.decodeIfPresent(Handoff.self, forKey: .handoff)) ?? nil  // auxiliary, like draft
         run = try c.decodeIfPresent(RunBlock.self, forKey: .run)
         recent = try c.decodeIfPresent([HistoryEntry].self, forKey: .recent) ?? []
         headerMode = try c.decodeIfPresent(Header.self, forKey: .header)?.mode
@@ -808,6 +858,7 @@ final class LabState {
     var bench: RecordSnapshot.Bench?
     var cards: [ServerCard] = []
     var draft: ProtocolDraft?
+    var handoff: Handoff?
     var run: RunBlock?
     var history: [HistoryEntry] = []
     var lastShown = ""
@@ -845,6 +896,7 @@ final class LabState {
         bench = snap.bench
         cards = snap.cards
         draft = snap.draft
+        handoff = snap.handoff
         run = snap.run
         history = snap.recent
         wellSource = snap.stamps.mapValues(\.source)

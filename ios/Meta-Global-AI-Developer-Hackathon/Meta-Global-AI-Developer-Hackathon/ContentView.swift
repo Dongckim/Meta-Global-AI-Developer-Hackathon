@@ -21,12 +21,6 @@ struct HoldStyle: ButtonStyle {
     }
 }
 
-enum RobotState {
-    case idle
-    case building
-    case done(RobotResponse)
-}
-
 struct ViewingSource: Equatable {
     var target: String
     var page: Int?
@@ -51,7 +45,6 @@ struct ContentView: View {
     @State private var lastViewScreen = ""
     /// App launch opens Home; the first snapshot moves the saved view there once.
     @State private var launchHomeSent = false
-    @State private var robotState = RobotState.idle
     /// An import is being read (the server says "Reading the protocol…");
     /// a second start is ignored and the import screens are disabled.
     @State private var importing = false
@@ -149,9 +142,6 @@ struct ContentView: View {
         } else {
             viewingSource = nil
         }
-        if cur == "robot_preview" {
-            if case .idle = robotState { runRobot() }
-        } else if case .idle = robotState {} else { robotState = .idle }
         // Milo's line for the screen (registry prompt): shown on entry, and
         // said when a tap opened it during a live session
         let key = "\(cur)#\(tgt)"
@@ -275,7 +265,6 @@ struct ContentView: View {
         // hidden from the first frame on and never toggled: a status bar
         // appearing with Main changed the safe area under it (the bands)
         .statusBarHidden(true)
-        .sheet(isPresented: robotSheet) { robotPanel }
         .sheet(isPresented: $showSettings) {
             VoiceSettingsView(onOpenSync: { showSettings = false; openSync() }, voice: voice, dat: dat)
         }
@@ -425,6 +414,9 @@ struct ContentView: View {
                                       onOpen: { sendAction("open", ["target": "search:\($0)"]) },
                                       perform: performButton)
                 }
+            } else if let h = lab.handoff, HandoffScreen.ids.contains(lab.view.current.screen) {
+                // ⑨0-⑨d hand off (v36; ⑨0 is the ⑤c-⑤e review in final protocol mode)
+                stage { u in handoffScreen(h, u) }
             } else if let d = lab.draft, StartScreen.ids.contains(lab.view.current.screen) {
                 // ⑤b-⑤f start review (Figma 37:13203-37:13351)
                 stage { u in
@@ -546,18 +538,43 @@ struct ContentView: View {
         let step = Int(cur.target) ?? 1
         switch cur.screen {
         case "draft_steps":
-            DraftStepsScreen(draft: d, buttons: buttons(cur.screen), u: u,
+            DraftStepsScreen(review: ReviewSource(d), buttons: buttons(cur.screen), u: u,
                              onRow: { sendAction("show_step", ["step": $0]) }, perform: performButton)
         case "draft_step":
-            DraftStepScreen(draft: d, step: step, buttons: buttons(cur.screen), u: u, perform: performButton)
+            DraftStepScreen(review: ReviewSource(d), step: step, buttons: buttons(cur.screen), u: u, perform: performButton)
         case "draft_page":
-            DraftPageScreen(draft: d, step: step, buttons: buttons(cur.screen), u: u, perform: performButton,
+            DraftPageScreen(review: ReviewSource(d), step: step, buttons: buttons(cur.screen), u: u, perform: performButton,
                             commands: commands)
         case "plan_check":
             PlanCheckScreen(draft: d, buttons: buttons(cur.screen), u: u, perform: performButton)
         default:
             DraftReadyScreen(draft: d, title: lab.view.slots["title"] ?? d.plan.title ?? "",
                              buttons: buttons(cur.screen), u: u, perform: performButton)
+        }
+    }
+
+    private enum HandoffScreen {
+        static let ids = ["final_protocol", "final_step", "final_page", "simulate", "export_files", "exported"]
+    }
+
+    @ViewBuilder private func handoffScreen(_ h: Handoff, _ u: CGFloat) -> some View {
+        let cur = lab.view.current
+        let step = Int(cur.target.split(separator: ":").last ?? "") ?? 1  // "<run>:<step>"
+        switch cur.screen {
+        case "final_step":
+            DraftStepScreen(review: ReviewSource(h), step: step, buttons: buttons(cur.screen), u: u, perform: performButton)
+        case "final_page":
+            DraftPageScreen(review: ReviewSource(h), step: step, buttons: buttons(cur.screen), u: u, perform: performButton,
+                            commands: commands)
+        case "simulate":
+            SimulateScreen(handoff: h, buttons: buttons(cur.screen), u: u, perform: performButton)
+        case "export_files":
+            HandoffFilesScreen(handoff: h, buttons: buttons(cur.screen), u: u, perform: performButton)
+        case "exported":
+            ExportedScreen(handoff: h, buttons: buttons(cur.screen), u: u, perform: performButton)
+        default:
+            DraftStepsScreen(review: ReviewSource(h), buttons: buttons(cur.screen), u: u,
+                             onRow: { sendAction("show_step", ["step": $0]) }, perform: performButton)
         }
     }
 
@@ -677,49 +694,7 @@ struct ContentView: View {
         }
     }
 
-    private var robotSheet: Binding<Bool> {
-        Binding(
-            get: { if case .idle = robotState { false } else { true } },
-            set: {
-                if !$0 {
-                    robotState = .idle
-                    if lab.view.current.screen == "robot_preview" { sendAction("back") }
-                }
-            }
-        )
-    }
-
     // MARK: - Subviews
-
-    private var robotPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Robot protocol").font(.title2.bold())
-                Spacer()
-                Button("Close") { robotState = .idle }
-            }
-            switch robotState {
-            case .idle: EmptyView()
-            case .building:
-                HStack {
-                    ProgressView()
-                    Text("Simulating in a Modal sandbox…").foregroundStyle(.secondary)
-                }
-            case .done(let r):
-                LabeledContent("Simulation", value: r.sim.ok ? "passed" : "failed")
-                    .foregroundStyle(r.sim.ok ? .green : .red)
-                LabeledContent("Wells match", value: r.check.ok ? "yes" : "missing \(r.check.missing.joined(separator: ", "))")
-                    .foregroundStyle(r.check.ok ? .green : .orange)
-                Text("Code").font(.callout).foregroundStyle(.secondary)
-                ScrollView {
-                    Text(r.preview.code_head).font(.caption.monospaced()).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            Spacer()
-        }
-        .padding()
-    }
 
     private var hintsBar: some View {
         let cmds = screens.first { $0.id == currentScreen }?.commands.prefix(3) ?? []
@@ -911,7 +886,6 @@ struct ContentView: View {
             return true
         case "peek":
             guard let t = a.target, !t.isEmpty else { return uiFail("I couldn't open that.") }
-            robotState = .idle
             selectedWell = WellSelect(id: t)
             peekTarget = t
             peekGen += 1
@@ -1261,20 +1235,6 @@ struct ContentView: View {
             recordVersion: recordVersion
         )
         say("⏱ " + msLine(ms))
-    }
-
-    private func runRobot() {
-        robotState = .building
-        Task { @MainActor in
-            do {
-                let doc = try await PipClient.robot()
-                if lab.view.current.screen == "robot_preview" { robotState = .done(doc) }
-                say("Robot protocol ready")
-            } catch {
-                robotState = .idle
-                say("Robot failed: \(error.localizedDescription)")
-            }
-        }
     }
 }
 
