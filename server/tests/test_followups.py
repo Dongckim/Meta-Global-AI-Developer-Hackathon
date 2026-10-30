@@ -183,4 +183,44 @@ for said in ("add", "I want to"):
 st.r["view"]["current"] = {"screen": "draft_page", "target": "1"}
 assert not api.live_unfinished("page 2", {}) and not api.live_unfinished("zoom in", {})
 print("FU7 ok: whole for this screen goes now; a cut-off word still waits")
+
+# FV. What the screen is about (registry `viewing`) is in the model's state, and an
+# action naming no target takes it.
+def turn(text, payload, session):
+    script[:] = [{"id": "v", "output": payload}]
+    with patch("httpx.AsyncClient", FakeClient):
+        return c.post("/input", json={"text": text, "session": session}).json()
+
+
+# FV1. On C5's well card, "add a note here": the note goes on C5.
+api.store = st = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+st.start_demo_run()
+api._SESSIONS.clear()
+st.r["view"]["sheet"] = {"name": "well_card", "target": "C5"}
+sent.clear()
+j = turn("add a note here, bubbles in the well", [fc("perform", {"action": "add_note", "text": "bubbles"}, "n1")], "fv1")
+assert '"viewing": {"kind": "well", "label": "C5"}' in sent[0]["instructions"], sent[0]["instructions"][-600:]
+assert [(m["target"], m["text"]) for m in st.r["notes"]] == [("C5", "bubbles")], (st.r["notes"], j)
+print("FV1 ok: a note with no well, on a well card, goes on that well")
+
+# FV2. On the bench at step 1, "skip this step": the model hears which step is on screen;
+# moving on with wells left asks about that step's wells (Skip them / Mark them).
+api._SESSIONS.clear()
+st.r["view"]["sheet"] = {"name": "", "target": ""}
+sent.clear()
+j = turn("skip this step", [fc("perform", {"action": "next_step"}, "s1")], "fv2")
+assert '"viewing": {"kind": "step", "label": "Step 1 · Add culture medium"}' in sent[0]["instructions"]
+assert [x["kind"] for x in j["cards"]] == ["unmarked"] and j["cards"][0]["context"].startswith("Step 1 ·"), j
+print("FV2 ok: this step is the step on screen")
+
+# FV3. On a search answer, "open this" opens its source page.
+api.store = st = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+api._SESSIONS.clear()
+st.add_search({"id": "s1", "ts": 1, "question": "Max DMSO for HeLa?", "query": "max DMSO HeLa",
+               "answer_short": "Up to 0.5%", "detail": "d", "status": "ok", "run_id": None, "ms": 1,
+               "sources": [{"title": "A", "url": "https://a.org", "domain": "a.org"}]})
+st.r["view"]["current"] = {"screen": "web_answer", "target": "s1"}
+j = turn("open this", [fc("perform", {"action": "open"}, "o1")], "fv3")
+assert st.r["view"]["current"] == {"screen": "web_source", "target": "s1:1"}, (st.r["view"], j)
+print("FV3 ok: open this on a search answer opens its source")
 print("ALL PASS")

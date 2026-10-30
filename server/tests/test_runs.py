@@ -317,8 +317,8 @@ with patch("httpx.AsyncClient", FakeClient):
         c.post("/input", json={"action": call, "session": "run12"})
         assert api.store.r["view"]["current"] == {"screen": "run_view", "target": run1}, call
     st = api.store.model_state({})
-    assert st["current_screen"] == "run_view" and st["viewing_run"] == api.store.run_label(
-        api.runlog.resolve(run1, api.store.all_run_docs()))["spoken"], st
+    assert st["current_screen"] == "run_view" and st["viewing"] == {"kind": "run", "label": api.store.run_label(
+        api.runlog.resolve(run1, api.store.all_run_docs()))["spoken"]}, st
     print("RUN12 ok: here on a run record is that run, never the latest")
 
 # LIB-merge. Duplicates of one original merge into the earliest import; their

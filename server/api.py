@@ -60,6 +60,7 @@ from server.grammar import (
 )
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
+from server.screens import SCREENS
 from server.screens import (PLAIN_ANSWERS, ask_choice, button_match, button_words, buttons_for, card_choices,
                             control_call, look_call, planned_screen, start_call, verbs)
 from server import handoff
@@ -870,6 +871,38 @@ ASK_FOR = {
 }
 
 
+#: An action's argument a viewed thing fills when the model names no target:
+#: kind -> {action: (arg, as a list?)}.
+VIEWING_ARGS = {
+    "well": {"add_note": ("target", False), "exclude_well": ("well", False), "record_redo": ("wells", True),
+             "mark_done": ("wells", True)},
+    "step": {"show_step": ("step", False), "open_source_page": ("step", False), "save_tip": ("step_id", False)},
+}
+#: How `open` names a viewed thing that has no `viewing.open` of its own.
+_OPEN_AS = {"run": "run:{id}", "protocol": "protocol:{id}", "search": "search:{id}", "look": "search:{id}",
+            "well": "{id}"}
+
+
+def _from_viewing(action: str, args: dict) -> tuple[str, dict]:
+    """A model action that names no target takes what the screen is about
+    (registry `viewing`): a well card's note goes on that well, "open this"
+    on a search answer opens its source. Anything named stays as named."""
+    vw = store.viewing()
+    if vw is None:
+        return action, args
+    fill = VIEWING_ARGS.get(vw["kind"], {}).get(action)
+    if fill and fill[0] not in args:
+        return action, {**args, fill[0]: [vw["id"]] if fill[1] else vw["id"]}
+    if action == "open" and "target" not in args:
+        screen = store.r["view"]["current"].get("screen") or ""
+        own = (SCREENS.get(screen, {}).get("viewing") or {}).get("open")
+        if own and vw["kind"] != "well":
+            return own["action"], {**(own.get("args") or {}), **({"step": vw["id"]} if vw["kind"] == "step" else {})}
+        if vw["kind"] in _OPEN_AS:
+            return action, {"target": _OPEN_AS[vw["kind"]].format(id=vw["id"])}
+    return action, args
+
+
 def _blank(v) -> bool:
     """Model placeholders for "no value": null, "", "null", "none", "undefined"."""
     return v is None or (isinstance(v, str) and v.strip().lower() in ("", "null", "none", "undefined", "n/a"))
@@ -899,6 +932,7 @@ def _expand_perform(calls: list) -> list:
             _log_drop("perform", a, "dropped: no action")
             continue
         rest = {k: v for k, v in a.items() if k != "action" and not _blank(v)}
+        action, rest = _from_viewing(action, rest)  # "this" / "here": what the screen is about
         missing = [k for k in REQUIRED_ARGS.get(action, []) if k not in rest]
         if missing:
             _log_drop(action, a, f"ask: missing {missing[0]}")

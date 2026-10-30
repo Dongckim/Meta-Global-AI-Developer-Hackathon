@@ -280,6 +280,41 @@ class RecordStore:
             docs = [active] + [d for d in docs if d.get("run_id") != active["run_id"]]
         return docs
 
+    def viewing(self) -> dict | None:
+        """What the screen is about (registry `viewing`): {kind, id, label};
+        a well card over the bench is the well. None where nothing is."""
+        v = self.r.get("view") or {}
+        sheet = v.get("sheet") or {}
+        if sheet.get("name") == "well_card" and sheet.get("target"):
+            return {"kind": "well", "id": sheet["target"], "label": sheet["target"]}
+        cur = v.get("current") or {}
+        screen, target = cur.get("screen") or "main", cur.get("target") or ""
+        kind = (SCREENS.get(screen, {}).get("viewing") or {}).get("kind")
+        if kind == "run":
+            doc = runlog.resolve(target.split(":", 1)[0], self.all_run_docs()) if target else None
+            return {"kind": "run", "id": doc["run_id"], "label": self.run_label(doc)["spoken"]} if doc else None
+        if kind == "protocol":
+            pid = target.split("#", 1)[0].removeprefix("protocol:") or (self.r.get("run") or {}).get("protocol_id")
+            doc = lib.get(pid, self.root) if pid else None
+            return {"kind": "protocol", "id": doc["id"], "label": doc.get("name") or ""} if doc else None
+        if kind == "search":
+            sid = target.split(":", 1)[0]
+            doc = next((d for d in self.searches() if d["id"] == sid), None)
+            if doc is None:
+                return None
+            return {"kind": "look" if doc.get("kind") == "photo" else "search", "id": sid,
+                    "label": doc.get("question") or doc.get("query") or ""}
+        if kind == "step":
+            if screen == "main":
+                steps = (self.r.get("plan") or {}).get("steps") or []
+                if not (self.r.get("run") and steps):
+                    return None
+                i = min(self.r.get("step_index", 0), len(steps) - 1)
+                return {"kind": "step", "id": str(i + 1), "label": f"Step {i + 1} · {labels.step_short_title(steps[i])}"}
+            n = target.rpartition(":")[2]
+            return {"kind": "step", "id": n, "label": f"Step {n}"} if n.isdigit() else None
+        return None
+
     def _here_run(self) -> str:
         """The run whose record is on screen ("" elsewhere): "here" on a run record."""
         return (self._viewing_run() or {}).get("run_id") or ""
@@ -1173,8 +1208,8 @@ class RecordStore:
             "timers": timers,
             "recent": self.r["recent"][-5:],
             "current_screen": (self.r.get("view") or {}).get("current", {}).get("screen", "main"),
-            # the run record on screen: "here", "this run" mean it, not the latest
-            **({"viewing_run": self.run_label(v)["spoken"]} if (v := self._viewing_run()) else {}),
+            # what the screen is about: "here", "this" mean it (an action naming no target takes it)
+            **({"viewing": {"kind": vw["kind"], "label": vw["label"]}} if (vw := self.viewing()) else {}),
             "pending_cards": len(self.r["cards"]),
             "draft_open": bool(self.r.get("draft")),
         }
