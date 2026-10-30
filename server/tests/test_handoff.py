@@ -324,19 +324,20 @@ card = st.request_end_run({})[1]["card"]
 j = c.post("/confirm", json={"card_id": card["id"], "ok": True, "session": "ho"}).json()
 run_id = st.r["view"]["current"]["target"]
 assert st.r["view"]["current"]["screen"] == "final_protocol" and run_id, st.r["view"]
-assert j["message"].endswith("4 of 5 robot steps, 4 changes from the plan. Review them one by one?"), j
+assert j["message"].endswith("4 robot steps, 4 changes from the plan. Review them one by one?"), j
 snap = c.get("/record").json()
 h = snap["handoff"]
 assert h["run_id"] == run_id and h["approved"] is False and h["stage"] is None, h
 assert h["summary"]["rows"][3]["changes"][0]["kind"] == "timer" and h["summary"]["review"] == "open", h
 buttons = [b["say"] for b in buttons_for("final_protocol", snap["view"]["slots"])]
-assert buttons == ["Review"], buttons  # no Make robot code / Save without code before the review
+assert buttons == ["Review changes"], buttons  # no Make robot code / Save without code before the review
 j = c.post("/input", json={"action": {"id": "approve_handoff", "args": {}}, "session": "ho"}).json()
 assert j["reply"] == "Review the changes first." and st.r["view"]["current"]["screen"] == "final_protocol", j
 
+assert h["summary"]["subtitle"] == "As the run went · 4 changes to review", h["summary"]
 # HO12. One change at a time: Review opens the first, Milo says it in one sentence, Next goes on;
 # seen ones get a check; all seen: Review finished!, Review greyed, the two choices
-j = c.post("/input", json={"text": "review", "session": "ho"}).json()
+j = c.post("/input", json={"text": "review changes", "session": "ho"}).json()
 assert st.r["view"]["current"] == {"screen": "final_step", "target": f"{run_id}:1"}, st.r["view"]
 assert j["reply"] == "Step 1: C3 excluded: bubbles; C4 marked off plan.", j
 j = c.post("/input", json={"text": "next", "session": "ho"}).json()
@@ -355,8 +356,11 @@ assert j["reply"] == "Review finished! Make robot code, or save without it?", j
 snap = c.get("/record").json()
 assert snap["handoff"]["summary"]["review"] == "done"
 shown = buttons_for("final_protocol", snap["view"]["slots"])
-assert [(b["say"], b.get("look")) for b in shown] == [
-    ("Review", "disabled"), ("Make robot code", None), ("Save without code", None)], shown
+assert [(b["say"], b.get("look")) for b in shown] == [("Make robot code", None), ("Save without code", None)], shown
+summ = snap["handoff"]["summary"]
+assert summ["subtitle"] == "As the run went · 4 changes reviewed", summ["subtitle"]
+assert [r["delta"] for r in summ["rows"]] == [
+    "C3 excluded; C4 added off plan", "B3 skipped", "C3 excluded; C9 redone", "Incubate 30 min → 35 min"], summ["rows"]
 assert spawned == []
 before = hand.record_hash(runlog.get(run_id, st.root)["record"])
 print("HO12 ok: review one change at a time, Next, checks, Review finished!, then the two choices")
@@ -540,7 +544,29 @@ doc = runlog.get(run_id, st.root)
 assert doc["handoff"]["stage"] == "saved" and len(doc["handoff"]["approved"]["steps"]) == 5
 assert c.get(f"/runs/{run_id}").json()["has_code"] is False
 assert next(r for r in c.get("/runs").json()["runs"] if r["run_id"] == run_id)["has_code"] is False
+assert c.get(f"/runs/{run_id}").json()["run"]["handoff"]["stage"] == "saved"
 print("HO13 ok: no changes: the two choices; Save without code: Home, no code")
+
+# HO14. A step left with no wells does nothing: counted apart ("1 step skipped"), said as
+# "Planned 21 wells → Done 0 (skipped)"; with nothing for the robot, Make robot code says so.
+api.store = st = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+st.start_demo_run()
+st.r["done"] = []
+st.r["skipped"] = [{"step": 1, "well": w, "ts": 1.0} for w in st.r["plan"]["steps"][0]["wells"]]
+st.r["step_index"] = 0
+card = st.request_end_run({})[1]["card"]
+j = c.post("/confirm", json={"card_id": card["id"], "ok": True, "session": "ho"}).json()
+run_id = st.r["view"]["current"]["target"]
+snap = c.get("/record").json()
+row = snap["handoff"]["summary"]["rows"][0]
+assert row["delta"] == "Planned 21 wells → Done 0 (skipped)" and row["acts"] is False, row
+assert j["message"].endswith("0 robot steps, 1 step skipped, 1 change from the plan. Review them one by one?"), j
+c.post("/input", json={"text": "review changes", "session": "ho"})
+c.post("/input", json={"text": "next", "session": "ho"})
+j = c.post("/input", json={"action": {"id": "approve_handoff", "args": {}}, "session": "ho"}).json()
+assert j["reply"] == "Nothing for the robot to do in this run." and "speak" not in j, j  # a tap: not said
+assert st.r["view"]["current"]["screen"] == "final_protocol", st.r["view"]
+print("HO14 ok: empty steps counted apart; nothing for the robot is said, not simulated")
 
 # Live: the local simulator on the code for these steps (skipped when .venv-sim isn't installed).
 if hand.SIM_PYTHON.exists():

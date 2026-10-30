@@ -601,6 +601,8 @@ struct DraftRow: Decodable, Identifiable {
     var changes: [RunChange]?
     /// Final protocol review: this change was opened (a check instead of Changed).
     var reviewed: Bool?
+    /// Only what changed, short ("Planned 21 wells → Done 0 (skipped)", "C3 excluded").
+    var delta: String?
     var id: Int { n }
 }
 
@@ -626,6 +628,8 @@ struct DraftSummary: Decodable {
     var changed: Int?
     /// The review of the changes: none | open | done.
     var review: String?
+    /// The final protocol's small line ("As the run went · 2 changes to review").
+    var subtitle: String?
 }
 
 /// Snapshot `handoff`: the finished run a hand off screen shows (⑨0-⑨d).

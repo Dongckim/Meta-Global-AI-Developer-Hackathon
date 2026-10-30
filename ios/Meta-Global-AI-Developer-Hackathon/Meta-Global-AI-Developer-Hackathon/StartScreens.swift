@@ -106,7 +106,8 @@ struct DraftStepsScreen: View {
             StartTitle(text: final ? "Final protocol" : "Check the steps", u: u).enter(.text, 0, u: u)
             HStack(spacing: 12 * u) {
                 Image(systemName: final ? "checklist" : origin.icon).foregroundStyle(Theme.polishBlue)
-                Text(final ? finalLine : "From \(origin.label) · pipetting only").foregroundStyle(Theme.text2)
+                Text(final ? (review.summary?.subtitle ?? "") : "From \(origin.label) · pipetting only")
+                    .foregroundStyle(Theme.text2)
             }
             .font(Theme.ui(28 * u)).lineLimit(1).minimumScaleFactor(0.6)
             .padding(.top, 14 * u).enter(.rise, 1, u: u)
@@ -134,18 +135,20 @@ struct DraftStepsScreen: View {
             .frame(width: 1122 * u)
             .benchCard(radius: 44 * u)
             .padding(.top, 34 * u)
-            SayRow(buttons: buttons, u: u, perform: perform).frame(width: 1122 * u).padding(.top, 30 * u)
+            if final {
+                // Figma confirm card buttons: 360 x 93 each, 36 apart, the group centered
+                HStack(spacing: 36 * u) {
+                    ForEach(Array(buttons.enumerated()), id: \.offset) { i, b in
+                        SayButton(button: b, kind: i == 0 ? .primary : .secondary, size: 34 * u, perform: perform)
+                            .frame(width: 360 * u)
+                    }
+                }
+                .padding(.top, 30 * u)
+            } else {
+                SayRow(buttons: buttons, u: u, perform: perform).frame(width: 1122 * u).padding(.top, 30 * u)
+            }
         }
         .frame(maxHeight: .infinity)
-    }
-
-    /// The final protocol's line: the run as it went, how much of it changed.
-    private var finalLine: String {
-        let s = review.summary
-        let n = s?.rows.count ?? 0, of = s?.of ?? n, changed = s?.changed ?? 0
-        let steps = n == of ? "\(n) robot steps" : "\(n) of \(of) robot steps"
-        if s?.review == "done" { return "As the run went · \(steps) · Review finished!" }
-        return "As the run went · \(steps) · " + (changed == 0 ? "as planned" : "\(changed) changed")
     }
 
     private func row(_ r: DraftRow) -> some View {
@@ -158,10 +161,13 @@ struct DraftStepsScreen: View {
                 Text(r.title).font(Theme.ui(30 * u, weight: .semibold)).foregroundStyle(Theme.text1)
                     .lineLimit(1).minimumScaleFactor(0.6)
                     .frame(width: 270 * u, alignment: .leading).padding(.leading, 23 * u)
-                Text(rowDetail(r)).font(Theme.ui(28 * u)).foregroundStyle(Theme.text2)
+                Text(rowDetail(r)).font(Theme.ui(28 * u))
+                    .foregroundStyle(changedRow(r) ? Theme.warning : Theme.text2)
                     .lineLimit(1).minimumScaleFactor(0.6)
                 Spacer(minLength: 12 * u)
-                if r.flagged, !(r.reviewed ?? false) {
+                if review.mode == .finalProtocol && !r.flagged {
+                    EmptyView()  // as planned: no mark
+                } else if r.flagged, !(r.reviewed ?? false) {
                     Text(review.mode == .finalProtocol ? "Changed" : "Check").font(Theme.ui(22 * u, weight: .semibold)).foregroundStyle(.white)
                         .padding(.horizontal, 22 * u).frame(height: 44 * u)
                         .background(Capsule().fill(Theme.polishBlue))
@@ -180,10 +186,12 @@ struct DraftStepsScreen: View {
         .accessibilityLabel("Step \(r.n), \(r.title)")
     }
 
-    /// A changed final protocol step reads plan → run; every other row its detail.
+    private func changedRow(_ r: DraftRow) -> Bool { review.mode == .finalProtocol && r.flagged }
+
+    /// A changed final protocol step reads only what differs (server `delta`); every other row its detail.
     private func rowDetail(_ r: DraftRow) -> String {
-        guard review.mode == .finalProtocol, r.flagged, let plan = r.plan, let run = r.run else { return r.detail }
-        return "\(plan) → \(run)"
+        guard changedRow(r), let d = r.delta, !d.isEmpty else { return r.detail }
+        return d
     }
 }
 
@@ -246,8 +254,8 @@ struct DraftStepScreen: View {
                     Text(r?.title ?? "").font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                         .foregroundStyle(Theme.text1).lineLimit(1).minimumScaleFactor(0.6)
                     if review.mode == .finalProtocol, let r, let ch = r.changes, !ch.isEmpty {
-                        Text([r.plan, r.run].compactMap { $0 }.joined(separator: " → "))
-                            .font(Theme.ui(22 * u)).foregroundStyle(Theme.text2).lineLimit(1)
+                        Text(r.delta ?? "").font(Theme.ui(22 * u)).foregroundStyle(Theme.warning)
+                            .lineLimit(2).minimumScaleFactor(0.7)
                         FinalChanges(changes: ch, u: u).padding(.top, 12 * u)
                     } else if let r, !r.detail.isEmpty {
                         Text(r.detail).font(Theme.ui(22 * u)).foregroundStyle(Theme.text2).lineLimit(1)

@@ -37,6 +37,8 @@ enum Theme {
     static let polishBlue = Color(hex: 0x0071E3)
     /// A paused run (its state line); going is polishBlue, finished text2.
     static let paused = Color(hex: 0xFF9500)
+    /// What changed from the plan (final protocol rows): a darker orange that reads on white.
+    static let warning = Color(hex: 0xC93400)
 
     /// A run's state color: going blue, paused orange, finished gray.
     static func runState(_ status: String?) -> Color {

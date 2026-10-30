@@ -248,6 +248,18 @@
   "handoff_saved": ["Saved the as-run protocol, without robot code."],
   "couldnt_open": ["I couldn't open {what} just now. Ask again?"],
   "couldnt_now": ["I couldn't do that just now. Ask again?"],
+  "final_changes": {
+    "_note": "What a final protocol row shows when it changed (only what differs, once); kind keys are change kinds.",
+    "none_done": "Planned {planned} wells → Done 0 ({why})",
+    "why_excluded": "excluded", "why_skipped": "skipped", "why_not_marked": "not marked",
+    "excluded": "{wells} excluded", "skipped": "{wells} skipped", "not_marked": "{wells} not marked",
+    "redo": "{wells} redone", "off_plan": "{wells} added off plan",
+    "timer": "{title} {plan} → {run}"
+  },
+  "final_subtitle_open": ["As the run went · {n} change{s} to review"],
+  "final_subtitle_done": ["As the run went · {n} change{s} reviewed"],
+  "final_subtitle_none": ["As the run went · No changes from the plan"],
+  "handoff_nothing": ["Nothing for the robot to do in this run."],
   "handoff_share": ["Pick where to send them."],
   "handoff_not_shared": ["Not shared. Say export to try again."],
   "handoff_sharing": ["Finish sharing first."],

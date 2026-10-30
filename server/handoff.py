@@ -20,6 +20,7 @@ from pathlib import Path
 from server.grammar import wells_label
 from server.labels import step_short_title
 from server.runs import done_marks, done_wells
+from server.tone import section
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNNER = Path(__file__).resolve().parent / "robot_runner.py"
@@ -189,8 +190,12 @@ def changes(record: dict, timing: dict | None = None) -> dict:
                            "speech": f"{step_short_title(st).lower()} {said}, plan was {secs_text(plan_s)}"})
             seconds = run_s if ch and choice == "run" else plan_s
             plan_d, run_d = secs_text(plan_s), secs_text(seconds)
+        acts = bool(run) if st.get("pipette") else True  # a transfer with no wells left does nothing
         rows.append({"n": len(rows) + 1, "index": i, "title": step_short_title(st), "detail": run_d,
                      "flagged": bool(ch), "reason": "; ".join(c["text"] for c in ch),
+                     # what differs, short, said once (pip_voice `final_changes`)
+                     "delta": _delta(st, ch, len(planned) if st.get("pipette") else 0, acts),
+                     "acts": acts,
                      # what Milo says when the step opens in the review: one sentence
                      "said": "; ".join(c.get("speech") or c["text"] for c in ch),
                      "quote": st.get("quote") or "", "page": st.get("quote_page"),
@@ -199,7 +204,27 @@ def changes(record: dict, timing: dict | None = None) -> dict:
     total = sum(1 for s in steps if _robot(s or {}))
     return {"rows": rows, "others": others, "conditions": len(plan.get("conditions") or {}),
             "wells": len(used), "steps": len(steps), "of": total,
-            "changed": sum(1 for r in rows if r["flagged"])}
+            "changed": sum(1 for r in rows if r["flagged"]),
+            # robot steps with something to do (a move or a wait), and the ones left with none
+            "acting": sum(1 for r in rows if r["acts"]), "empty": sum(1 for r in rows if not r["acts"])}
+
+
+def _delta(step: dict, ch: list[dict], planned: int, acts: bool) -> str:
+    """Only what changed, once: "Planned 21 wells → Done 0 (skipped)",
+    "C3 excluded", "Incubate 30 min → 18 s" (pip_voice `final_changes`)."""
+    if not ch:
+        return ""
+    t = section("final_changes")
+    if step.get("pipette") and not acts:
+        why = " / ".join(dict.fromkeys(t.get(f"why_{c['kind']}", c["kind"]) for c in ch if c["wells"]))
+        return t["none_done"].format(planned=planned, why=why)
+    parts = []
+    for c in ch:
+        if c["kind"] == "timer":
+            parts.append(t["timer"].format(title=step_short_title(step), plan=c["from"], run=c["to"]))
+        else:
+            parts.append(t[c["kind"]].format(wells=wells_label(c["wells"])))
+    return "; ".join(parts)
 
 
 def _event(kind: str, ws: list[str], excluded: dict, skipped: dict, redo: dict, marks: dict) -> dict:

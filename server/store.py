@@ -2178,7 +2178,7 @@ class RecordStore:
         if name in ("approve_handoff", "save_handoff"):
             rec = doc["record"]
             steps, liqs = hand.place(rec, hand.as_run(rec, timing))
-            why = hand.blockers(steps, liqs) or ([] if steps else ["No robot steps were done in this run."])
+            why = hand.blockers(steps, liqs) or ([] if steps else [say("handoff_nothing", session)])
             if why:
                 res["messages"].append(why[0])
                 return
@@ -2316,6 +2316,9 @@ class RecordStore:
         for r in summary["rows"]:
             r["reviewed"] = r["index"] in seen  # a check once the review opened it
         summary["review"] = self._review_state(doc, summary["rows"])
+        # the review screen's small line (pip_voice `final_subtitle`)
+        summary["subtitle"] = say(f"final_subtitle_{summary['review']}", None, n=summary["changed"],
+                                  s="" if summary["changed"] == 1 else "s")
         return {"run_id": doc["run_id"], "label": self.run_label(doc)["display"],
                 "summary": summary, "approved": ok,
                 "stage": h.get("stage") if ok else None, "attempt": h.get("attempt") or 0,
@@ -2340,8 +2343,9 @@ class RecordStore:
         d = v["summary"]
         rows = d["rows"]
         out: dict = {"run": run_id, "of": len(rows),
-                     "robot": n_of(len(rows), "robot step") if len(rows) == d["of"]
-                     else f"{len(rows)} of {d['of']} robot steps",
+                     # steps the robot acts in; the ones left with nothing to do said apart
+                     "robot": n_of(d["acting"], "robot step") + (f", {n_of(d['empty'], 'step')} skipped"
+                                                                 if d["empty"] else ""),
                      "changed": n_of(d["changed"], "change") if d["changed"] else "",
                      "doc": {"pdf": "PDF", "photo": "photo"}.get(v["meta"]["origin"] or "pdf", "text")}
         row = rows[int(step) - 1] if step.isdigit() and 0 < int(step) <= len(rows) else None
