@@ -509,6 +509,13 @@ final class VoiceSession {
         case "searching", "summarizing":
             stage = s.stage == "summarizing" ? TurnStage(stage: s.stage, query: stage?.query) : s
             serverBusy = .searching
+        case "looking":
+            // a photo question waits for its photo: the turn rests ("Show me."), Take it comes next
+            stage = nil
+            serverBusy = nil
+            if state == .thinking || state == .searching { state = restState }
+            if let line = s.say, !line.isEmpty { speak(line) }
+            return
         default:  // done, failed: the reply (or its absence) takes it from here
             stage = nil
             serverBusy = nil

@@ -1,13 +1,16 @@
 // GlassesDAT.swift
-// Meta Wearables DAT registration + connection status (stage 2: no capture).
+// Meta Wearables DAT registration + connection status, and one-photo capture.
 // Single @MainActor owner; views read only. Call patterns mirror the official
 // CameraAccess sample (WearablesViewModel / RegistrationView).
 
+import AVFoundation
 import Foundation
 import os
+import MWDATCamera
 import MWDATCore
 import Observation
 import SwiftUI
+import UIKit
 #if DEBUG
 import MWDATMockDevice
 #endif
@@ -209,6 +212,122 @@ final class GlassesDAT {
         lastError = message
     }
 
+    // MARK: - Live view and photo (a photo question)
+    // As Meta's working sample on the same Personal Team does it (Rayban-Demo
+    // GlassDemo/CameraModel): the camera stream at medium, 15 fps, over
+    // Bluetooth (Info.plist declares the accessory protocol); the photo is
+    // taken from that stream. Standalone photo
+    // capture failed here (sessionSetupFailed: Capture service unavailable),
+    // and a high stream waited for the glasses' Wi-Fi (Hotspot entitlement,
+    // which a Personal Team can't sign: see the .entitlements file).
+
+    enum PhotoFailure: Error { case notReady(String), timedOut }
+
+    /// What the glasses see while a photo question waits (stream frames).
+    private(set) var liveFrame: UIImage?
+    private var liveSession: DeviceSession?
+    private var liveStream: MWDATCamera.Stream?
+    private var liveTokens = ListenerTokenBag()
+    private var livePhoto: OnceBox<Data?>?
+
+    /// Starts the glasses' camera stream (glasses only); frames show as the live view.
+    func startLive() {
+        guard liveSession == nil else { return }
+        liveFrame = nil
+        guard let id = devices.first(where: { wearables.deviceForIdentifier($0)?.linkState == .connected }) else {
+            Log.dat.info("[look] live: no connected glasses (devices=\(self.devices.count))")
+            return
+        }
+        Task { @MainActor in
+            do {
+                if cameraPermission != .granted {
+                    cameraPermission = try await wearables.checkPermissionStatus(.camera)
+                }
+                guard cameraPermission == .granted else {
+                    Log.dat.info("[look] live: glasses camera not allowed (\(String(describing: self.cameraPermission), privacy: .public))")
+                    askCameraRedirect()
+                    return
+                }
+                // a fresh AutoDeviceSelector hasn't picked a device yet (noEligibleDevice): by id
+                let session = try wearables.createSession(deviceSelector: SpecificDeviceSelector(device: id))
+                liveSession = session
+                let states = session.stateStream()
+                try session.start()
+                for await st in states {
+                    Log.dat.info("[look] live: session \(String(describing: st), privacy: .public)")
+                    if st == .started { break }
+                    if st == .stopped { throw PhotoFailure.notReady("session stopped") }
+                }
+                // medium (decided after the iPad test); the sample drops to low while HFP shares the Bluetooth
+                let hfp = AVAudioSession.sharedInstance().currentRoute.inputs.contains { $0.portType == .bluetoothHFP }
+                let config = StreamConfiguration(videoCodec: .raw, resolution: .medium, frameRate: 15)
+                Log.dat.info("[look] live: stream medium / 15 fps (HFP \(hfp ? "on" : "off", privacy: .public))")
+                guard liveSession === session, let camera = try session.addCamera(config: config) else {
+                    throw PhotoFailure.notReady("no camera")
+                }
+                let stream = camera.stream
+                liveStream = stream
+                stream.statePublisher.listen { st in
+                    Log.dat.info("[look] live: stream \(String(describing: st), privacy: .public)")
+                }.store(in: liveTokens)
+                stream.errorPublisher.listen { error in
+                    Log.dat.error("[look] live: stream error \(String(describing: error), privacy: .public)")
+                }.store(in: liveTokens)
+                stream.videoFramePublisher.listen { [weak self] frame in
+                    guard let img = frame.makeUIImage() else { return }
+                    Task { @MainActor in self?.liveFrame = img }
+                }.store(in: liveTokens)
+                stream.photoDataPublisher.listen { [weak self] photo in
+                    Log.dat.info("[look] photo: received \(photo.data.count) bytes")
+                    Task { @MainActor in self?.livePhoto?.set(photo.data) }
+                }.store(in: liveTokens)
+                stream.start()
+            } catch {
+                Log.dat.error("[look] live failed: \(String(describing: error), privacy: .public)")
+                stopLive()
+            }
+        }
+    }
+
+    func stopLive() {
+        guard liveSession != nil else { return }
+        livePhoto?.set(nil)
+        liveStream?.stop()
+        liveSession?.stop()
+        liveStream = nil
+        liveSession = nil
+        liveTokens = ListenerTokenBag()
+        liveFrame = nil
+        Log.dat.info("[look] live: stopped")
+    }
+
+    /// A photo from the running stream (JPEG; the frames are compressed for
+    /// Bluetooth, the photo isn't); if it doesn't come, the frame on screen.
+    func takePhoto(timeout: Duration = .seconds(5)) async throws -> Data {
+        guard let stream = liveStream else { throw PhotoFailure.notReady("no live view") }
+        let frame = liveFrame?.jpegData(compressionQuality: 0.9)
+        let box = OnceBox<Data?>()
+        livePhoto = box
+        defer { livePhoto = nil }
+        guard stream.capturePhoto(format: .jpeg) else {
+            Log.dat.info("[look] photo: capture not available, the live frame instead")
+            if let frame { return frame }
+            throw PhotoFailure.notReady("capture not available")
+        }
+        Log.dat.info("[look] photo: capture requested")
+        let data: Data? = await withCheckedContinuation { cont in
+            box.onSet = { cont.resume(returning: $0) }
+            Task { @MainActor in
+                try? await Task.sleep(for: timeout)
+                box.set(nil)
+            }
+        }
+        if let data { return data }
+        Log.dat.info("[look] photo: none in \(timeout, privacy: .public), the live frame instead")
+        if let frame { return frame }
+        throw PhotoFailure.timedOut
+    }
+
     func clearError() {
         lastError = nil
     }
@@ -249,5 +368,21 @@ final class GlassesDAT {
         }
         deviceName = device.nameOrId()
         batteryLevel = device.batteryLevel
+    }
+}
+
+/// A value set once from any thread; the first set wins (a photo result vs its timeout).
+final class OnceBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    var onSet: ((T) -> Void)?
+
+    func set(_ value: T) {
+        lock.lock()
+        guard !done else { lock.unlock(); return }
+        done = true
+        let f = onSet
+        lock.unlock()
+        f?(value)
     }
 }

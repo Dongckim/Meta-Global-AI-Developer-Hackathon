@@ -1,4 +1,5 @@
 import AVFoundation
+import os
 import SwiftUI
 
 // MARK: - Pending cards (home, detail, and bench show the same cards)
@@ -231,6 +232,10 @@ struct LevelBar: View {
 /// Developer checks that used to live under Setup's Diagnostics.
 struct DiagnosticsView: View {
     var voice: VoiceSession? = nil
+    /// The glasses (for the photo test); nil when DAT isn't set up.
+    var dat: GlassesDAT? = nil
+    @State private var photoTest = "Not run"
+    @State private var photoThumb: UIImage?
     @Environment(\.dismiss) private var dismiss
     @State private var mic = "Not checked"
     @State private var server = "Not checked"
@@ -258,6 +263,14 @@ struct DiagnosticsView: View {
                         #endif
                     }
                     row("TTS voice", status: SpeechBus.shared.voiceInfo) { EmptyView() }
+                    // test only (tap, not in the registry): is the glasses mic (HFP) what stops the photo?
+                    row("Glasses photo test", status: photoTest) {
+                        Button("Run") { runPhotoTest() }.buttonStyle(.bordered).controlSize(.small).disabled(busy)
+                    }
+                    if let photoThumb {
+                        Image(uiImage: photoThumb).resizable().scaledToFit().frame(height: 120)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Text command").font(.headline)
                         TextField("Type a command (sent like speech)", text: $command)
@@ -306,6 +319,41 @@ struct DiagnosticsView: View {
             }
             Spacer()
             action()
+        }
+    }
+
+    /// One glasses photo the way a photo question takes it: the stream
+    /// (medium, low on HFP), then a photo from it, then the stream stops.
+    private func runPhotoTest() {
+        guard let dat else {
+            photoTest = "No glasses (DAT isn't set up)"
+            return
+        }
+        busy = true
+        photoThumb = nil
+        photoTest = "Running…"
+        Task { @MainActor in
+            Log.view.info("[look] test: start the glasses stream")
+            dat.startLive()
+            let t0 = Date()
+            while dat.liveFrame == nil, Date().timeIntervalSince(t0) < 10 {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            Log.view.info("[look] test: first frame \(dat.liveFrame != nil ? "in" : "none", privacy: .public) after \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+            let t1 = Date()
+            do {
+                let data = try await dat.takePhoto()
+                let img = UIImage(data: data)
+                let px = img.map { "\(Int($0.size.width * $0.scale))x\(Int($0.size.height * $0.scale))" } ?? "?"
+                Log.view.info("[look] test: OK \(px, privacy: .public) px, \(data.count) bytes, \(Int(Date().timeIntervalSince(t1) * 1000)) ms")
+                photoTest = "OK: \(px) px, \(data.count / 1024) KB"
+                photoThumb = img
+            } catch {
+                Log.view.error("[look] test: failed: \(String(describing: error), privacy: .public)")
+                photoTest = "Failed: \(error)"
+            }
+            dat.stopLive()
+            busy = false
         }
     }
 

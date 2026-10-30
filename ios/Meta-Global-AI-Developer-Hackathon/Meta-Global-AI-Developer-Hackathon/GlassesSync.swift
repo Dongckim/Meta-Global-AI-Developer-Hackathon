@@ -335,7 +335,7 @@ struct GlassesSyncScreen: View {
             #endif
         }
         #if DEBUG
-        .sheet(isPresented: $showDiagnostics) { DiagnosticsView(voice: voice) }
+        .sheet(isPresented: $showDiagnostics) { DiagnosticsView(voice: voice, dat: dat) }
         #endif
         .onAppear {
             if allOk { readyAt = 0 }

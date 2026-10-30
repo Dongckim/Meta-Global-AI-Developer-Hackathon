@@ -39,6 +39,19 @@ struct Persona: Decodable, Equatable {
         return file.live
     }()
 
+    /// A line the app says or shows itself (pip_voice.json `<key>`, its first
+    /// variant): "Connect your glasses first.", the photo hint.
+    static func line(_ key: String) -> String {
+        guard let url = Bundle.main.url(forResource: "pip_voice", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let lines = raw[key] as? [String], let first = lines.first else {
+            Log.voice.error("[voice] line \(key, privacy: .public) missing in pip_voice.json")
+            return ""
+        }
+        return first
+    }
+
     /// The app's name as people see it (pip_voice.json persona.app_name).
     static let appName: String = {
         guard let url = Bundle.main.url(forResource: "pip_voice", withExtension: "json"),

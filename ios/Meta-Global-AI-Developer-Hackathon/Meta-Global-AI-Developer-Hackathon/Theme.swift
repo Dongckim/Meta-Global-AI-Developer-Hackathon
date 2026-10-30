@@ -417,6 +417,16 @@ enum Theme {
         /// the box above where a button row would be (cards 40 under it).
         static var choiceLift: CGFloat { buttonRow + rowGap }
         static let titleGap: CGFloat = 40
+        /// Wide card kind (⑦ label check, ⑧ web/photo answer: Figma 37:14014,
+        /// 37:14048): a 1000 card centered (x 188), padding 48 with the photo
+        /// slot (300, radius 32, 48 to the text), else 64 x 60; its two
+        /// buttons (482 each) sit 36 under it, 36 apart.
+        static let wideCard: CGFloat = 1000
+        static let widePad: CGFloat = 64
+        static let widePadV: CGFloat = 60
+        static let widePhotoPad: CGFloat = 48
+        static let photoSlot: CGFloat = 300
+        static let photoRadius: CGFloat = 32
         /// List rows (protocol cards 125 tall, 16 apart).
         static let listRow: CGFloat = 125
         static let listRowGap: CGFloat = 16
@@ -552,7 +562,11 @@ enum Theme {
             }
             return PipLine(text: "Listening", dots: true, status: true)
         case .thinking:
-            if stage?.stage == "reading" { return PipLine(text: "Reading the protocol", dots: true, status: true) }
+            if stage?.stage == "reading" {
+                // a photo question's reading carries its search id; an import's doesn't
+                return PipLine(text: stage?.searchId == nil ? "Reading the protocol" : "Reading the photo",
+                               dots: true, status: true)
+            }
             return PipLine(text: "Thinking", dots: true, status: true)
         case .speaking:
             if !speakText.isEmpty {

@@ -61,6 +61,12 @@ struct ContentView: View {
     @State private var commands = ScreenCommands()
     /// The camera for photo import (made when that screen first opens).
     @State private var camera: DeviceCamera?
+    /// The photo just taken for each photo question (shown while it's read).
+    @State private var lookShots: [String: UIImage] = [:]
+    /// A photo question's photo is being taken or sent (one at a time).
+    @State private var lookBusy = false
+    /// The photo in flight per question; Retake clears it, so a late reply for it is dropped.
+    @State private var lookToken: [String: UUID] = [:]
     @State private var files: [LocalFile] = []
     /// The last view change came from a tap (its screen line is spoken only
     /// in a live session; a voice reply already says it).
@@ -270,7 +276,7 @@ struct ContentView: View {
         .statusBarHidden(true)
         .sheet(isPresented: robotSheet) { robotPanel }
         .sheet(isPresented: $showSettings) {
-            VoiceSettingsView(onOpenSync: { showSettings = false; openSync() })
+            VoiceSettingsView(onOpenSync: { showSettings = false; openSync() }, voice: voice, dat: dat)
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .plainText]) { res in
             importPicked(res)
@@ -403,7 +409,10 @@ struct ContentView: View {
                 // ⑧ web search answer (Figma 37:14048)
                 stage { u in
                     if let item = searches.first(where: { $0.id == lab.view.current.target }) {
-                        WebAnswerScreen(item: item, buttons: buttons("web_answer"), u: u, perform: performButton)
+                        WebAnswerScreen(item: item, buttons: buttons("web_answer"), u: u, perform: performButton,
+                                        live: dat?.liveFrame, shot: lookShots[item.id], commands: commands,
+                                        onLive: { on in if on { dat?.startLive() } else { dat?.stopLive() } },
+                                        onTake: { Task { await takeLook(item.id, attempt: item.attempt ?? 1) } })
                     }
                 }
             } else if lab.view.current.screen == "web_searches" {
@@ -876,6 +885,15 @@ struct ContentView: View {
         case "import_text":
             showTextImport = true
             return true
+        case "camera":
+            // a photo question: ⑧ opens on "Show me." (a Retake comes back here: its photo is dropped)
+            if let sid = a.search_id {
+                lookShots[sid] = nil
+                lookToken[sid] = nil
+            }
+            if dat == nil { enableDAT() }
+            loadLists()
+            return true
         case "control":
             // the screen's own buttons, said or tapped (registry control actions)
             guard let cmd = a.target else { return uiFail("I couldn't do that.") }
@@ -906,6 +924,56 @@ struct ContentView: View {
         default:
             return uiFail("I couldn't do that.")
         }
+    }
+
+    /// Take it, for a photo question: the glasses take one photo (glasses
+    /// only), it shows at once, and the server finds, crops and reads it. A
+    /// Retake meanwhile drops it: whatever comes back for it is ignored.
+    private func takeLook(_ id: String, attempt: Int) async {
+        guard !lookBusy else { return }
+        lookBusy = true
+        defer { lookBusy = false }
+        let token = UUID()
+        lookToken[id] = token
+        Log.view.info("[look] take id=\(id, privacy: .public) attempt=\(attempt) glasses=\(dat.map { $0.status.rawValue } ?? "none", privacy: .public)")
+        guard let dat, dat.status == .connected else {
+            _ = uiFail(Persona.line("look_no_glasses"))
+            return
+        }
+        let jpeg: Data
+        do {
+            jpeg = try await dat.takePhoto()
+        } catch {
+            Log.view.error("[look] no photo: \(String(describing: error), privacy: .public)")
+            if lookToken[id] == token { _ = uiFail(Persona.line("look_no_photo")) }
+            return
+        }
+        guard lookToken[id] == token else {
+            Log.view.info("[look] photo dropped: retaken while the glasses took it")
+            return
+        }
+        lookShots[id] = UIImage(data: jpeg)
+        do {
+            let r = try await PipClient.look(searchId: id, attempt: attempt, jpeg: jpeg)
+            guard lookToken[id] == token, r.stale != true else {
+                Log.view.info("[look] reply ignored: retaken (attempt \(attempt))")
+                return
+            }
+            Log.view.info("[look] reply ok=\(r.ok) \(r.reply, privacy: .public)")
+            if !r.ok { lookShots[id] = nil }  // not found / unreadable: "Show me." again
+            lastReply = r.reply
+            say("\(Persona.current.agentName): \(r.reply)")
+            sayAloud(r.speak)
+            if let v = r.recordVersion { expectSnapshot(v) }
+        } catch {
+            // the glasses' photo is in; sending or checking it failed (not the glasses)
+            Log.view.error("[look] send failed: \(String(describing: error), privacy: .public)")
+            if lookToken[id] == token {
+                lookShots[id] = nil
+                _ = uiFail(Persona.line("look_send_failed"))
+            }
+        }
+        loadLists()
     }
 
     private func uiFail(_ text: String) -> Bool {

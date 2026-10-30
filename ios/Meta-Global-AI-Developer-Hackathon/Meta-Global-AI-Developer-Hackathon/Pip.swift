@@ -426,17 +426,29 @@ struct WebSearch: Decodable, Identifiable, Equatable {
     var runId: String?
     var day: String
     var time: String
+    /// The time as Milo says it ("12:08 AM"), for the answer card.
+    var clock: String?
     /// "cited": the answer cites its sources; "pages": only the pages searched.
     var basis: String?
     /// pending (searching now), ok, or why not: no_source / timeout / canceled / error.
     var status: String?
     /// Why not, as Milo said it (failed searches).
     var line: String?
+    /// "photo": a question answered from a photo (looking -> reading -> ok);
+    /// nil for a plain web search.
+    var kind: String?
+    /// What SAM looked for ("label", "tube").
+    var target: String?
+    /// The thing's outline on the kept crop, 0-1 (x, y) points.
+    var outline: [[Double]]?
+    /// Which photo this is (Retake moves it on; a reply for an older one is ignored).
+    var attempt: Int?
 
     var cited: Bool { basis != "pages" }
+    var isPhoto: Bool { kind == "photo" }
 
     enum CodingKeys: String, CodingKey {
-        case id, ts, question, detail, sources, day, time, basis, status, line
+        case id, ts, question, detail, sources, day, time, clock, basis, status, line, kind, target, outline, attempt
         case answerShort = "answer_short", runId = "run_id"
     }
 }

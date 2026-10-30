@@ -35,6 +35,8 @@ struct UIAction: Decodable {
     let n: Int?
     /// Delivery id: the reply and /events carry the same one; run it once.
     let id: String?
+    /// camera: the photo question it's for (Retake sends it again).
+    let search_id: String?
 }
 
 struct OrchestrateResponse: Decodable {
@@ -91,6 +93,19 @@ struct ImportResponse: Decodable {
     let errors: [DraftIssue]
     let reply: String
     let speak: String?
+}
+
+struct LookResponse: Decodable {
+    let ok: Bool
+    let reply: String
+    let speak: String?
+    let recordVersion: Int?
+    /// For a photo Retake replaced: show and say nothing.
+    let stale: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, reply, speak, stale, recordVersion = "record_version"
+    }
 }
 
 struct RunEndResponse: Decodable {
@@ -166,7 +181,7 @@ enum PipError: Error, LocalizedError {
 
 enum PipClient {
     /// Must match server API_VERSION (test_snapshot_schema pins both sides).
-    static let EXPECTED_API_VERSION = 18
+    static let EXPECTED_API_VERSION = 19
     /// A server link silent this long is dead: three missed keepalives
     /// (server HEARTBEAT_S = 15) on /events and /voice/live.
     static let idleTimeout: TimeInterval = 45
@@ -267,6 +282,36 @@ enum PipClient {
         let (respData, resp) = try await URLSession.shared.data(for: req)
         try check(resp, respData)
         return try JSONDecoder().decode(ImportResponse.self, from: respData)
+    }
+
+    /// The photo for a photo question (server POST /look): SAM finds the thing,
+    /// Spark reads the crop. ok false: not found or unreadable; the camera stays.
+    static func look(searchId: String, attempt: Int, jpeg: Data) async throws -> LookResponse {
+        let boundary = "----pip\(UUID().uuidString)"
+        var body = Data()
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"look.jpg\"\r\n".utf8))
+        body.append(Data("Content-Type: image/jpeg\r\n\r\n".utf8))
+        body.append(jpeg)
+        body.append(Data("\r\n".utf8))
+        for (k, v) in [("search_id", searchId), ("session", "bench"), ("attempt", String(attempt))] {
+            body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(k)\"\r\n\r\n".utf8))
+            body.append(Data(v.utf8))
+            body.append(Data("\r\n".utf8))
+        }
+        body.append(Data("--\(boundary)--\r\n".utf8))
+        var req = URLRequest(url: Config.baseURL.appending(path: "look"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 90  // SAM, then reading, maybe a search
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        let (respData, resp) = try await URLSession.shared.data(for: req)
+        try check(resp, respData)
+        return try JSONDecoder().decode(LookResponse.self, from: respData)
+    }
+
+    /// A photo question's kept crop (the ⑧ thumbnail).
+    static func lookCropURL(_ searchId: String) -> URL {
+        Config.baseURL.appending(path: "looks/\(searchId)/crop")
     }
 
     static func protocols() async throws -> [ProtocolSummary] {
