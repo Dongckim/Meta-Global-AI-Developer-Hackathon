@@ -26,20 +26,20 @@ struct WebAnswerScreen: View {
                 HStack(spacing: 14 * u) {
                     Image(systemName: pending ? "magnifyingglass" : "globe").foregroundStyle(Theme.polishBlue)
                     Text([item.day, item.time].filter { !$0.isEmpty }.joined(separator: " · "))
-                        .font(.system(size: 30 * u, weight: .semibold)).foregroundStyle(Theme.polishBlue)
+                        .font(Theme.ui(30 * u, weight: .semibold)).foregroundStyle(Theme.polishBlue)
                     Text(pending ? "Searching the web" : "Searched the web")
-                        .font(.system(size: 22 * u)).foregroundStyle(Theme.text2)
+                        .font(Theme.ui(22 * u)).foregroundStyle(Theme.text2)
                 }
-                .font(.system(size: 28 * u))
+                .font(Theme.ui(28 * u))
                 .enter(.rise, 0, u: u)
                 // the question shows at once, before any answer
-                Text("“\(item.question)”").font(.system(size: 26 * u)).foregroundStyle(Theme.text1)
+                Text("“\(item.question)”").font(Theme.ui(26 * u)).foregroundStyle(Theme.text1)
                     .lineLimit(1).padding(.top, 26 * u).enter(.rise, 1, u: u)
                 Group {
                     if pending {
                         loading
                     } else if failed {
-                        Text(item.line ?? "").font(.system(size: 40 * u, weight: .semibold))
+                        Text(item.line ?? "").font(Theme.ui(40 * u, weight: .semibold))
                             .foregroundStyle(Theme.text1).lineLimit(2)
                             .padding(.top, 14 * u).enter(.text, 0, u: u)
                     } else {
@@ -76,10 +76,10 @@ struct WebAnswerScreen: View {
 
     private func answer(_ second: ScreenButton?) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(item.answerShort).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
+            Text(item.answerShort).font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                 .foregroundStyle(Theme.text1).lineLimit(2).minimumScaleFactor(0.6)
                 .padding(.top, 14 * u).enter(.text, 0, u: u)
-            Text(item.detail).font(.system(size: 28 * u)).foregroundStyle(Theme.text2)
+            Text(item.detail).font(Theme.ui(28 * u)).foregroundStyle(Theme.text2)
                 .lineLimit(2).minimumScaleFactor(0.7).padding(.top, 14 * u).enter(.rise, 1, u: u)
             HStack(spacing: 16 * u) {
                 if let s = item.sources.first {
@@ -97,7 +97,7 @@ struct WebAnswerScreen: View {
                     .buttonStyle(.plain)
                 }
             }
-            .font(.system(size: 20 * u)).padding(.top, 30 * u).enter(.rise, 2, u: u)
+            .font(Theme.ui(20 * u)).padding(.top, 30 * u).enter(.rise, 2, u: u)
         }
     }
 }
@@ -149,7 +149,7 @@ struct WebSearchesScreen: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(shown.enumerated()), id: \.element.id) { i, s in
                     if i == 0 || shown[i - 1].day != s.day {
-                        Text(s.day.uppercased()).font(.system(size: 20 * u, weight: .semibold)).tracking(1.2 * u)
+                        Text(s.day.uppercased()).font(Theme.ui(20 * u, weight: .semibold)).tracking(1.2 * u)
                             .foregroundStyle(Theme.text2).padding(.top, i == 0 ? 0 : 24 * u).padding(.bottom, 8 * u)
                     }
                     row(s).enter(.rise, i, u: u)
@@ -157,7 +157,7 @@ struct WebSearchesScreen: View {
                 if pages > 1 {
                     Button { withAnimation(Theme.Motion.ease(Theme.Motion.seg)) { page = (p + 1) % pages } } label: {
                         Text(p + 1 < pages ? "+\(items.count - (p + 1) * perPage) older" : "Back to the latest")
-                            .font(.system(size: 22 * u, weight: .semibold)).foregroundStyle(Theme.polishBlue)
+                            .font(Theme.ui(22 * u, weight: .semibold)).foregroundStyle(Theme.polishBlue)
                     }
                     .buttonStyle(.plain).padding(.top, 8 * u)
                 }
@@ -167,7 +167,7 @@ struct WebSearchesScreen: View {
                     (Text("Say").foregroundStyle(Theme.polishBlue)
                      + Text(" a date and time, like ").foregroundStyle(Theme.text2)
                      + Text(example(ex)).fontWeight(.semibold).foregroundStyle(Theme.text1))
-                        .font(.system(size: 22 * u)).padding(.top, 18 * u).padding(.leading, 14 * u)
+                        .font(Theme.ui(22 * u)).padding(.top, 18 * u).padding(.leading, 14 * u)
                 }
             }
             .padding(.horizontal, 56 * u).padding(.vertical, 44 * u)
@@ -186,15 +186,15 @@ struct WebSearchesScreen: View {
     private func row(_ s: WebSearch) -> some View {
         Button { onOpen(s.id) } label: {
             HStack(alignment: .firstTextBaseline, spacing: 0) {
-                Text(s.time).font(.system(size: 28 * u)).foregroundStyle(Theme.polishBlue)
+                Text(s.time).font(Theme.ui(28 * u)).foregroundStyle(Theme.polishBlue)
                     .frame(width: 135 * u, alignment: .leading).padding(.leading, 14 * u)
                 VStack(alignment: .leading, spacing: 4 * u) {
-                    Text(s.question).font(.system(size: 28 * u)).foregroundStyle(Theme.text1)
-                    Text(s.answerShort).font(.system(size: 22 * u)).foregroundStyle(Theme.text2)
+                    Text(s.question).font(Theme.ui(28 * u)).foregroundStyle(Theme.text1)
+                    Text(s.answerShort).font(Theme.ui(22 * u)).foregroundStyle(Theme.text2)
                 }
                 .lineLimit(1)
                 Spacer(minLength: 12 * u)
-                Image(systemName: "chevron.right").font(.system(size: 18 * u)).foregroundStyle(Theme.text4)
+                Image(systemName: "chevron.right").font(Theme.ui(18 * u)).foregroundStyle(Theme.text4)
             }
             .padding(.vertical, 12 * u)
             .contentShape(Rectangle())

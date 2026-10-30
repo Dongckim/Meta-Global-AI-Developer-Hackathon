@@ -56,11 +56,11 @@ struct ConfirmScreen: View {
     private func single(_ c: ServerCard) -> some View {
         VStack(spacing: 0) {
             if c.kind == "next_step", let d = c.detail, !d.isEmpty {
-                Text(d).font(.system(size: 28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text2)
+                Text(d).font(Theme.ui(28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text2)
                     .padding(.bottom, 22 * u)
             } else if c.kind == "catch" {
                 Circle().fill(Theme.text1).frame(width: 69 * u, height: 69 * u)
-                    .overlay(Image(systemName: "exclamationmark").font(.system(size: 30 * u, weight: .bold))
+                    .overlay(Image(systemName: "exclamationmark").font(Theme.ui(30 * u, weight: .bold))
                         .foregroundStyle(.white))
                     .padding(.bottom, 50 * u)
             } else if let w = c.payload?.allWells.first {
@@ -68,7 +68,7 @@ struct ConfirmScreen: View {
                     .padding(.bottom, 20 * u)
             }
             Text(c.title ?? c.question)
-                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
+                .font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                 .foregroundStyle(Theme.text1).multilineTextAlignment(.center)
                 .lineLimit(2).minimumScaleFactor(0.6)
             if c.kind == "next_step" {
@@ -77,7 +77,7 @@ struct ConfirmScreen: View {
                          rest: Theme.cardOff, u: u)
                     .padding(.top, 30 * u)
             } else if let sub = c.detail, !sub.isEmpty {
-                Text(sub).font(.system(size: 28 * u)).tracking(-0.34 * u)
+                Text(sub).font(Theme.ui(28 * u)).tracking(-0.34 * u)
                     .foregroundStyle(Theme.text1).multilineTextAlignment(.center)
                     .lineLimit(2).padding(.top, 24 * u)
             }
@@ -88,7 +88,7 @@ struct ConfirmScreen: View {
     private var checklist: some View {
         VStack(alignment: .leading, spacing: 18 * u) {
             Text("\(cards.count) changes")
-                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
+                .font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                 .foregroundStyle(Theme.text1)
                 .frame(maxWidth: .infinity)
             ForEach(Array(cards.enumerated()), id: \.element.id) { i, c in
@@ -97,10 +97,10 @@ struct ConfirmScreen: View {
                                  d: 48 * u, ring: false)
                     let t = c.title ?? c.question
                     Text(t.hasSuffix("?") ? String(t.dropLast()) : t)
-                        .font(.system(size: 28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text1)
+                        .font(Theme.ui(28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text1)
                         .lineLimit(1).minimumScaleFactor(0.6)
                     Spacer(minLength: 0)
-                    Image(systemName: "checkmark").font(.system(size: 22 * u, weight: .semibold))
+                    Image(systemName: "checkmark").font(Theme.ui(22 * u, weight: .semibold))
                         .foregroundStyle(Theme.text2)
                 }
                 .enter(.text, i + 1, u: u)
@@ -134,12 +134,12 @@ struct CardWellIcon: View {
             switch op {
             case "exclude_well":
                 Circle().fill(Theme.wellEmpty.shadow(.inner(color: .black.opacity(0.07), radius: 1, y: 1)))
-                Image(systemName: "xmark").font(.system(size: d * 0.36, weight: .medium))
+                Image(systemName: "xmark").font(Theme.ui(d * 0.36, weight: .medium))
                     .foregroundStyle(Theme.text2)
             case "record_redo":
                 Circle().fill(Theme.card)
                 Circle().strokeBorder(Theme.text1, style: StrokeStyle(lineWidth: d / 24, dash: [d / 16, d / 16]))
-                Image(systemName: "arrow.clockwise").font(.system(size: d * 0.36, weight: .medium))
+                Image(systemName: "arrow.clockwise").font(Theme.ui(d * 0.36, weight: .medium))
                     .foregroundStyle(Theme.text1)
             default:
                 Circle().fill(well.flatMap { lab.groupIndex(lab.conditionOf($0)) }.map(Theme.groupTone)

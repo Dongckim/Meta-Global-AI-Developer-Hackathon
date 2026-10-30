@@ -20,7 +20,7 @@ struct SplashView: View {
                 ZStack {
                     AuroraView(mode: .splash, t: t)
                     Text("Glassistant")
-                        .font(.system(size: 96, weight: .semibold))
+                        .font(Theme.ui(96, weight: .semibold))
                         .tracking((0.06 + (-0.035 - 0.06) * p) * 96)
                         .foregroundStyle(.white)
                         .frame(height: 96)

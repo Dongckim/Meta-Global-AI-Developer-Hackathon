@@ -63,7 +63,7 @@ struct SayButton: View {
                 (Say.prefix(Theme.text4)
                  + Text(word).fontWeight(.semibold).foregroundStyle(Theme.text2)
                  + Text(button.note.map { "  \($0)" } ?? "").foregroundStyle(Theme.text4))
-                    .font(.system(size: size))
+                    .font(Theme.ui(size))
                     .tracking(-0.54 * size / 34)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, minHeight: size * 93 / 34)
@@ -72,7 +72,7 @@ struct SayButton: View {
             } else {
                 (Say.prefix(kind == .primary ? Color.white.opacity(0.72) : Theme.polishBlue)
                  + Text(word).fontWeight(.semibold).foregroundStyle(kind == .primary ? .white : Theme.text1))
-                    .font(.system(size: size))
+                    .font(Theme.ui(size))
                     .tracking(-0.54 * size / 34)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, minHeight: size * 93 / 34)
@@ -102,7 +102,7 @@ struct ControlChips: View {
             ForEach(Array(buttons.enumerated()), id: \.offset) { _, b in
                 Button { perform(b) } label: {
                     (Say.prefix(Theme.polishBlue) + Text(b.say).foregroundStyle(Theme.text1))
-                        .font(.system(size: 20 * u, weight: .medium)).lineLimit(1)
+                        .font(Theme.ui(20 * u, weight: .medium)).lineLimit(1)
                         .padding(.horizontal, 18 * u).frame(height: 44 * u)
                         .background(Capsule().fill(Theme.chip))
                 }
@@ -115,13 +115,20 @@ struct ControlChips: View {
 
 /// Header chip: the soonest timer's wells, minutes left, and how many more
 /// ("B2–B8 6 min +1"). Hidden with no running timer.
+/// Header chip (design `hdt`, 247 x 50 at the right): the timer ending
+/// first, as progress ring, its step's short name (the server's `chip`) and
+/// the time left, plus "+N" for the others. Fixed width: a long name ends
+/// in "…", the time always shows, and the chip never grows into the header
+/// line.
 struct TimerChip: View {
     var timers: [TimerEntry]
-    var size: CGFloat = 22
+    /// Design px -> points (the header's scale).
+    var unit: CGFloat = 1
 
     struct Summary: Equatable {
-        var wells: String
-        var minutesLeft: Int
+        var name: String
+        /// Time left: "29:41", or "1:05:00" past an hour.
+        var left: String
         /// Elapsed fraction 0...1 (the ring).
         var progress: Double
         var more: Int
@@ -134,27 +141,32 @@ struct TimerChip: View {
             .filter { $0.1 > 0 }
             .sorted { $0.1 < $1.1 }
         guard let (t, rem) = running.first else { return nil }
-        return Summary(wells: t.wells.isEmpty ? t.label : t.wells,
-                       minutesLeft: Int((rem / 60).rounded(.up)),
+        let s = Int(rem.rounded(.up))
+        let left = s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+            : String(format: "%02d:%02d", s / 60, s % 60)
+        return Summary(name: t.chip, left: left,
                        progress: t.minutes > 0 ? min(1, max(0, 1 - rem / (t.minutes * 60))) : 1,
                        more: running.count - 1)
     }
 
     var body: some View {
+        let size = 22 * unit
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             if let s = Self.summary(timers, now: ctx.date) {
                 HStack(spacing: size * 0.45) {
                     TimerRing(progress: s.progress, size: size * 0.9)
-                    Text(s.wells).fontWeight(.semibold).foregroundStyle(Theme.text1)
-                    Text("\(s.minutesLeft) min").foregroundStyle(Theme.text3)
+                    Text(s.name).fontWeight(.semibold).foregroundStyle(Theme.text1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(s.left).foregroundStyle(Theme.text3).fixedSize()
                     if s.more > 0 {
-                        Text("+\(s.more)").fontWeight(.medium).foregroundStyle(Theme.polishBlue)
+                        Text("+\(s.more)").fontWeight(.medium).foregroundStyle(Theme.polishBlue).fixedSize()
                     }
                 }
-                .font(.system(size: size).monospacedDigit())
+                .font(Theme.ui(size).monospacedDigit())
                 .lineLimit(1)
                 .padding(.horizontal, size * 0.55)
-                .frame(height: size * 50 / 22)
+                .frame(width: Theme.Layout.chipWidth * unit, height: Theme.Layout.chipHeight * unit)
                 .background(Capsule().fill(Theme.chip)
                     .shadow(color: .black.opacity(0.04), radius: 1, y: 1))
                 .accessibilityElement(children: .combine)

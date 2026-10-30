@@ -865,6 +865,8 @@ struct TopHeader: View {
     var timers: [TimerEntry] = []
     /// Tap while talking is blocked by a permission: opens the sync screen.
     var onBlockedTap: () -> Void = {}
+    /// The run mode label (server header.mode); nil on screens before a mode is chosen.
+    var mode: RecordSnapshot.RunModeLabel? = nil
 
     var body: some View {
         let line = Theme.pipText(for: voice.state, speakText: speakText,
@@ -884,7 +886,7 @@ struct TopHeader: View {
                           && Theme.talkBlocker(wake: voice.wakeSupport, wakeOn: true) != nil,
                       onBlockedTap: onBlockedTap,
                       onOrbTap: { voice.open(trigger: .orbTap) },
-                      timers: timers)
+                      timers: timers, mode: mode)
     }
 }
 
@@ -913,20 +915,26 @@ struct TopHeaderView: View {
     /// Orb tap: talk (VoiceSession.admission decides what it does).
     var onOrbTap: () -> Void = {}
     var timers: [TimerEntry] = []
+    /// Mode label at the left (icon x 64, text x 102); nil draws nothing and
+    /// moves nothing else (each header part sits on its own layer).
+    var mode: RecordSnapshot.RunModeLabel? = nil
     @State private var width: CGFloat = 0
 
     var body: some View {
         let px = { (v: CGFloat) in Theme.px(v, in: width) }
         ZStack(alignment: .top) {
-            HStack(spacing: px(12)) {
-                Image(systemName: Theme.modeIcon).font(.system(size: px(22)))
-                Text(Theme.modeLabel).font(Theme.ui(px(22))).tracking(-0.012 * px(22))
+            if let mode {
+                HStack(spacing: px(12)) {
+                    Image(systemName: Theme.modeIcon(mode.id)).font(Theme.ui(px(22)))
+                        .frame(width: px(26))
+                    Text(mode.label).font(Theme.ui(px(22))).tracking(-0.012 * px(22))
+                }
+                .foregroundStyle(Theme.mutSay)
+                .frame(height: px(Theme.Layout.headerRow))
+                .padding(.leading, px(Theme.Layout.side))
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .foregroundStyle(Theme.mutSay)
-            .frame(height: px(Theme.Layout.headerRow))
-            .padding(.leading, px(Theme.Layout.side))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            TimerChip(timers: timers, size: px(22))
+            TimerChip(timers: timers, unit: px(1))
                 .frame(height: px(Theme.Layout.headerRow))
                 .padding(.trailing, px(Theme.Layout.side))
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -938,7 +946,7 @@ struct TopHeaderView: View {
                     .accessibilityLabel("Talk to \(Persona.current.agentName)")
                     .accessibilityAddTraits(.isButton)
                 if let icon {
-                    Image(systemName: icon).font(.system(size: px(20), weight: .semibold))
+                    Image(systemName: icon).font(Theme.ui(px(20), weight: .semibold))
                         .foregroundStyle(status ? Theme.blue : .primary)
                 }
                 // 22 px (design .t24) by review; the design .pip is 26
@@ -961,8 +969,8 @@ struct TopHeaderView: View {
                 }
             }
             .animation(Theme.ease(duration: 0.35), value: live)
-            // keep clear of the mode label on both sides so the group stays centered
-            .frame(maxWidth: max(0, width - 2 * px(64 + 180)))
+            // keep clear of the timer chip (and the mode label) on both sides so the group stays centered
+            .frame(maxWidth: max(0, width - 2 * px(Theme.Layout.side + Theme.Layout.chipWidth)))
             .contentShape(Rectangle())
             .onTapGesture { if blocked { onBlockedTap() } }
             .accessibilityAddTraits(blocked ? .isButton : [])

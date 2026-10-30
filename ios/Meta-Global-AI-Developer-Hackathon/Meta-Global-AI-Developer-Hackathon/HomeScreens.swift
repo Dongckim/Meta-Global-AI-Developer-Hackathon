@@ -112,10 +112,10 @@ struct ProtocolsHome: View {
                 // not saved yet: why it isn't a protocol here, and the way on
                 Button { perform(review) } label: {
                     VStack(alignment: .leading, spacing: 4 * u) {
-                        Text(draftTitle).font(.system(size: 34 * u, weight: .semibold)).foregroundStyle(Theme.text1)
+                        Text(draftTitle).font(Theme.ui(34 * u, weight: .semibold)).foregroundStyle(Theme.text1)
                         (Text(review.line ?? "").foregroundStyle(Theme.text2) + Text("  ·  ")
                          + Say.prefix(Theme.text2) + Text(review.say).fontWeight(.semibold).foregroundStyle(Theme.polishBlue))
-                            .font(.system(size: 22 * u))
+                            .font(Theme.ui(22 * u))
                     }
                     .lineLimit(1).minimumScaleFactor(0.6)
                     .padding(.horizontal, 32 * u).padding(.vertical, 26 * u)
@@ -135,12 +135,12 @@ struct ProtocolsHome: View {
                 HStack(spacing: 16 * u) {
                     Button { onProtocol(p.id) } label: {
                         VStack(alignment: .leading, spacing: 4 * u) {
-                            Text(p.title).font(.system(size: 34 * u, weight: .semibold))
+                            Text(p.title).font(Theme.ui(34 * u, weight: .semibold))
                                 .foregroundStyle(p.id == selected?.id ? Theme.text1 : on ? Theme.text2 : Theme.text4)
                                 .truncationMode(.tail)
                             (Text(n == 1 ? "1 run" : "\(n) runs").foregroundStyle(Theme.text2)
                              + Text(live > 0 ? " · \(live) in progress" : "").foregroundStyle(Theme.polishBlue))
-                                .font(.system(size: 22 * u)).minimumScaleFactor(0.6)
+                                .font(Theme.ui(22 * u)).minimumScaleFactor(0.6)
                         }
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -164,7 +164,7 @@ struct ProtocolsHome: View {
                 // every protocol stays reachable (finished ones too) without scrolling
                 Button { withAnimation(Theme.Motion.ease(Theme.Motion.seg)) { page = (page + 1) % pages } } label: {
                     Text(page + 1 < pages ? "+\(protocols.count - (page + 1) * perPage) more" : "Back to the latest")
-                        .font(.system(size: 22 * u, weight: .semibold)).foregroundStyle(Theme.polishBlue)
+                        .font(Theme.ui(22 * u, weight: .semibold)).foregroundStyle(Theme.polishBlue)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 32 * u)
                         .frame(height: 40 * u).contentShape(Rectangle())
                 }
@@ -180,7 +180,7 @@ struct ProtocolsHome: View {
                         Spacer(minLength: 0)
                         if searchCount > 0 { Text("\(searchCount)").foregroundStyle(Theme.text2) }
                     }
-                    .font(.system(size: 28 * u))
+                    .font(Theme.ui(28 * u))
                     .padding(.horizontal, 32 * u).frame(height: 80 * u)
                     .background(Capsule().fill(Theme.chip))
                 }
@@ -192,7 +192,7 @@ struct ProtocolsHome: View {
     @ViewBuilder private var right: some View {
         if let p = selected {
             VStack(alignment: .leading, spacing: 0) {
-                Text(p.title).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
+                Text(p.title).font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                     .foregroundStyle(Theme.text1).lineLimit(2).minimumScaleFactor(0.6)
                     .enter(.text, 0, u: u)
                 HStack(spacing: 12 * u) {
@@ -201,9 +201,9 @@ struct ProtocolsHome: View {
                             .joined(separator: " · "))
                         .foregroundStyle(Theme.text2).lineLimit(1).minimumScaleFactor(0.6)
                 }
-                .font(.system(size: 28 * u)).padding(.top, 14 * u)
+                .font(Theme.ui(28 * u)).padding(.top, 14 * u)
                 .enter(.rise, 1, u: u)
-                Text("Runs").font(.system(size: 22 * u)).foregroundStyle(Theme.text2)
+                Text("Runs").font(Theme.ui(22 * u)).foregroundStyle(Theme.text2)
                     .padding(.top, 40 * u).padding(.bottom, 12 * u)
                 let rs = Array(runsOf(p.id, in: runs).reversed())
                 let pages = max(1, (rs.count + runsPerPage - 1) / runsPerPage)
@@ -222,7 +222,7 @@ struct ProtocolsHome: View {
                 if pages > 1 {
                     Button { withAnimation(Theme.Motion.ease(Theme.Motion.seg)) { runPage = (rp + 1) % pages } } label: {
                         Text(rp + 1 < pages ? "+\(rs.count - (rp + 1) * runsPerPage) older runs" : "Back to the newest")
-                            .font(.system(size: 22 * u, weight: .semibold)).foregroundStyle(Theme.polishBlue)
+                            .font(Theme.ui(22 * u, weight: .semibold)).foregroundStyle(Theme.polishBlue)
                             .padding(.leading, 54 * u).frame(height: 44 * u)
                     }
                     .buttonStyle(.plain)
@@ -241,12 +241,12 @@ struct ProtocolsHome: View {
                     .frame(width: 24 * u)
                 HStack(spacing: 18 * u) {
                     // a list row: its name only
-                    Text(r.label ?? "").font(.system(size: 28 * u, weight: .semibold))
+                    Text(r.label ?? "").font(Theme.ui(28 * u, weight: .semibold))
                         .foregroundStyle(first ? Theme.text1 : Theme.text5)
-                    Text(r.day ?? "").font(.system(size: 24 * u)).foregroundStyle(Theme.text2)
+                    Text(r.day ?? "").font(Theme.ui(24 * u)).foregroundStyle(Theme.text2)
                     Spacer(minLength: 0)
                     Text(r.state ?? "")
-                        .font(.system(size: 24 * u, weight: r.status == "finished" ? .regular : .semibold))
+                        .font(Theme.ui(24 * u, weight: r.status == "finished" ? .regular : .semibold))
                         .foregroundStyle(Theme.runState(r.status))
                 }
                 .lineLimit(1).minimumScaleFactor(0.6)
@@ -297,12 +297,12 @@ struct RunRecordScreen: View {
     private var side: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(doc?.protocolName ?? summary?.protocolName ?? "")
-                .font(.system(size: 28 * u)).foregroundStyle(Theme.text2).lineLimit(1)
+                .font(Theme.ui(28 * u)).foregroundStyle(Theme.text2).lineLimit(1)
             Text(summary?.label ?? "")
-                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1).displayLine(u)
+                .font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1).displayLine(u)
                 .padding(.top, 8 * u)
             Text([summary?.day, summary?.state].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
-                .font(.system(size: 28 * u)).foregroundStyle(Theme.text1).padding(.top, 14 * u)
+                .font(Theme.ui(28 * u)).foregroundStyle(Theme.text1).padding(.top, 14 * u)
             tabs.padding(.top, 36 * u)
             Group {
                 switch tab {
@@ -312,10 +312,10 @@ struct RunRecordScreen: View {
                 default: Text("That isn't ready yet.").foregroundStyle(Theme.text2)  // Code: planned
                 }
             }
-            .font(.system(size: 28 * u))
+            .font(Theme.ui(28 * u))
             .padding(.top, 28 * u)
             .id(tab)
-            if !error.isEmpty { Text(error).font(.system(size: 22 * u)).foregroundStyle(Theme.text2) }
+            if !error.isEmpty { Text(error).font(Theme.ui(22 * u)).foregroundStyle(Theme.text2) }
         }
         .enter(.rise, u: u)
     }
@@ -325,7 +325,7 @@ struct RunRecordScreen: View {
             ForEach(Array(["Notes", "Timers", "Searches", "Code"].enumerated()), id: \.offset) { i, t in
                 Button { withAnimation(Theme.Motion.ease(Theme.Motion.seg)) { tab = i } } label: {
                     VStack(spacing: 10 * u) {
-                        Text(t).font(.system(size: 26 * u, weight: tab == i ? .semibold : .regular))
+                        Text(t).font(Theme.ui(26 * u, weight: tab == i ? .semibold : .regular))
                             .foregroundStyle(tab == i ? Theme.text1 : Theme.text2)
                         Capsule().fill(tab == i ? Theme.text1 : .clear).frame(height: 3 * u)
                     }
@@ -345,7 +345,7 @@ struct RunRecordScreen: View {
                         Text("“\(m.text)”").foregroundStyle(Theme.text1).lineLimit(2)
                         let meta = [m.source?.capitalized, m.step.map { "step \($0)" }].compactMap { $0 }
                         if !meta.isEmpty {
-                            Text(meta.joined(separator: " · ")).font(.system(size: 20 * u)).foregroundStyle(Theme.text2)
+                            Text(meta.joined(separator: " · ")).font(Theme.ui(20 * u)).foregroundStyle(Theme.text2)
                         }
                     }
                 }
@@ -365,7 +365,7 @@ struct RunRecordScreen: View {
                         Text(s.time).foregroundStyle(Theme.polishBlue).frame(width: 110 * u, alignment: .leading)
                         VStack(alignment: .leading, spacing: 4 * u) {
                             Text(s.question).foregroundStyle(Theme.text1)
-                            Text(s.answerShort).font(.system(size: 20 * u)).foregroundStyle(Theme.text2)
+                            Text(s.answerShort).font(Theme.ui(20 * u)).foregroundStyle(Theme.text2)
                         }
                         .lineLimit(1)
                     }
@@ -424,13 +424,13 @@ struct ChoiceCard: View {
     var body: some View {
         Button { perform(button) } label: {
             VStack(spacing: 0) {
-                Image(systemName: icon).font(.system(size: 40 * u)).foregroundStyle(Theme.text2)
+                Image(systemName: icon).font(Theme.ui(40 * u)).foregroundStyle(Theme.text2)
                     .frame(height: 50 * u)
-                (Say.prefix(Theme.polishBlue).font(.system(size: 52 * u))
-                 + Text(button.say).font(.system(size: 64 * u, weight: .semibold)).foregroundStyle(Theme.text1))
+                (Say.prefix(Theme.polishBlue).font(Theme.ui(52 * u))
+                 + Text(button.say).font(Theme.ui(64 * u, weight: .semibold)).foregroundStyle(Theme.text1))
                     .tracking(-1.2 * u).lineLimit(1).minimumScaleFactor(0.6)
                     .padding(.top, 70 * u)
-                Text(line).font(.system(size: 28 * u)).foregroundStyle(Theme.text2).lineLimit(1)
+                Text(line).font(Theme.ui(28 * u)).foregroundStyle(Theme.text2).lineLimit(1)
                     .minimumScaleFactor(0.6).padding(.top, 22 * u)
             }
             .padding(.horizontal, 24 * u)
@@ -455,7 +455,7 @@ struct ModeScreen: View {
     var body: some View {
         VStack(spacing: Theme.Layout.titleGap * u) {
             Text(buttons.map { mode($0)?.label ?? $0.say }.joined(separator: " or ") + "?")
-                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1).displayLine(u)
+                .font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1).displayLine(u)
                 .enter(.text, u: u)
             HStack(spacing: 36 * u) {
                 ForEach(Array(buttons.enumerated()), id: \.offset) { i, b in
@@ -482,7 +482,7 @@ struct ImportChoiceScreen: View {
             // "Text, file, or photo?" from the choices themselves
             let words = buttons.enumerated().map { $0.offset == 0 ? $0.element.say : $0.element.say.lowercased() }
             Text(words.dropLast().joined(separator: ", ") + (words.count > 1 ? ", or " : "") + (words.last ?? "") + "?")
-                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1).displayLine(u)
+                .font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1).displayLine(u)
                 .enter(.text, u: u)
             HStack(spacing: 36 * u) {
                 ForEach(Array(buttons.enumerated()), id: \.offset) { i, b in

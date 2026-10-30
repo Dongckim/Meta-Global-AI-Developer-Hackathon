@@ -162,13 +162,15 @@ struct TimerEntry: Decodable, Equatable, Identifiable {
     var started: Date
     var step: String
     var wells: String
+    /// The header chip's name, made by the server (its step's short title); drawn as is.
+    var chip: String
 
     enum CodingKeys: String, CodingKey {
-        case id, label, minutes, onDone = "on_done", started = "started_at", step, wells
+        case id, label, minutes, onDone = "on_done", started = "started_at", step, wells, chip
     }
 
     init(id: String, label: String, minutes: Double, onDone: String? = nil,
-         started: Date = Date(), step: String = "", wells: String = "") {
+         started: Date = Date(), step: String = "", wells: String = "", chip: String = "") {
         self.id = id
         self.label = label
         self.minutes = minutes
@@ -176,6 +178,7 @@ struct TimerEntry: Decodable, Equatable, Identifiable {
         self.started = started
         self.step = step
         self.wells = wells
+        self.chip = chip
     }
 
     init(from decoder: Decoder) throws {
@@ -187,6 +190,7 @@ struct TimerEntry: Decodable, Equatable, Identifiable {
         started = Date(timeIntervalSince1970: try c.decode(Double.self, forKey: .started))
         step = try c.decode(String.self, forKey: .step)
         wells = try c.decode(String.self, forKey: .wells)
+        chip = try c.decodeIfPresent(String.self, forKey: .chip) ?? ""
     }
 }
 
@@ -620,10 +624,20 @@ struct RecordSnapshot: Decodable {
     var draft: ProtocolDraft?
     var run: RunBlock?
     var recent: [HistoryEntry]
+    /// The header's mode label, decided by the server (nil: not drawn).
+    var headerMode: RunModeLabel?
+
+    /// The run mode as the header shows it (`header.mode`): id full / private, its label.
+    struct RunModeLabel: Decodable, Equatable {
+        var id: String
+        var label: String
+    }
+
+    private struct Header: Decodable { var mode: RunModeLabel? }
 
     enum CodingKeys: String, CodingKey {
         case epoch, view, version, plan, stepIndex = "step_index", done, excluded, redo,
-             notes, tips, timers, stamps, cards, draft, run, recent
+             notes, tips, timers, stamps, cards, draft, run, recent, header
     }
 
     init(from decoder: Decoder) throws {
@@ -648,6 +662,7 @@ struct RecordSnapshot: Decodable {
         draft = (try? c.decodeIfPresent(ProtocolDraft.self, forKey: .draft)) ?? nil
         run = try c.decodeIfPresent(RunBlock.self, forKey: .run)
         recent = try c.decodeIfPresent([HistoryEntry].self, forKey: .recent) ?? []
+        headerMode = try c.decodeIfPresent(Header.self, forKey: .header)?.mode
     }
 }
 
@@ -762,6 +777,8 @@ final class LabState {
     var redo: [String: String] = [:]
     var notes: [Memo] = []
     var timers: [TimerEntry] = []
+    /// The header's mode label (server `header.mode`); nil: hidden on this screen.
+    var headerMode: RecordSnapshot.RunModeLabel?
     var cards: [ServerCard] = []
     var draft: ProtocolDraft?
     var run: RunBlock?
@@ -797,6 +814,7 @@ final class LabState {
         redo = snap.redo
         notes = snap.notes
         timers = snap.timers
+        headerMode = snap.headerMode
         cards = snap.cards
         draft = snap.draft
         run = snap.run

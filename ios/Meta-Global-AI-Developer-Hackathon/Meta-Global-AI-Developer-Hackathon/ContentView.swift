@@ -357,7 +357,7 @@ struct ContentView: View {
             TopHeader(voice: voice, speakText: lastReply, partialText: voice.partialText,
                       // the plain bench lists its own timers; cards and the well card show the chip
                       timers: showsBench && lab.cards.isEmpty && selectedWell == nil ? [] : lab.timers,
-                      onBlockedTap: openSync)
+                      onBlockedTap: openSync, mode: lab.headerMode)
             Group {
                 if let src = viewingSource {
                 VStack(spacing: 8) {

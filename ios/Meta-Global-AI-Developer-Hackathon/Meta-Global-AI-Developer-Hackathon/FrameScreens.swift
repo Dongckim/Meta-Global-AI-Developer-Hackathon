@@ -28,16 +28,16 @@ struct FrameLayout<Body: View>: View {
         VStack(spacing: 36 * u) {
             VStack(spacing: 18 * u) {
                 if let icon {
-                    Image(systemName: icon).font(.system(size: 44 * u, weight: .medium))
+                    Image(systemName: icon).font(Theme.ui(44 * u, weight: .medium))
                         .foregroundStyle(Theme.polishBlue)
                         .enter(.pop, 0, u: u)
                 }
-                Text(title).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
+                Text(title).font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                     .foregroundStyle(Theme.text1).multilineTextAlignment(.center)
                     .lineLimit(2).minimumScaleFactor(0.6)
                     .enter(.text, 1, u: u)
                 ForEach(Array(lines.enumerated()), id: \.offset) { i, l in
-                    Text(l).font(.system(size: 28 * u)).tracking(-0.34 * u)
+                    Text(l).font(Theme.ui(28 * u)).tracking(-0.34 * u)
                         .foregroundStyle(i == 0 ? Theme.text1 : Theme.text2)
                         .multilineTextAlignment(.center).lineLimit(2)
                         .enter(.rise, 2 + i, u: u)
@@ -126,7 +126,7 @@ struct ExportChoiceScreen: View {
                         Spacer(minLength: 0)
                         Text(f.line).foregroundStyle(Theme.text2)
                     }
-                    .font(.system(size: 26 * u)).lineLimit(1).minimumScaleFactor(0.6)
+                    .font(Theme.ui(26 * u)).lineLimit(1).minimumScaleFactor(0.6)
                     .padding(.horizontal, 28 * u).frame(height: 76 * u)
                     .background(RoundedRectangle(cornerRadius: 24 * u, style: .continuous).fill(Theme.wellEmpty))
                     .enter(.rise, 2 + i, u: u)
@@ -154,7 +154,7 @@ struct ExportFilesScreen: View {
     var body: some View {
         VStack(spacing: 36 * u) {
             VStack(alignment: .leading, spacing: 0) {
-                Text(name).font(.system(size: 28 * u, weight: .semibold)).foregroundStyle(Theme.text1)
+                Text(name).font(Theme.ui(28 * u, weight: .semibold)).foregroundStyle(Theme.text1)
                     .padding(.bottom, 18 * u)
                 row(header, head: true)
                 ForEach(Array(rows.prefix(8).enumerated()), id: \.element.id) { i, r in
@@ -174,7 +174,7 @@ struct ExportFilesScreen: View {
                 Text(c).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .font(.system(size: (head ? 20 : 24) * u, weight: head ? .medium : .regular))
+        .font(Theme.ui((head ? 20 : 24) * u, weight: head ? .medium : .regular))
         .foregroundStyle(head ? Theme.text2 : Theme.text1)
         .lineLimit(1).padding(.vertical, 10 * u)
     }

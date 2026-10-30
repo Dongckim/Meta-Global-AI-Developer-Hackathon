@@ -65,24 +65,24 @@ struct FileListScreen: View {
         VStack(spacing: 36 * u) {
             VStack(alignment: .leading, spacing: 0) {
                 if files.isEmpty {
-                    Text("No PDF or text files here yet.").font(.system(size: 34 * u, weight: .semibold))
+                    Text("No PDF or text files here yet.").font(Theme.ui(34 * u, weight: .semibold))
                         .foregroundStyle(Theme.text1)
                     Text("In the Files app, put them in On My iPad › \(Persona.appName).")
-                        .font(.system(size: 26 * u)).foregroundStyle(Theme.text2).padding(.top, 12 * u)
+                        .font(Theme.ui(26 * u)).foregroundStyle(Theme.text2).padding(.top, 12 * u)
                 }
                 ForEach(Array(files.prefix(shown).enumerated()), id: \.element.id) { i, f in
                     Button { onPick(i + 1) } label: {
                         HStack(spacing: 22 * u) {
-                            Text("\(i + 1)").font(.system(size: 22 * u, weight: .semibold))
+                            Text("\(i + 1)").font(Theme.ui(22 * u, weight: .semibold))
                                 .foregroundStyle(Theme.text1)
                                 .frame(width: 44 * u, height: 44 * u).background(Circle().fill(Theme.wellEmpty))
                             Image(systemName: f.kind == "PDF" ? "doc.fill" : "text.alignleft")
                                 .foregroundStyle(Theme.polishBlue)
-                            Text(f.name).font(.system(size: 30 * u, weight: .semibold)).foregroundStyle(Theme.text1)
+                            Text(f.name).font(Theme.ui(30 * u, weight: .semibold)).foregroundStyle(Theme.text1)
                                 .lineLimit(1).minimumScaleFactor(0.6)
                             Spacer(minLength: 12 * u)
                             Text("\(f.kind) · \(f.date.formatted(.dateTime.month(.abbreviated).day()))")
-                                .font(.system(size: 22 * u)).foregroundStyle(Theme.text2)
+                                .font(Theme.ui(22 * u)).foregroundStyle(Theme.text2)
                         }
                         .padding(.vertical, 14 * u).contentShape(Rectangle())
                     }
@@ -91,7 +91,7 @@ struct FileListScreen: View {
                 }
                 if files.count > shown {
                     Text("+\(files.count - shown) more · say a name or a number")
-                        .font(.system(size: 22 * u)).foregroundStyle(Theme.polishBlue).padding(.top, 8 * u)
+                        .font(Theme.ui(22 * u)).foregroundStyle(Theme.polishBlue).padding(.top, 8 * u)
                 }
             }
             .padding(.horizontal, 56 * u).padding(.vertical, 44 * u)
@@ -205,7 +205,7 @@ struct CameraScreen: View {
                     .clipShape(RoundedRectangle(cornerRadius: 44 * u, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 44 * u, style: .continuous)
                         .fill(.white.opacity(flash ? 0.6 : 0)))
-                Text("Page \(pages.count + 1)").font(.system(size: 24 * u, weight: .semibold))
+                Text("Page \(pages.count + 1)").font(Theme.ui(24 * u, weight: .semibold))
                     .foregroundStyle(.white).padding(.horizontal, 20 * u).padding(.vertical, 10 * u)
                     .background(Capsule().fill(.black.opacity(0.45))).padding(24 * u)
             }
@@ -216,13 +216,13 @@ struct CameraScreen: View {
                     Image(uiImage: img).resizable().scaledToFill().frame(width: 64 * u, height: 84 * u)
                         .clipShape(RoundedRectangle(cornerRadius: 10 * u))
                         .overlay(alignment: .bottomTrailing) {
-                            Text("\(i + 1)").font(.system(size: 14 * u, weight: .bold)).padding(4 * u)
+                            Text("\(i + 1)").font(Theme.ui(14 * u, weight: .bold)).padding(4 * u)
                                 .background(Circle().fill(.white))
                         }
                 }
                 Spacer(minLength: 0)
                 Text(pages.isEmpty ? "No pages yet" : "\(pages.count) page\(pages.count == 1 ? "" : "s")")
-                    .font(.system(size: 22 * u)).foregroundStyle(Theme.text2)
+                    .font(Theme.ui(22 * u)).foregroundStyle(Theme.text2)
             }
             .frame(width: 1000 * u, height: 84 * u)
             SayRow(buttons: buttons, u: u * 0.8, perform: perform).frame(width: 1000 * u)
@@ -293,7 +293,7 @@ struct WebSourceScreen: View {
                     Spacer(minLength: 0)
                     Text(domain).foregroundStyle(Theme.text2)
                 }
-                .font(.system(size: 22 * u))
+                .font(Theme.ui(22 * u))
                 .padding(.horizontal, 40 * u).frame(height: 70 * u)
                 .background(Theme.cardHead)
                 WebPage(url: url, commands: commands)

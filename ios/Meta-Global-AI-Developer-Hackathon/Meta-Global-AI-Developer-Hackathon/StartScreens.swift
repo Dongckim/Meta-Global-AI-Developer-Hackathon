@@ -32,7 +32,7 @@ private struct StartTitle: View {
     var text: String
     var u: CGFloat
     var body: some View {
-        Text(text).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
+        Text(text).font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
             .foregroundStyle(Theme.text1).lineLimit(1).minimumScaleFactor(0.6)
     }
 }
@@ -50,14 +50,14 @@ struct DraftReadyScreen: View {
         let s = draft.summary
         VStack(spacing: 36 * u) {
             VStack(spacing: 0) {
-                Image(systemName: DraftOrigin(draft.meta).icon).font(.system(size: 44 * u))
+                Image(systemName: DraftOrigin(draft.meta).icon).font(Theme.ui(44 * u))
                     .foregroundStyle(Theme.polishBlue).enter(.pop, 0, u: u)
                 StartTitle(text: "Draft ready", u: u).padding(.top, 24 * u).enter(.text, 1, u: u)
-                Text(title).font(.system(size: 28 * u)).foregroundStyle(Theme.text1).lineLimit(1)
+                Text(title).font(Theme.ui(28 * u)).foregroundStyle(Theme.text1).lineLimit(1)
                     .padding(.top, 18 * u).enter(.rise, 2, u: u)
                 if let s {
                     Text(["\(s.conditions) conditions", "\(s.wells) wells", "\(s.steps) steps"].joined(separator: " · "))
-                        .font(.system(size: 22 * u)).foregroundStyle(Theme.text2)
+                        .font(Theme.ui(22 * u)).foregroundStyle(Theme.text2)
                         .padding(.top, 22 * u).enter(.rise, 3, u: u)
                 }
             }
@@ -90,14 +90,14 @@ struct DraftStepsScreen: View {
                 Image(systemName: origin.icon).foregroundStyle(Theme.polishBlue)
                 Text("From \(origin.label) · pipetting only").foregroundStyle(Theme.text2)
             }
-            .font(.system(size: 28 * u)).lineLimit(1).minimumScaleFactor(0.6)
+            .font(Theme.ui(28 * u)).lineLimit(1).minimumScaleFactor(0.6)
             .padding(.top, 14 * u).enter(.rise, 1, u: u)
             VStack(spacing: 0) {
                 ForEach(Array(rows.prefix(maxRows).enumerated()), id: \.element.id) { i, r in
                     row(r).enter(.rise, 2 + i, u: u)
                 }
                 if rows.count > maxRows {
-                    Text("+\(rows.count - maxRows) more").font(.system(size: 22 * u)).foregroundStyle(Theme.polishBlue)
+                    Text("+\(rows.count - maxRows) more").font(Theme.ui(22 * u)).foregroundStyle(Theme.polishBlue)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22 * u)
                 }
                 if let others = draft.summary?.others, !others.isEmpty {
@@ -108,7 +108,7 @@ struct DraftStepsScreen: View {
                         Text(others.joined(separator: " · ")).lineLimit(1).minimumScaleFactor(0.6)
                         Spacer(minLength: 0)
                     }
-                    .font(.system(size: 22 * u)).foregroundStyle(Theme.text2)
+                    .font(Theme.ui(22 * u)).foregroundStyle(Theme.text2)
                     .padding(.horizontal, 22 * u).frame(height: 64 * u)
                 }
             }
@@ -124,22 +124,22 @@ struct DraftStepsScreen: View {
     private func row(_ r: DraftRow) -> some View {
         Button { onRow(r.n) } label: {
             HStack(spacing: 0) {
-                Text("\(r.n)").font(.system(size: 22 * u, weight: .semibold))
+                Text("\(r.n)").font(Theme.ui(22 * u, weight: .semibold))
                     .foregroundStyle(r.flagged ? .white : Theme.text1)
                     .frame(width: 44 * u, height: 44 * u)
                     .background(Circle().fill(r.flagged ? Theme.polishBlue : Theme.wellEmpty))
-                Text(r.title).font(.system(size: 30 * u, weight: .semibold)).foregroundStyle(Theme.text1)
+                Text(r.title).font(Theme.ui(30 * u, weight: .semibold)).foregroundStyle(Theme.text1)
                     .lineLimit(1).minimumScaleFactor(0.6)
                     .frame(width: 270 * u, alignment: .leading).padding(.leading, 23 * u)
-                Text(r.detail).font(.system(size: 28 * u)).foregroundStyle(Theme.text2)
+                Text(r.detail).font(Theme.ui(28 * u)).foregroundStyle(Theme.text2)
                     .lineLimit(1).minimumScaleFactor(0.6)
                 Spacer(minLength: 12 * u)
                 if r.flagged {
-                    Text("Check").font(.system(size: 22 * u, weight: .semibold)).foregroundStyle(.white)
+                    Text("Check").font(Theme.ui(22 * u, weight: .semibold)).foregroundStyle(.white)
                         .padding(.horizontal, 22 * u).frame(height: 44 * u)
                         .background(Capsule().fill(Theme.polishBlue))
                 } else {
-                    Image(systemName: "checkmark").font(.system(size: 18 * u, weight: .bold)).foregroundStyle(.white)
+                    Image(systemName: "checkmark").font(Theme.ui(18 * u, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 40 * u, height: 40 * u).background(Circle().fill(Theme.polishBlue))
                 }
             }
@@ -178,11 +178,11 @@ struct DraftStepScreen: View {
         VStack(spacing: 36 * u) {
             HStack(alignment: .top, spacing: 36 * u) {
                 VStack(alignment: .leading, spacing: 4 * u) {
-                    Text("Step \(step) of \(rows.count)").font(.system(size: 28 * u)).foregroundStyle(Theme.text2)
-                    Text(r?.title ?? "").font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
+                    Text("Step \(step) of \(rows.count)").font(Theme.ui(28 * u)).foregroundStyle(Theme.text2)
+                    Text(r?.title ?? "").font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                         .foregroundStyle(Theme.text1).lineLimit(1).minimumScaleFactor(0.6)
                     if let r, !r.detail.isEmpty {
-                        Text(r.detail).font(.system(size: 22 * u)).foregroundStyle(Theme.text2).lineLimit(1)
+                        Text(r.detail).font(Theme.ui(22 * u)).foregroundStyle(Theme.text2).lineLimit(1)
                     }
                 }
                 .padding(.horizontal, 52 * u)
@@ -195,8 +195,8 @@ struct DraftStepScreen: View {
                         Text([origin.label, r?.page.map { "page \($0)" }].compactMap { $0 }.joined(separator: " · "))
                             .foregroundStyle(Theme.text2)
                     }
-                    .font(.system(size: 22 * u)).lineLimit(1).minimumScaleFactor(0.6)
-                    Text(r.map { "“\($0.quote)”" } ?? "").font(.system(size: 22 * u)).foregroundStyle(Theme.text3)
+                    .font(Theme.ui(22 * u)).lineLimit(1).minimumScaleFactor(0.6)
+                    Text(r.map { "“\($0.quote)”" } ?? "").font(Theme.ui(22 * u)).foregroundStyle(Theme.text3)
                         .lineLimit(2).padding(.top, 16 * u)
                     Spacer(minLength: 12 * u)
                     if let open {
@@ -204,7 +204,7 @@ struct DraftStepScreen: View {
                             (Say.prefix(Theme.polishBlue)
                              + Text(open.say).fontWeight(.semibold).foregroundStyle(Theme.text1)
                              + Text(" to see the page").foregroundStyle(Theme.text2))
-                                .font(.system(size: 22 * u))
+                                .font(Theme.ui(22 * u))
                         }
                         .buttonStyle(.plain)
                     }
@@ -261,7 +261,7 @@ struct DraftPageScreen: View {
                     Spacer(minLength: 0)
                     if pageCount > 0 { Text("Page \(page) of \(pageCount)").foregroundStyle(Theme.text2) }
                 }
-                .font(.system(size: 22 * u))
+                .font(Theme.ui(22 * u))
                 .padding(.horizontal, 40 * u).frame(height: 70 * u)
                 .background(Theme.cardHead)
                 content(page: page)
@@ -291,7 +291,7 @@ struct DraftPageScreen: View {
         } else {
             // pasted text, or a PDF that isn't on this iPad: the text it was read from
             Text(highlighted(pages.indices.contains(page - 1) ? pages[page - 1] : pages.joined(separator: "\n")))
-                .font(.system(size: 22 * u)).foregroundStyle(Theme.text1)
+                .font(Theme.ui(22 * u)).foregroundStyle(Theme.text1)
                 .lineLimit(nil).minimumScaleFactor(0.5).scaleEffect(paging.zoom, anchor: .topLeading)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(.horizontal, 84 * u).padding(.vertical, 40 * u)
@@ -330,11 +330,11 @@ struct PlanCheckScreen: View {
                     Image(systemName: "checkmark")
                     Text("Draft ready")
                 }
-                .font(.system(size: 28 * u)).foregroundStyle(Theme.text2).enter(.rise, 0, u: u)
+                .font(Theme.ui(28 * u)).foregroundStyle(Theme.text2).enter(.rise, 0, u: u)
                 if let s {
-                    Text("\(s.steps) steps").font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
+                    Text("\(s.steps) steps").font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                         .foregroundStyle(Theme.text1).enter(.text, 1, u: u)
-                    Text("\(s.conditions) conditions · \(s.wells) wells").font(.system(size: 28 * u))
+                    Text("\(s.conditions) conditions · \(s.wells) wells").font(Theme.ui(28 * u))
                         .foregroundStyle(Theme.text1).enter(.rise, 2, u: u)
                 }
                 Spacer(minLength: 24 * u)
@@ -346,7 +346,7 @@ struct PlanCheckScreen: View {
                         Spacer(minLength: 0)
                         Text(wellRuns(c.wells)).foregroundStyle(Theme.text2)
                     }
-                    .font(.system(size: 28 * u)).lineLimit(1).minimumScaleFactor(0.6)
+                    .font(Theme.ui(28 * u)).lineLimit(1).minimumScaleFactor(0.6)
                     .frame(height: 50 * u)
                     .enter(.rise, 3 + i, u: u)
                 }

@@ -30,12 +30,12 @@ struct WellCardSide: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Well").font(.system(size: 28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text2)
+            Text("Well").font(Theme.ui(28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text2)
                 .enter(.rise, 0, u: u)
-            Text(well).font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
+            Text(well).font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                 .foregroundStyle(Theme.text1).padding(.top, 8 * u)
                 .enter(.text, 1, u: u)
-            Text(line).font(.system(size: 28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text1)
+            Text(line).font(Theme.ui(28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text1)
                 .lineLimit(1).minimumScaleFactor(0.6).padding(.top, 14 * u)
                 .enter(.rise, 2, u: u)
             if let m = memos.last {
@@ -47,7 +47,7 @@ struct WellCardSide: View {
             VStack(alignment: .leading, spacing: 9 * u) {
                 ForEach(Array(lab.doneSteps(well).prefix(3).enumerated()), id: \.offset) { i, step in
                     Text(["Step \(step)", lab.stepLine(step)].filter { !$0.isEmpty }.joined(separator: " · "))
-                        .font(.system(size: 22 * u)).tracking(-0.13 * u).foregroundStyle(Theme.text2)
+                        .font(Theme.ui(22 * u)).tracking(-0.13 * u).foregroundStyle(Theme.text2)
                         .lineLimit(1).minimumScaleFactor(0.7)
                         .enter(.rise, 4 + i, u: u)
                 }
@@ -65,7 +65,7 @@ struct WellCardSide: View {
     /// The latest note as a quote, then its step (and how many more).
     private func note(_ m: Memo, more: Int) -> some View {
         VStack(alignment: .leading, spacing: 18 * u) {
-            Text("“\(m.text)”").font(.system(size: 28 * u)).tracking(-0.34 * u)
+            Text("“\(m.text)”").font(Theme.ui(28 * u)).tracking(-0.34 * u)
                 .foregroundStyle(Theme.text1).lineLimit(3)
             // "Voice · step 1": how it came in, then when
             let meta = [m.source.map { $0.prefix(1).uppercased() + $0.dropFirst() },
@@ -74,9 +74,9 @@ struct WellCardSide: View {
             if !meta.isEmpty {
                 HStack(spacing: 14 * u) {
                     if let icon = m.source.flatMap({ ["voice": "mic", "tap": "hand.tap", "typed": "keyboard"][$0] }) {
-                        Image(systemName: icon).font(.system(size: 20 * u))
+                        Image(systemName: icon).font(Theme.ui(20 * u))
                     }
-                    Text(meta.joined(separator: " · ")).font(.system(size: 22 * u)).tracking(-0.13 * u)
+                    Text(meta.joined(separator: " · ")).font(Theme.ui(22 * u)).tracking(-0.13 * u)
                 }
                 .foregroundStyle(Theme.text2)
             }

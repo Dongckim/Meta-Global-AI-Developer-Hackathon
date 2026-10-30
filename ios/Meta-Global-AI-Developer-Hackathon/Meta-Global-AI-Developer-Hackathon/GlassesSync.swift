@@ -380,7 +380,7 @@ struct GlassesSyncScreen: View {
     /// prepare(): 55ms apart from 70ms, three candidates per row.
     private func syncBlock(_ t: Double) -> some View {
         let sinceReady = readyAt.map { t - $0 }
-        // .glasses scale .6s spring to 1.12; title bump .55s spring
+        // ready: .pair scale .6s spring to 1.06; title bump .55s spring
         let grow = sinceReady.map {
             Keyframes.tween($0, duration: 0.6, curve: Keyframes.spring)
         } ?? 0
@@ -389,11 +389,11 @@ struct GlassesSyncScreen: View {
         } ?? 1
         let fit = SyncLayout.spacing(rows: rows.count)
         return VStack(spacing: 26) {
-            glassesIcon
-                .scaleEffect(1 + 0.12 * grow)
+            pair(t, sinceReady: sinceReady)
+                .scaleEffect(1 + 0.06 * grow)
                 .popIn(t, delay: 0.07)
             Text(allOk ? "Glasses ready" : "Connecting your glasses")
-                .font(.system(size: Theme.t60Size, weight: .medium))
+                .font(Theme.ui(Theme.t60Size, weight: .medium))
                 .tracking(Theme.t60Tracking)
                 .frame(height: Theme.t60Line)
                 .textShadow()
@@ -414,9 +414,67 @@ struct GlassesSyncScreen: View {
         .frame(width: 640)
     }
 
+    /// Design `.pair` (sync, Figma ipad / lit / lok / glasses): the iPad is
+    /// there from the start; the five link dots fill and the glasses come up
+    /// as each row connects (design pairProgress), the next dot pulsing
+    /// (linkDot 1s); when all are in, the middle dot gives way to the white
+    /// check (lok, .55s spring).
+    private func pair(_ t: Double, sinceReady: Double?) -> some View {
+        let n = max(1, rows.count)
+        let k = rows.filter { $0.state == .ok }.count
+        let ready = sinceReady != nil
+        let lit = k > 0 ? Int((5 * Double(k) / Double(n)).rounded(.up)) : 0
+        let lok = sinceReady.map { Keyframes.tween($0, duration: 0.55, curve: Keyframes.spring) } ?? 0
+        return HStack(spacing: 26) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .stroke(.white, lineWidth: 3.2)
+                    .frame(width: 92, height: 66)
+                Circle().fill(.white).frame(width: 3.6, height: 3.6).position(x: 48, y: 8)
+            }
+            .frame(width: 96, height: 70)
+            ZStack {
+                HStack(spacing: 13) {
+                    ForEach(0..<5, id: \.self) { i in
+                        // linkDot: 0%,100% {.22, scale .8}  40% {1, scale 1.2}
+                        let ph = t.truncatingRemainder(dividingBy: 1)
+                        let up = ph < 0.4 ? Keyframes.easeInOut(ph / 0.4) : Keyframes.easeInOut((1 - ph) / 0.6)
+                        let next = !ready && i == lit
+                        let on = ready || i < lit
+                        Circle().fill(.white).frame(width: 8, height: 8)
+                            .scaleEffect(next ? 0.8 + 0.4 * up : on ? 1 : 0.85)
+                            .opacity(ready && i == 2 ? 0 : next ? 0.22 + 0.78 * up : on ? 1 : 0.16)
+                            .animation(Theme.Motion.ease(0.45), value: on)
+                    }
+                }
+                ZStack {
+                    Circle().fill(.white)
+                        .shadow(color: Color(hex: 0x002878).opacity(0.35), radius: 10, y: 6)
+                    // ::after: left 15 top 8, 9x18 box, right+bottom 3.5px borders, rotate 45deg
+                    Path { p in
+                        p.move(to: CGPoint(x: 0, y: 19.75))
+                        p.addLine(to: CGPoint(x: 10.75, y: 19.75))
+                        p.addLine(to: CGPoint(x: 10.75, y: 0))
+                    }
+                    .stroke(Theme.polishBlue, style: StrokeStyle(lineWidth: 3.5, lineJoin: .miter))
+                    .frame(width: 12.5, height: 21.5)
+                    .rotationEffect(.degrees(45))
+                    .position(x: 21.25, y: 18.75)
+                }
+                .frame(width: 44, height: 44)
+                .scaleEffect(lok)
+            }
+            .frame(width: 128)
+            glassesIcon
+                .opacity(ready ? 1 : 0.2 + 0.8 * Double(k) / Double(n))
+                .animation(Theme.Motion.ease(0.8), value: k)
+        }
+        .foregroundStyle(.white)
+    }
+
     private var glassesIcon: some View {
         GlassesIcon()
-            .stroke(.white, style: StrokeStyle(lineWidth: 4.8, lineCap: .round,
+            .stroke(.white, style: StrokeStyle(lineWidth: 5.6, lineCap: .round,
                                                lineJoin: .round))
             .frame(width: 136, height: 60)
             #if DEBUG

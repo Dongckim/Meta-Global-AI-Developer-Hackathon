@@ -146,10 +146,23 @@ enum Theme {
         Color(hex: 0x7FD3FF), Color(hex: 0x7CC4FF), Color(hex: 0x5AA8F0),
     ]
 
-    // MARK: - Type (Inter -> SF Pro; sizes in design px at 1376 wide)
+    // MARK: - Type (Inter, the design's face; sizes in design px at 1376 wide)
 
+    /// The one UI font: Inter (bundled, Fonts/, SIL OFL) at the design's
+    /// weights. Every screen sets its text through here, never `.system`.
     static func ui(_ px: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .system(size: px, weight: weight)
+        .custom(interName(weight), fixedSize: px)
+    }
+
+    /// The bundled Inter face for a weight (Light 300 ... Bold 700).
+    static func interName(_ weight: Font.Weight) -> String {
+        switch weight {
+        case .ultraLight, .thin, .light: "Inter-Light"
+        case .medium: "Inter-Medium"
+        case .semibold: "Inter-SemiBold"
+        case .bold, .heavy, .black: "Inter-Bold"
+        default: "Inter-Regular"
+        }
     }
     /// .t60 (polish layer: 400 52px/1.1, -.022em); sizes are design px,
     /// used inside `DarkCanvas`, which scales the 1376x1032 canvas.
@@ -157,17 +170,17 @@ enum Theme {
     static let t60Line: CGFloat = 52 * 1.1
     static let t60Tracking: CGFloat = -0.022 * 52
     /// .t30 (polish layer: 400 28px/1.32, -.012em).
-    static let t30 = Font.system(size: 28, weight: .regular)
+    static let t30 = Theme.ui(28, weight: .regular)
     static let t30Line: CGFloat = 28 * 1.32
     static let t30Tracking: CGFloat = -0.012 * 28
     /// .t24 (polish layer: 400 22px/1.36, -.006em).
-    static let t24 = Font.system(size: 22, weight: .regular)
+    static let t24 = Theme.ui(22, weight: .regular)
     static let t24Line: CGFloat = 22 * 1.36
     static let t24Tracking: CGFloat = -0.006 * 22
     /// .pip top line: 300 30px. diff: design canvas size; the shipped top
     /// line caps at 17pt via `pipLine(in:)` so it fits the app bar.
     static func pipLine(in width: CGFloat) -> Font {
-        .system(size: min(30, px(30, in: width)), weight: .light)
+        Theme.ui(min(30, px(30, in: width)), weight: .light)
     }
     /// Monospace (JetBrains Mono -> SF Mono).
     static func mono(_ px: CGFloat, weight: Font.Weight = .regular) -> Font {
@@ -276,13 +289,10 @@ enum Theme {
     /// Largest orb size factor (listening 1.32 x breathe 1.08): the header
     /// reserves this slot so the orb never pushes or covers the line.
     static let orbMaxScale: CGFloat = 1.32 * 1.08
-    /// Run mode tokens (Figma Private variants, section 43:2): one screen set,
-    /// only the header label and icon change. Labels come from pip_voice.json
-    /// `modes`; there is no Private mode yet, so the app shows Full.
-    enum RunMode: String { case full, `private` }
-    static let runMode = RunMode.full
-    static var modeLabel: String { Persona.modes[runMode.rawValue]?.label ?? runMode.rawValue.capitalized }
-    static var modeIcon: String { runMode == .full ? "cloud" : "lock" }
+    /// Run mode icon (Figma Private variants, section 43:2): one screen set,
+    /// only the header label and icon change. Which mode, its label and
+    /// where it shows come from the server (snapshot header.mode).
+    static func modeIcon(_ id: String) -> String { id == "private" ? "lock" : "cloud" }
 
     // MARK: - Voice edge glow (design `.edge`, Apple-Intelligence style)
 
@@ -376,6 +386,9 @@ enum Theme {
         /// Header: Milo's orb and line in a 64 row, 44 from the top (orb y 50).
         static let headerTop: CGFloat = 44
         static let headerRow: CGFloat = 64
+        /// Header timer chip (design `hdt`): fixed 247 x 50 at the right margin.
+        static let chipWidth: CGFloat = 247
+        static let chipHeight: CGFloat = 50
         /// Header row to the stage (the stage starts at 132).
         static let headerGap: CGFloat = 24
         static var headerBlock: CGFloat { headerTop + headerRow + headerGap }
@@ -418,9 +431,10 @@ enum Theme {
             return bench ? min(size.width / 928, size.height / 1410) : size.width / canvasWidth
         }
 
-        /// A 64 pt title takes the design's 68 px line box (SF's own is ~76),
+        /// A 64 pt title takes the design's 68 px line box (Inter's own is ~77),
         /// so what follows sits where the design puts it.
-        static let displayTrim: CGFloat = (UIFont.systemFont(ofSize: 64, weight: .semibold).lineHeight - 68) / 2
+        static let displayTrim: CGFloat =
+            ((UIFont(name: Theme.interName(.semibold), size: 64)?.lineHeight ?? 77.5) - 68) / 2
     }
 
     // MARK: - Voice state -> orb style (fullscreen Pip screens, shrunk)

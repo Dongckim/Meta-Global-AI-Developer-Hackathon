@@ -28,7 +28,7 @@ struct PlateView: View {
         GeometryReader { g in
             let cell = min(g.size.width / 12.8, g.size.height / 8.8)
             let d = cell * 48 / 58
-            let labelFont = Font.system(size: max(9, d / 3), weight: .medium)
+            let labelFont = Theme.ui(max(9, d / 3), weight: .medium)
             TimelineView(.animation(paused: introDone)) { ctx in
                 let t = introDone ? .infinity : ctx.date.timeIntervalSince(start)
                 VStack(spacing: 0) {
@@ -146,15 +146,15 @@ struct WellDot: View {
                 .overlay(Circle().strokeBorder(edge.0, lineWidth: edge.1))
                 .overlay {
                     if excluded {
-                        Image(systemName: "xmark").font(.system(size: d * 0.36, weight: .medium))
+                        Image(systemName: "xmark").font(Theme.ui(d * 0.36, weight: .medium))
                             .foregroundStyle(Theme.text2)
                     } else if redo {
-                        Text("↻").font(.system(size: d * 0.4, weight: .semibold))
+                        Text("↻").font(Theme.ui(d * 0.4, weight: .semibold))
                             .foregroundStyle(filled ? .white : Theme.text1)
                     } else if filled || now || planned, let abbr = lab.abbrOf(well) {
                         // group letters: white on a filled well, blue on a remaining
                         // target, the group tone on a planned one
-                        Text(abbr).font(.system(size: d * 17 / 48, weight: .semibold))
+                        Text(abbr).font(Theme.ui(d * 17 / 48, weight: .semibold))
                             .foregroundStyle(now ? Theme.polishBlue : planned ? tone : .white)
                             .lineLimit(1).minimumScaleFactor(0.5)
                     }
@@ -206,11 +206,11 @@ struct ConditionBars: View {
                 HStack(spacing: 12 * u) {
                     Circle().fill(lab.groupIndex(g.key).map(Theme.groupTone) ?? Theme.text1)
                         .frame(width: 12 * u, height: 12 * u)
-                    Text(g.label).font(.system(size: 28 * u)).foregroundStyle(Theme.text1)
+                    Text(g.label).font(Theme.ui(28 * u)).foregroundStyle(Theme.text1)
                     (Text("n ").foregroundStyle(Theme.text2)
                      + Text("\(g.have)").fontWeight(.semibold).foregroundStyle(Theme.text1)
                      + Text(g.have < g.need ? "/\(g.need)" : "").foregroundStyle(Theme.text2))
-                        .font(.system(size: 34 * u)).tracking(-0.68 * u)
+                        .font(Theme.ui(34 * u)).tracking(-0.68 * u)
                 }
                 .lineLimit(1).minimumScaleFactor(0.6)
                 .frame(maxWidth: .infinity)
@@ -232,22 +232,22 @@ struct StepCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Step \(lab.stepIndex + 1) of \(lab.steps.count)")
-                .font(.system(size: 28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text2)
+                .font(Theme.ui(28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text2)
             Text(title)
-                .font(.system(size: 64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
+                .font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).displayLine(u)
                 .foregroundStyle(Theme.text1)
                 .lineLimit(2).truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 8 * u)
             if let detail {
-                Text(detail).font(.system(size: 28 * u)).tracking(-0.34 * u)
+                Text(detail).font(Theme.ui(28 * u)).tracking(-0.34 * u)
                     .foregroundStyle(Theme.text1).lineLimit(1).minimumScaleFactor(0.6)
                     .padding(.top, 14 * u)
             }
             if let caution = lab.currentCaution {
                 Button { onSource?() } label: {
                     Label(caution, systemImage: "exclamationmark.triangle")
-                        .font(.system(size: 22 * u)).foregroundStyle(Theme.text3)
+                        .font(Theme.ui(22 * u)).foregroundStyle(Theme.text3)
                         .lineLimit(2).multilineTextAlignment(.leading)
                 }
                 .buttonStyle(.plain).disabled(onSource == nil)
@@ -301,7 +301,7 @@ struct TimerList: View {
             VStack(alignment: .leading, spacing: 5 * u) {
                 ForEach(vis.prefix(maxRows)) { t in row(t, now: ctx.date) }
                 if vis.count > maxRows {
-                    Text("+\(vis.count - maxRows)").font(.system(size: 22 * u, weight: .medium))
+                    Text("+\(vis.count - maxRows)").font(Theme.ui(22 * u, weight: .medium))
                         .foregroundStyle(Theme.polishBlue).padding(.leading, 14 * u)
                 }
                 if let (n, step) = upcoming { upcomingRow(n, step) }
@@ -321,13 +321,13 @@ struct TimerList: View {
             TimerRing(progress: t.minutes > 0 ? min(1, max(0, 1 - rem / (t.minutes * 60))) : 1,
                       size: 30 * u)
             Text(t.wells.isEmpty ? t.label : t.wells)
-                .font(.system(size: 26 * u, weight: .semibold)).foregroundStyle(Theme.text1)
+                .font(Theme.ui(26 * u, weight: .semibold)).foregroundStyle(Theme.text1)
             if !t.wells.isEmpty {
-                Text(t.step).font(.system(size: 24 * u, weight: .light)).foregroundStyle(Theme.text2)
+                Text(t.step).font(Theme.ui(24 * u, weight: .light)).foregroundStyle(Theme.text2)
             }
             Spacer(minLength: 0)
             Text(over ? "done" : "\(Int((rem / 60).rounded(.up))) min")
-                .font(.system(size: 26 * u, weight: .semibold).monospacedDigit())
+                .font(Theme.ui(26 * u, weight: .semibold).monospacedDigit())
                 .foregroundStyle(Theme.text1)
         }
         .lineLimit(1).minimumScaleFactor(0.6)
@@ -349,14 +349,14 @@ struct TimerList: View {
             Circle().strokeBorder(Theme.text4, style: StrokeStyle(lineWidth: 2 * u, dash: [3 * u, 3 * u]))
                 .frame(width: 24 * u, height: 24 * u)
             if !step.wells.isEmpty {
-                Text(wellRuns(step.wells)).font(.system(size: 22 * u, weight: .semibold)).foregroundStyle(Theme.text5)
+                Text(wellRuns(step.wells)).font(Theme.ui(22 * u, weight: .semibold)).foregroundStyle(Theme.text5)
             }
             // "Incubate · 30 min": the step's short title and its time, never the sentence
             Text([step.shortTitle.flatMap { $0.isEmpty ? nil : $0 }, step.minutes.map { fmtNum($0) + " min" }]
                     .compactMap { $0 }.joined(separator: " · "))
-                .font(.system(size: 21 * u, weight: .light)).foregroundStyle(Theme.text2)
+                .font(Theme.ui(21 * u, weight: .light)).foregroundStyle(Theme.text2)
             Spacer(minLength: 0)
-            Text("After step \(n)").font(.system(size: 20 * u)).foregroundStyle(Theme.text2)
+            Text("After step \(n)").font(Theme.ui(20 * u)).foregroundStyle(Theme.text2)
         }
         .lineLimit(1).minimumScaleFactor(0.6)
         .padding(.horizontal, 15 * u)
@@ -374,12 +374,12 @@ struct RemainingCard: View {
         VStack(alignment: .leading, spacing: 6 * u) {
             HStack(spacing: 14 * u) {
                 Circle().fill(Theme.polishBlue.opacity(0.5)).frame(width: 14 * u, height: 14 * u)
-                Text("\(left.count) left").font(.system(size: 40 * u, weight: .semibold))
+                Text("\(left.count) left").font(Theme.ui(40 * u, weight: .semibold))
                     .tracking(-0.88 * u).foregroundStyle(Theme.text1)
                     .modifier(Bump(value: left.count))
             }
             if !left.isEmpty {
-                Text(wellRuns(left)).font(.system(size: 28 * u)).tracking(-0.34 * u)
+                Text(wellRuns(left)).font(Theme.ui(28 * u)).tracking(-0.34 * u)
                     .foregroundStyle(Theme.text1).lineLimit(2).minimumScaleFactor(0.6)
             }
         }
