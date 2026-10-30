@@ -36,4 +36,17 @@ struct HandoffTests {
         let row = try #require(review.summary?.rows.first)
         #expect(row.plan == "10 µL · B2–B4" && row.changes?.first?.event == "skipped")
     }
+
+    /// GET /runs/{id} handoff (server store.handoff_code): each step's line range and color.
+    @Test func decodesRunCode() throws {
+        let json = #"""
+        {"run": null, "label": "Run 1",
+         "handoff": {"code": "a\nb\nc", "setup": [1, 1], "exported": true,
+                     "steps": [{"n": 1, "title": "Add medium", "detail": "100 µL · B2", "plan": "100 µL · B2",
+                                "changes": [], "lines": [2, 3], "color": "#F7C6D0"}]}}
+        """#
+        struct Only: Decodable { let handoff: RunCode? }
+        let code = try #require(try JSONDecoder().decode(Only.self, from: Data(json.utf8)).handoff)
+        #expect(code.steps.first?.lines == [2, 3] && code.steps.first?.color == "#F7C6D0" && code.exported)
+    }
 }
