@@ -566,4 +566,107 @@ with patch("httpx.AsyncClient", ScriptClient):
     asyncio.run(api.protocol_import(file=[], text=DOC, filename="", original_id="o", session="p17"))
     assert api.store.r["view"]["current"]["screen"] == "protocol_review", api.store.r["view"]
 print("P17 ok: one extraction per content")
+
+# P18. Where an import goes (protocol_import decides): ① new -> review ->
+# save; ② same original -> "open it or review again?" (review again fixes the
+# same protocol); ③ its draft in review -> picks up; ④ new original, same
+# title -> saving asks "new version or separate?". The run is never touched.
+from server import library as lib  # noqa: E402
+
+calls.clear()
+with patch("httpx.AsyncClient", ScriptClient):
+    api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+    run = api.store.start_demo_run()["run_id"]
+    c = TestClient(api.app)
+    said = lambda t: c.post("/input", json={"text": t, "session": "p18"}).json()  # noqa: E731
+    act = lambda a, **k: c.post("/input", json={"action": {"id": a, "args": k}, "session": "p18"}).json()  # noqa: E731
+    count = lambda: len(lib.all_docs(api.store.root))  # noqa: E731
+    spark = lambda: len([u for u, _ in calls if u.endswith("/responses")])  # noqa: E731
+    n0 = count()
+    # ①
+    ScriptClient.queue = [extraction(good)]
+    c.post("/protocols/import", data={"text": DOC})
+    assert api.store.r["draft"]["meta"]["same_title"] == "", api.store.r["draft"]["meta"]
+    j = act("save_draft")
+    assert count() == n0 + 1 and not api.store.r["cards"], j
+    first = api.store.r["view"]["current"]["target"]
+    short = lib.get(first, api.store.root)["short_title"] or lib.get(first, api.store.root)["name"]
+    # ② open it
+    k = spark()
+    j = c.post("/protocols/import", data={"text": DOC}).json()
+    assert spark() == k and j["card"]["kind"] == "import_known", j
+    assert j["reply"] == f"Already saved as {short}. Open it or review again?", j["reply"]
+    assert api.store.r["view"]["current"] == {"screen": "protocol_detail", "target": first}
+    j = said("open it")
+    assert not api.store.r["cards"] and api.store.r["view"]["current"]["target"] == first, j
+    # ② review again, saved: the same protocol, fixed
+    c.post("/protocols/import", data={"text": DOC})
+    j = said("review again")
+    d = api.store.r["draft"]
+    assert d["meta"]["protocol_id"] == first and api.store.r["view"]["current"]["screen"] == "draft_steps", j
+    assert spark() == k, "review again never extracts"
+    act("save_draft")
+    assert count() == n0 + 1 and "draft" not in api.store.r, count()
+    assert api.store.r["view"]["current"] == {"screen": "protocol_detail", "target": first}
+    # ③ (a new original with the same title is also ④)
+    ScriptClient.queue = [extraction(good)]
+    c.post("/protocols/import", data={"text": DOC + "\nNotes."})
+    assert api.store.r["draft"]["meta"]["same_title"] == first, api.store.r["draft"]["meta"]
+    act("review_draft")
+    act("show_step", step=2)
+    api.store.r["view"]["current"] = {"screen": "import_file", "target": ""}
+    k = spark()
+    j = c.post("/protocols/import", data={"text": DOC + "\nNotes."}).json()
+    assert spark() == k and j["reply"] == "You started reviewing this. Picking up at step 2.", j["reply"]
+    assert api.store.r["view"]["current"] == {"screen": "draft_step", "target": "2"}
+    # ④ new version: one protocol, version 2, the old one kept
+    j = act("save_draft")
+    assert [x["kind"] for x in j["cards"]] == ["save_as"], j
+    assert j["reply"] == f"{short} already exists. Save as version 2, or keep as a separate protocol?", j["reply"]
+    j = said("version 2")
+    doc = lib.get(first, api.store.root)
+    assert count() == n0 + 1 and doc["version"] == 2 and [v["version"] for v in doc["versions"]] == [1], j
+    assert lib.find_by_source(doc["versions"][0]["source_hash"], api.store.root)["id"] == first
+    # ④ two photos of the same page (other hashes, same title): separate, then a new version
+    for raw, answer in ((b"\xff\xd8a", "separate"), (b"\xff\xd8b", "new version")):
+        ScriptClient.queue = [text_out(DOC), extraction(good)]
+        c.post("/protocols/import", files=[("file", ("p.jpg", raw, "image/jpeg"))])
+        j = act("save_draft")
+        assert [x["kind"] for x in j["cards"]] == ["save_as"], j
+        said(answer)
+    names = sorted(x["name"] for x in lib.all_docs(api.store.root))
+    assert count() == n0 + 2 and f"{lib.page_title(doc)} (2)" in names, names
+    assert lib.get(first, api.store.root)["version"] == 3
+    # a choice card wants its choice: "yes" asks again
+    c.post("/protocols/import", data={"text": DOC})
+    j = said("yes")
+    assert j["reply"] == f"Already saved as {short}. Open it or review again?" and api.store.r["cards"], j
+    assert api.store.r["run"]["run_id"] == run and api.store.r["step_index"] == 0, "imports leave the run"
+print("P18 ok: four import cases")
+
+# P19. Review again on a protocol saved before review copies were kept: the
+# saved plan opens as the review (no extraction); saving fixes that protocol.
+# No steps saved: it says why instead of going quietly home.
+with patch("httpx.AsyncClient", ScriptClient):
+    path = Path(api.store.root) / "protocols" / f"{first}.json"
+    old = json.loads(path.read_text())
+    old.pop("draft", None)
+    old.pop("versions", None)
+    old["source_hash"] = lib.source_hash([], DOC)
+    path.write_text(json.dumps(old))
+    k, n = spark(), count()
+    c.post("/protocols/import", data={"text": DOC})
+    j = said("review again")
+    d = api.store.r["draft"]
+    assert api.store.r["view"]["current"]["screen"] == "draft_steps" and d["meta"]["protocol_id"] == first, j
+    assert len(d["plan"]["steps"]) == len(old["plan"]["steps"]) and not d["errors"], d["errors"]
+    act("save_draft")
+    assert spark() == k and count() == n and "draft" not in api.store.r, count()
+    assert proto.build_start_plan(d["plan"])["steps"][0]["wells"] == old["plan"]["steps"][0]["wells"]
+    old["plan"]["steps"] = []
+    path.write_text(json.dumps({k2: v for k2, v in old.items() if k2 != "draft"}))
+    c.post("/protocols/import", data={"text": DOC})
+    j = said("review again")
+    assert j["reply"] == f"I can't open the review for {short}: no steps saved.", j["reply"]
+print("P19 ok: review again without a review copy")
 print("ALL PASS")

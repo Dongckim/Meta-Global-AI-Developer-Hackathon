@@ -215,7 +215,10 @@ with patch("httpx.AsyncClient", FakeClient):
     c.post("/protocols/import",
            files={"file": ("protocol_demo.pdf", PDF5, "application/pdf")})
     j = c.post("/protocols/save", json={"session": "run5"}).json()
-    assert j["saved"] is True and api.store.r["run"]["run_id"] == run2, j
+    assert j["card"]["kind"] == "save_as", j  # the demo's title: new version or separate?
+    j = c.post("/confirm", json={"card_id": j["card"]["id"], "ok": True, "answer": "separate",
+                                 "session": "run5"}).json()
+    assert "library" in j["message"] and api.store.r["run"]["run_id"] == run2, j
     print("RUN5 ok: discard/save don't touch the run")
 
     # RUN7. source reads quote+page; 'the original' opens protocol_source.

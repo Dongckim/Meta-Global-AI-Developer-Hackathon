@@ -29,7 +29,7 @@ from server.grammar import (
     where_am_i_reply,
 )
 from server.screens import READ_KINDS as SCREEN_READ_KINDS
-from server.screens import FLOWS, PLANNED, SCREENS, canonical, parent_of, result_of, title_of, ui_of
+from server.screens import FLOWS, PLANNED, SCREENS, canonical, card_choices, item_off, ITEMS, parent_of, result_of, title_of, ui_of
 from server.tone import say, section
 from server import library as lib
 from server import protocol as proto
@@ -335,6 +335,9 @@ class RecordStore:
                     "I couldn't open that protocol: which one?" if not t
                     else f"I couldn't find the {t} protocol.")
                 return
+            if off := self._protocol_off(doc, session):
+                res["messages"].append(off)
+                return
             self._push_view(screen, doc["id"])
             res["messages"].append(self.screen_line(screen, doc["id"], name=doc.get("name") or "the protocol"))
             return
@@ -481,15 +484,33 @@ class RecordStore:
 
     def protocol_summaries(self) -> list[dict]:
         """Library list with each protocol's run counts, most recently used
-        first (its newest run's start, else its import)."""
+        first (its newest run's start, else its import). `status` and
+        `enabled` are the row's state: the app draws only from them."""
         runs = self.all_run_docs()
         out = []
         for p in lib.list_all(self.root):
             mine = [d for d in runs if d.get("protocol_id") == p["id"]]
-            out.append({**p, "runs": len(mine),
+            status = self.protocol_status(p["id"], runs)
+            out.append({**p, "runs": len(mine), "status": status,
+                        "enabled": not item_off("protocol", {"status": status}),
                         "in_progress": sum(d.get("status") == "active" for d in mine),
                         "last_used": max([d.get("started_at") or 0 for d in mine] + [p.get("imported_at") or 0])})
         return sorted(out, key=lambda p: p["last_used"], reverse=True)
+
+    def protocol_status(self, pid: str, runs: list[dict] | None = None) -> str:
+        """active / paused while a run of it goes or waits; done when its
+        newest run finished; new before any run."""
+        mine = [d for d in (self.all_run_docs() if runs is None else runs) if d.get("protocol_id") == pid]
+        for st in ("active", "paused"):
+            if any(d.get("status") == st for d in mine):
+                return st
+        return "done" if mine else "new"
+
+    def _protocol_off(self, doc: dict, session: dict | None) -> str:
+        """The line for a protocol whose row is off (registry `items`), else ""."""
+        if not item_off("protocol", {"status": self.protocol_status(doc["id"])}):
+            return ""
+        return say(ITEMS["protocol"]["line"], session, name=labels.protocol_short(doc))
 
     def context_protocol(self) -> str | None:
         """The protocol "run 2" means: the one on screen, else the active run's."""
@@ -574,7 +595,7 @@ class RecordStore:
         if not run:
             return None
         doc = {"run_id": run.get("run_id"), "protocol_id": run.get("protocol_id"),
-               "protocol_name": run.get("protocol_name"),
+               "protocol_name": run.get("protocol_name"), "protocol_version": run.get("protocol_version") or 1,
                "started_at": run.get("started_at"), "ended_at": time.time(),
                "status": status, "summary": runlog.summarize_record(self.r),
                "record": {k: v for k, v in self.r.items() if k != "draft"}}
@@ -592,11 +613,37 @@ class RecordStore:
         return doc
 
     def _save_protocol(self, draft: dict, plan: dict) -> dict:
+        """Reviewed again: that protocol is fixed. Same title (④): its next
+        version, or a separate "{title} (2)". Else a new protocol."""
         meta = draft.get("meta") or {}
-        return lib.save(plan, proto.resolve_name(draft), meta.get("source") or "", self.root,
-                        short_title=proto.resolve_short_title(draft), origin=meta.get("origin") or "pdf",
+        name, short = proto.resolve_name(draft), proto.resolve_short_title(draft)
+        same, how = meta.get("same_title") or "", meta.get("save_as")
+        if how == "separate" and (doc := lib.get(same, self.root)):
+            k = 2
+            while lib.find_by_title(f"{lib.page_title(doc)} ({k})", self.root):
+                k += 1
+            name, short = f"{lib.page_title(doc)} ({k})", f"{labels.protocol_short(doc)} ({k})"
+        keep = {k: v for k, v in meta.items() if k not in ("protocol_id", "same_title", "save_as", "review_at")}
+        return lib.save(plan, name, meta.get("source") or "", self.root,
+                        short_title=short, origin=meta.get("origin") or "pdf",
                         source_text=(meta.get("evidence") or {}).get("text") or "",
-                        original_id=meta.get("original_id") or "", source=meta.get("content_hash") or "")
+                        original_id=meta.get("original_id") or "", source=meta.get("content_hash") or "",
+                        draft={**draft, "meta": keep,
+                               "plan": {**draft["plan"], "title": name} if how == "separate" else draft["plan"]},
+                        edit=meta.get("protocol_id") or "",
+                        new_version_of=same if how == "version" else "", separate=how == "separate")
+
+    def _ask_save_as(self, draft: dict, then: str, session: dict | None) -> dict | None:
+        """④ a revised original with a saved protocol's title: version or separate?"""
+        meta = draft.get("meta") or {}
+        doc = lib.get(meta.get("same_title") or "", self.root)
+        if doc is None or meta.get("save_as") or meta.get("protocol_id"):
+            return None
+        res = {"cards": []}
+        name, version = labels.protocol_short(doc), (doc.get("version") or 1) + 1
+        return self._card(res, "save_as", say("save_as", session, name=name, version=version), None,
+                          {"op": "save_as", "protocol_id": doc["id"], "then": then},
+                          {"name": name, "version": version})
 
     def save_draft_to_library(self):
         """Draft -> resolved plan -> library. (ok, doc|reason). Run untouched."""
@@ -612,11 +659,22 @@ class RecordStore:
         proto.recompute_draft(draft)
         if draft["errors"]:
             return False, {"errors": draft["errors"]}
+        if card := self._ask_save_as(draft, "save_draft", None):
+            return False, {"card": card}
         plan = proto.build_start_plan(draft["plan"])
         doc = self._save_protocol(draft, plan)
         self.r.pop("draft", None)
         self._leave_draft(saved=doc["id"])
         return True, doc
+
+    def _saved(self, out: tuple, session: dict, res: dict) -> None:
+        ok, info = out
+        if ok:
+            res["messages"].append(say("protocol_saved", session, name=labels.protocol_short(info)))
+        elif isinstance(info, dict) and info.get("card"):
+            res["cards"].append(info["card"])
+        else:
+            res["messages"].append(self._fix_first(info))
 
     #: The draft review screens (Start ⑤b-⑤f); leaving the draft leaves them all.
     DRAFT_SCREENS = ("protocol_review", "draft_steps", "draft_step", "draft_page", "plan_check")
@@ -636,6 +694,56 @@ class RecordStore:
             v["current"] = {"screen": "protocol_detail", "target": saved}
         v["sheet"] = {"name": "", "target": ""}
 
+    def ask_known_import(self, protocol_id: str, session: dict) -> dict:
+        """② the same original, already a protocol: it shows, and Milo asks
+        to open it or review it again (no extraction either way)."""
+        with self._lock:
+            doc = lib.get(protocol_id, self.root) or {}
+            self._leave_draft(saved=protocol_id)
+            name = labels.protocol_short(doc)
+            card = self._card({"cards": []}, "import_known", say("import_known", session, name=name), None,
+                              {"op": "known_import", "protocol_id": protocol_id}, {"name": name})
+            self._commit()
+            return card
+
+    def resume_review(self, session: dict) -> str:
+        """③ the same original, its draft's review unfinished: the review
+        picks up at the last step looked at (Draft ready if none yet)."""
+        with self._lock:
+            draft = self.r["draft"]
+            n = (draft.get("meta") or {}).get("review_at")
+            self._leave_draft()
+            self._push_view("protocol_review")
+            if n:
+                self._push_view("draft_steps")
+                self._push_view("draft_step", str(n))
+            self._commit()
+            return say("review_resumed", session, step=n) if n else self.screen_line("protocol_review")
+
+    def _review_again(self, protocol_id: str, session: dict, res: dict) -> None:
+        """② review again: the saved steps reopen as a draft of that protocol;
+        saving it fixes the same protocol."""
+        doc = lib.get(protocol_id, self.root)
+        if doc is None:
+            res["messages"].append("That protocol is gone.")
+            return
+        if not ((doc.get("plan") or {}).get("steps")):
+            res["messages"].append(say("review_unavailable", session, name=labels.protocol_short(doc),
+                                       reason="no steps saved"))
+            return
+        # its review copy, else the saved plan as a draft (quotes, pages kept; never extracted again)
+        draft = json.loads(json.dumps(doc["draft"])) if doc.get("draft") else proto.draft_from_plan(
+            doc["plan"], doc.get("source_filename") or "", lib.page_title(doc), doc.get("short_title") or "",
+            doc.get("source_text") or "")
+        draft["meta"] = {**(draft.get("meta") or {}), "protocol_id": doc["id"],
+                         "content_hash": doc.get("source_hash") or "", "origin": doc.get("origin") or "pdf",
+                         "original_id": doc.get("original_id") or ""}
+        self.r["draft"] = draft
+        self._leave_draft()
+        self._push_view("protocol_review")
+        self._push_view("draft_steps")
+        res["messages"].append(self.screen_line("draft_steps"))
+
     def open_known_protocol(self, protocol_id: str, session: dict) -> str:
         """An import of an original already in the library: its protocol opens
         (the import flow closes), ready to start another run."""
@@ -650,10 +758,14 @@ class RecordStore:
         with self._lock:
             return self._request_start_locked(protocol_id, session)
 
-    def _request_start_locked(self, protocol_id: str, session: dict):
+    def _request_start_locked(self, protocol_id: str, session: dict, again: bool = False):
+        """Every start goes through here; a finished protocol starts only by
+        Run again (or a draft of it just reviewed)."""
         doc = lib.get(protocol_id, self.root)
         if doc is None:
             return False, {"reason": f"unknown protocol: {protocol_id}"}
+        if not again and (off := self._protocol_off(doc, session)):
+            return False, {"line": off}
         # Start never asks: a run already going is paused (kept as it is,
         # Continue picks it up), and the new run opens on its Step 1.
         paused = None
@@ -662,6 +774,7 @@ class RecordStore:
             paused = self.run_label(cur)["display"]
             self._finish_locked("paused")
         run = self._begin_locked(doc["plan"], doc["id"], doc.get("name"))
+        run["protocol_version"] = doc.get("version") or 1
         return True, {"run": run, "protocol_id": doc["id"], "paused": paused,
                       "conditions": len((doc["plan"] or {}).get("conditions") or {}),
                       "steps": len((doc["plan"] or {}).get("steps") or [])}
@@ -714,12 +827,14 @@ class RecordStore:
         proto.recompute_draft(draft)
         if draft["errors"]:
             return False, {"errors": draft["errors"]}
+        if card := self._ask_save_as(draft, "start_run", session):
+            return False, {"card": card}
         plan = proto.build_start_plan(draft["plan"])
         doc = self._save_protocol(draft, plan)
         review_n = len(draft["review"])
         self.r.pop("draft", None)
         self._leave_draft(saved=doc["id"])
-        ok, info = self._request_start_locked(doc["id"], session)
+        ok, info = self._request_start_locked(doc["id"], session, again=True)
         if ok:
             info["review"] = review_n
             info["protocol_name"] = doc.get("name")
@@ -1138,7 +1253,8 @@ class RecordStore:
             ok = args.get("ok", True)
             if not isinstance(ok, bool):
                 ok = str(ok).strip().lower() not in ("no", "cancel", "false", "0", "dismiss")
-            message, fresh, card = self._confirm_locked(args.get("card_id", ""), ok, source, session)
+            message, fresh, card = self._confirm_locked(args.get("card_id", ""), ok, source, session,
+                                                        str(args.get("answer") or ""))
             p = (card or {}).get("payload") or {}
             if ok and p.get("op") == "web_search":
                 # the search is a network call: the api layer runs it after this turn
@@ -1522,6 +1638,8 @@ class RecordStore:
             self._pick(args, res)
         elif name == "resume_run":
             self._resume_locked(str(args.get("target") or ""), session, res)
+        elif name == "run_again":
+            self._run_again(str(args.get("target") or "").strip(), session, res)
         elif name in self.DRAFT_ACTIONS:
             self._draft_action(name, args, session, res)
         else:
@@ -1720,9 +1838,7 @@ class RecordStore:
         if name == "review_draft":
             self._navigate_locked(res, session, "draft_steps", None)
         elif name == "save_draft":
-            ok, info = self._save_draft_locked()
-            res["messages"].append(say("protocol_saved", session, name=labels.protocol_short(info))
-                                   if ok else self._fix_first(info))
+            self._saved(self._save_draft_locked(), session, res)
         elif name == "start_run":
             self._started(*self._start_draft_locked(session), session, res)
         elif name == "discard_draft":
@@ -1739,8 +1855,25 @@ class RecordStore:
                                        else "This draft has no pipetting steps.")
                 return
             screen = "draft_step" if name == "show_step" else "draft_page"
+            draft["meta"]["review_at"] = int(n)
             self._push_view(screen, str(int(n)))
             res["messages"].append(self.screen_line(screen, str(int(n))))
+
+    def _run_again(self, named: str, session: dict, res: dict) -> None:
+        """Run again: the named protocol (or the one on screen / of the run on
+        screen) starts its next run at once, finished or not."""
+        v = self.r["view"]["current"]
+        pid = named or (v.get("target") if v.get("screen") == "protocol_detail"
+                        else (self._viewing_run() or self.r.get("run") or {}).get("protocol_id") or "")
+        if not pid:
+            res["messages"].append("Which protocol? Say its name, or pick one on Home.")
+            return
+        doc, cands = labels.select_protocol(pid, lib.all_docs(self.root))
+        if doc is None:
+            res["messages"].append(labels.which_one([labels.protocol_label(c)["spoken"] for c in cands])
+                                   if cands else "I couldn't find that protocol.")
+            return
+        self._started(*self._request_start_locked(doc["id"], session, again=True), session, res)
 
     def _fix_first(self, info) -> str:
         n = len((info or {}).get("errors") or []) if isinstance(info, dict) else 0
@@ -1757,6 +1890,8 @@ class RecordStore:
             res["cards"].append(info["card"])  # its question is the reply
         elif info.get("errors"):
             res["messages"].append(self._fix_first(info))
+        elif info.get("line"):
+            res["messages"].append(info["line"])
         else:
             res["messages"].append(f"I couldn't start that: {info.get('reason', 'no protocol')}.")
 
@@ -1861,14 +1996,18 @@ class RecordStore:
 
     # --- confirm ---
 
-    def confirm(self, card_id: str, ok: bool, source: str, session: dict):
+    def confirm(self, card_id: str, ok: bool, source: str, session: dict, answer: str = ""):
         with self._lock:
-            return self._confirm_locked(card_id, ok, source, session)
+            return self._confirm_locked(card_id, ok, source, session, answer)
 
-    def _confirm_locked(self, card_id: str, ok: bool, source: str, session: dict):
-        card = self.r["cards"].pop(card_id, None)
+    def _confirm_locked(self, card_id: str, ok: bool, source: str, session: dict, answer: str = ""):
+        card = self.r["cards"].get(card_id)
         if card is None:
             return "That card is gone.", [], None
+        choices = card_choices(card["kind"])
+        if ok and choices and answer not in choices:
+            return card["question"], [card], None  # "yes" to "open it or review again?": ask again
+        self.r["cards"].pop(card_id)
         if not ok:
             self._commit()
             self._refresh_card_output(card, ok, "Canceled.", session)
@@ -1915,6 +2054,22 @@ class RecordStore:
             # yes to "Run 1 is finished. Start a new run?": the usual start
             # (an active run still asks "finish it first?")
             self._started(*self._request_start_locked(p.get("protocol_id") or "", session), session, res)
+        elif op == "known_import":
+            if answer == "review":
+                self._review_again(p.get("protocol_id") or "", session, res)
+            else:
+                doc = lib.get(p.get("protocol_id") or "", self.root) or {}
+                res["messages"].append(say("already_saved", session, name=labels.protocol_short(doc)))
+        elif op == "save_as":
+            draft = self.r.get("draft")
+            if not draft:
+                res["messages"].append("No draft open.")
+            else:
+                draft["meta"]["save_as"] = answer
+                if p.get("then") == "start_run":
+                    self._started(*self._start_draft_locked(session), session, res)
+                else:
+                    self._saved(self._save_draft_locked(), session, res)
         elif op == "web_search":
             res["messages"].append(say("looking_up", session))
         elif op == "end_run":

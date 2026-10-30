@@ -137,6 +137,21 @@
     "End this run?",
     "Finish up and close this run?"
   ],
+  "protocol_finished": [
+    "{name} is finished."
+  ],
+  "import_known": [
+    "Already saved as {name}. Open it or review again?"
+  ],
+  "review_resumed": [
+    "You started reviewing this. Picking up at step {step}."
+  ],
+  "review_unavailable": [
+    "I can't open the review for {name}: {reason}."
+  ],
+  "save_as": [
+    "{name} already exists. Save as version {version}, or keep as a separate protocol?"
+  ],
   "protocol_saved": [
     "Saved {name} to the library.",
     "{name} is in the library now."
@@ -165,6 +180,8 @@
     "end_run": {"title": "Finish this run?", "detail": ""},
     "new_run": {"title": "{run} is finished", "detail": "Start a new run of {name}?"},
     "confirm_search": {"title": "Search the web?", "detail": "“{query}”"},
+    "import_known": {"title": "Already saved as {name}", "detail": "Open it or review again?"},
+    "save_as": {"title": "{name} already exists", "detail": "Save as version {version}, or keep it separate?"},
     "default": {"title": "{question}", "detail": "{detail}"}
   },
   "prompts": {

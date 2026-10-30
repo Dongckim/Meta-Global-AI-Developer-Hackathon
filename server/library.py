@@ -86,33 +86,80 @@ def source_hash(files: list[bytes], text: str = "") -> str:
 
 
 def find_by_source(src: str, root: Path | None = None) -> dict | None:
+    """The protocol any of whose versions came from this original."""
     if not src:
         return None
     d = _dir(root)
-    return next((x for p in sorted(d.glob("*.json")) if (x := _read(p)) and x.get("source_hash") == src), None) \
+    return next((x for p in sorted(d.glob("*.json")) if (x := _read(p)) and src in (
+        [x.get("source_hash")] + [v.get("source_hash") for v in x.get("versions") or []])), None) \
         if d.exists() else None
+
+
+def title_key(title: str) -> str:
+    """Titles compare with case, spacing and punctuation ignored."""
+    import re
+    return re.sub(r"[\W_]+", "", (title or "").lower())
+
+
+def page_title(doc: dict) -> str:
+    """The title the original says (its reviewed draft's), else the library name."""
+    return (((doc.get("draft") or {}).get("plan") or {}).get("title") or "").strip() or doc.get("name") or ""
+
+
+def find_by_title(title: str, root: Path | None = None) -> dict | None:
+    want = title_key(title)
+    d = _dir(root)
+    return next((x for p in sorted(d.glob("*.json")) if (x := _read(p)) and want in (
+        title_key(x.get("name")), title_key(page_title(x)))), None) if want and d.exists() else None
+
+
+#: The fields one version of a protocol owns; older versions keep theirs under `versions`.
+VERSION_FIELDS = ("plan", "plan_hash", "source_hash", "source_filename", "origin", "source_text",
+                  "original_id", "imported_at", "draft")
 
 
 def save(plan: dict, name: str, source_filename: str, root: Path | None = None,
          short_title: str = "", origin: str = "pdf", source_text: str = "",
-         original_id: str = "", source: str = "") -> dict:
+         original_id: str = "", source: str = "", draft: dict | None = None,
+         edit: str = "", new_version_of: str = "", separate: bool = False) -> dict:
     """Store a confirmed plan. The same original (source hash) is the same
-    protocol, whatever its extraction; else the same plan content is."""
+    protocol, whatever its extraction; else the same plan content is.
+
+    edit: that protocol's plan is replaced (reviewed again; same version).
+    new_version_of: the plan becomes that protocol's next version; the old
+    one moves to `versions` (runs keep the plan they ran). separate: a new
+    protocol even when the plan matches one already saved. `draft` is kept
+    so the protocol can be reviewed again without extracting."""
     d = _dir(root)
     d.mkdir(parents=True, exist_ok=True)
-    same = find_by_source(source, root)
+    h = plan_hash(plan)
+    fields = {"plan": plan, "plan_hash": h, "source_hash": source, "source_filename": source_filename or "",
+              "origin": origin, "source_text": source_text if origin != "pdf" else "",
+              "original_id": original_id, "imported_at": time.time(), "draft": draft}
+    base = get(edit or new_version_of, root) if edit or new_version_of else None
+    if base is not None:
+        if new_version_of:
+            old = {k: base.get(k) for k in VERSION_FIELDS}
+            base["versions"] = (base.get("versions") or []) + [{"version": base.get("version") or 1, **old}]
+            base["version"] = (base.get("version") or 1) + 1
+        else:
+            fields["imported_at"] = base.get("imported_at")  # the same protocol, fixed
+        base.update(fields)
+        (d / f"{base['id']}.json").write_text(json.dumps(base, ensure_ascii=False, indent=1))
+        return base
+    same = None if separate else find_by_source(source, root)
     if same:
         return same
-    h, pid = plan_hash(plan), protocol_id(plan)
+    pid = protocol_id(plan)
     path = d / f"{pid}.json"
     existing = _read(path)
-    if existing and existing.get("plan_hash") == h:
+    if existing and existing.get("plan_hash") == h and not separate:
         return existing
-    doc = {"id": pid, "name": name or pid, "short_title": short_title or "",
-           "source_filename": source_filename or "", "origin": origin,
-           "source_text": source_text if origin != "pdf" else "", "original_id": original_id,
-           "source_hash": source,
-           "imported_at": time.time(), "plan_hash": h, "plan": plan}
+    n = 2
+    while path.exists():  # a separate copy of a plan already saved
+        path = d / f"{pid}-{n}.json"
+        n += 1
+    doc = {"id": path.stem, "name": name or pid, "short_title": short_title or "", **fields}
     path.write_text(json.dumps(doc, ensure_ascii=False, indent=1))
     return doc
 

@@ -20,6 +20,7 @@ from pathlib import Path
 from server.grammar import (
     _SPAN_STOPWORDS,
     find_amounts,
+    join_wells_ranges,
     parse_wellref,
     wells_label,
 )
@@ -646,6 +647,67 @@ def build_draft(raw: dict, evidence: dict, source: str) -> dict:
     _auto_layout(draft)
     recompute_draft(draft)
     draft["review"] = dropped + draft["review"]
+    return draft
+
+
+def draft_from_plan(plan: dict, source: str, title: str = "", short_title: str = "",
+                    source_text: str = "") -> dict:
+    """A saved run plan back as a draft, for reviewing it again without
+    extracting: liquids from the pipette steps, each step's target as the
+    wells it resolved to, quotes and pages as saved. The original is the
+    saved text (text, photo); a PDF's text was never kept, so its saved
+    quotes, by page, stand for it (they were checked when it was reviewed)."""
+    liquids: dict[str, dict] = {}
+
+    def liquid(name, quote: str = "") -> str:
+        key = _norm_id(name)
+        if key and key not in liquids:
+            liquids[key] = {"name": str(name), "concentration": None, "prep": None, "quote": ""}
+        if key and quote and not liquids[key]["quote"]:
+            liquids[key]["quote"] = quote  # the first step that adds it says it
+        return key
+
+    def target(p: dict) -> dict:
+        """The step's target as it was saved: all used wells, a group's wells, else the wells."""
+        label = (p.get("target_label") or "").strip()
+        if label == "all used wells":
+            return {"type": "all_used", "value": None}
+        hit = next((k for k, c in conditions.items() if label == f"{c['label']} wells"), None)
+        if hit:
+            return {"type": "condition", "value": hit}
+        return {"type": "wells", "value": join_wells_ranges(p.get("wells") or [])} if p.get("wells") \
+            else {"type": "other", "value": None}
+
+    conditions = {key: {"label": c.get("label") or key, "abbr": c.get("abbr") or "",
+                        "treatments": [liquid(t) for t in c.get("treatments") or []],
+                        "replicates": c.get("replicates"), "wells": list(c.get("wells") or []),
+                        "quote": c.get("quote") or "", "quote_page": c.get("quote_page")}
+                  for key, c in (plan.get("conditions") or {}).items()}
+    steps = []
+    for st in plan.get("steps") or []:
+        p = st.get("pipette") if isinstance(st.get("pipette"), dict) else None
+        steps.append({"kind": st.get("kind") or "other", "text": st.get("text") or "",
+                      "short_title": st.get("short_title") or "", "quote": st.get("quote") or "",
+                      "quote_page": st.get("quote_page"), "minutes": st.get("minutes"),
+                      "temp_c": st.get("temp_c"), "caution": st.get("caution"),
+                      "pipette": {"liquid": liquid(p.get("liquid"), st.get("quote") or ""),
+                                  "volume": p.get("volume"), "unit": p.get("unit"), "target": target(p),
+                                  "mix": None, "repeat": None} if p else None,
+                      "wells": []})
+    if source_text.strip():
+        evidence = evidence_from_text(source_text)
+    else:
+        quoted = [x for x in [*conditions.values(), *steps] if x.get("quote")]
+        n = max([x.get("quote_page") or 1 for x in quoted] or [1])
+        pages = ["\n".join(([title] if k == 1 and title else [])
+                           + [x["quote"] for x in quoted if (x.get("quote_page") or 1) == k]) for k in range(1, n + 1)]
+        evidence = evidence_from_text("\n".join(pages), pages)
+    draft = {"plan": {"title": title, "short_title": short_title, "liquids": liquids,
+                      "conditions": conditions, "steps": steps, "backups": list(plan.get("backups") or [])},
+             "review": [], "errors": [],
+             "meta": {"source": source, "evidence_chars": len(evidence["text"]), "evidence": evidence,
+                      "layout": {k: "stated" for k in conditions}}}
+    recompute_draft(draft)
     return draft
 
 

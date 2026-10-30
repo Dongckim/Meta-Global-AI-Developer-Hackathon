@@ -126,8 +126,8 @@ was = next(r for r in api.store.run_summaries(api.store.all_run_docs()) if r["ru
 assert (was["status"], was["state"]) == ("paused", "Paused at step 2"), was
 print("SF6 ok: start_run pauses the run going, no card")
 
-# SF7. A finished run's Start run (shown greyed): tap or words, no model ->
-# the protocol's next run starts at once.
+# SF7. A finished run's Start run (shown greyed) is refused: its protocol is
+# done. Run again ("run it again") starts the next run at once.
 from server.screens import buttons_for  # noqa: E402
 
 new = api.store.r["run"]["run_id"]
@@ -138,9 +138,11 @@ assert (v["current"]["screen"], v["slots"]["status"]) == ("run_view", "finished"
 bs = buttons_for("run_view", api.store.view_slots("run_view", new))
 assert [(b["say"], b.get("look")) for b in bs] == [("Start run", "disabled"), ("Back", None)], bs
 j = said("start run")
+assert j["reply"] == "Media test is finished." and not api.store.r.get("run"), j
+j = said("run it again")
 assert j["route"] == "grammar" and not j["cards"] and api.store.r["run"]["run_id"] != new, j
 assert j["reply"].startswith("Run 2 started. Step 1: "), j
-print("SF7 ok: a finished run's Start run starts the next one")
+print("SF7 ok: a finished run's Start run is refused; Run again starts the next one")
 
 # SF8. A paused run continues where it stopped; the run going pauses.
 api.store.r["view"]["current"] = {"screen": "home", "target": ""}
@@ -224,8 +226,9 @@ assert api.store.r["view"]["current"]["screen"] == "main" and api.store.r["view"
 print("SF13 ok: start run closes the import flow")
 
 # SF14. Again by voice, no model: a saved protocol picked on Home -> Start
-# run is there and on; "run Media test again" / "start a new run of the media
-# one" add the next run under it; a draft waiting shows Review on Home.
+# run is there and on; once its run finished it is done: "start a new run of
+# the media one" is refused, "run Media test again" adds the next run under
+# it; a draft waiting shows Review on Home.
 from server.screens import buttons_for  # noqa: E402
 
 api.store = fresh()
@@ -239,7 +242,9 @@ j = said("start run")
 assert api.store.r["run"]["protocol_id"] == pid and cur()["screen"] == "main", j
 api.store._finish_locked("finished")
 api.store.r["view"] = {**api.store.r["view"], "current": {"screen": "home", "target": ""}, "stack": []}
-for phrase in ("run Media test again", "Start a new run of the media one"):
+j = said("Start a new run of the media one")
+assert j["reply"] == "Media test is finished." and not api.store.r.get("run"), j
+for phrase in ("run Media test again", "run the media one again"):
     j = said(phrase)
     assert j["route"] == "grammar" and api.store.r["run"]["protocol_id"] == pid, (phrase, j)
     api.store._finish_locked("finished")
@@ -262,4 +267,32 @@ from server import library as lib  # noqa: E402
 assert lib.source_hash([], "Add 100 uL\n\n media.  ") == lib.source_hash([], "Add 100 uL media.")
 assert lib.source_hash([b"a"]) != lib.source_hash([b"b"])
 print("SF15 ok: same original, same hash")
+
+# SF16. A done protocol (its newest run finished, none going or paused) is
+# off: tap, words and model are refused with one line; only Run again works.
+# A protocol with a paused run stays on.
+api.store = fresh()
+said("later")
+pid = cur()["target"]
+said("start run")
+api.store._finish_locked("finished")
+home = lambda: api.store.r["view"].update(current={"screen": "home", "target": ""}, stack=[])  # noqa: E731
+home()
+row = lambda: next(p for p in c.get("/protocols").json()["protocols"] if p["id"] == pid)  # noqa: E731
+assert (row()["status"], row()["enabled"]) == ("done", False), row()
+for j in (act("open", target=f"protocol:{pid}"), said("start a run of Media test"), act("start_run", target=pid)):
+    assert j["reply"] == "Media test is finished." and cur()["screen"] == "home" and not api.store.r.get("run"), j
+for call in ({"name": "start_run", "args": {"target": pid}}, {"name": "open", "args": {"target": f"protocol:{pid}"}}):
+    r = api.store.apply_calls([{**call, "from_model": True}], "voice", "start media", "spark", {})
+    assert r["messages"] == ["Media test is finished."] and not api.store.r.get("run"), r
+assert cur()["screen"] == "home"
+j = act("run_again", target=pid)
+assert j["reply"].startswith("Run 2 started. Step 1: ") and api.store.r["run"]["protocol_id"] == pid, j
+assert (row()["status"], row()["enabled"]) == ("active", True), row()
+api.store._finish_locked("paused")
+assert (row()["status"], row()["enabled"]) == ("paused", True), row()
+home()
+j = act("open", target=f"protocol:{pid}")
+assert cur() == {"screen": "protocol_detail", "target": pid}, j
+print("SF16 ok: done protocols are off except Run again; paused stays on")
 print("ALL PASS")

@@ -72,6 +72,27 @@ def planned_screen(text: str) -> str | None:
 FLOWS: list[dict] = list(REGISTRY.get("flows", []))
 #: Card answer words (`answers`: all / yes / no / cancel -> phrases).
 ANSWERS: dict[str, list[str]] = dict(REGISTRY.get("answers", {}))
+#: The plain answers every card takes; a card kind whose registry buttons
+#: offer other answers ("open", "review", ...) is answered only by those.
+PLAIN_ANSWERS = ("all", "yes", "no", "cancel")
+
+
+def card_choices(kind: str) -> list[str]:
+    """A choice card's answers (registry `cards.<kind>`), [] for yes/no cards."""
+    out = [(b.get("args") or {}).get("answer") for b in (REGISTRY.get("cards") or {}).get(kind) or []]
+    return [a for a in out if a and a not in PLAIN_ANSWERS]
+
+
+#: List rows by kind (`items`): when a row is off, and the buttons it keeps.
+ITEMS: dict[str, dict] = {k: v for k, v in (REGISTRY.get("items") or {}).items() if not k.startswith("_")}
+
+
+def item_off(kind: str, state: dict) -> bool:
+    """A row is off while its state matches the kind's `off_when`."""
+    off = (ITEMS.get(kind) or {}).get("off_when") or {}
+    return bool(off) and all(state.get(k) == v for k, v in off.items())
+
+
 #: Words that carry nothing beside an answer ("um", "please").
 FILLERS: list[str] = list(REGISTRY.get("fillers", []))
 #: Words said around a button's words that don't change it ("okay continue", "continue, Milo").
@@ -304,4 +325,6 @@ def start_call(text: str) -> dict | None:
     t = re.sub(r" (?:one|protocol)$", "", t).strip()
     if t in ("it", "this", "that", "this one", "that one") or re.fullmatch(r"\d+", t):
         t = ""
-    return {"name": "start_run", "args": {"target": t}}
+    # "again" is Run again: the one way to run a finished protocol once more
+    again = said.endswith((" again", " one more time"))
+    return {"name": "run_again" if again else "start_run", "args": {"target": t}}

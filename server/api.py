@@ -59,7 +59,8 @@ from server.grammar import (
 )
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
-from server.screens import ask_choice, button_match, button_words, buttons_for, control_call, planned_screen, start_call
+from server.screens import (PLAIN_ANSWERS, ask_choice, button_match, button_words, buttons_for, card_choices,
+                            control_call, planned_screen, start_call)
 from server.screens import guide as _screen_guide
 from server.screens import READS as SCREEN_READS
 from server import library as lib
@@ -85,7 +86,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 14
+API_VERSION = 15
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -173,7 +174,7 @@ PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "edit_note", "save_tip", "set_timer", "cancel_timer",
                    "extend_timer", "next_step", "end_run", "show", "navigate",
                    "open", "back", "make_robot", "edit_draft", "retry_sync",
-                   "skip_sync", "review_draft", "save_draft", "start_run", "discard_draft",
+                   "skip_sync", "review_draft", "save_draft", "start_run", "run_again", "discard_draft",
                    "show_step", "open_source_page", "web_search", "open_source", "control", "pick",
                    "resume_run"]
 #: Actions that aren't record writes; the coverage check counts only writes.
@@ -200,7 +201,8 @@ TOOLS = [
         "\"run latest of Drug A/B\"; a well is always open{target}); "
         "back; make_robot; "
         "edit_draft{path,value} (draft_open only); review_draft; save_draft (later); "
-        "start_run{target?} (the open draft, else the protocol on screen or named); discard_draft; "
+        "start_run{target?} (the open draft, else the protocol on screen or named); "
+        "run_again{target?} (a finished protocol's next run: \"run X again\"); discard_draft; "
         "show_step{step} / open_source_page{step?} (a draft's pipetting step, 1-based); "
         "web_search{query} ONLY for outside knowledge the record and protocol can't hold (reagent "
         "limits, stability, general method facts); query = the general question, never wells, run "
@@ -345,6 +347,7 @@ class OrchestrateIn(BaseModel):
 class ConfirmIn(BaseModel):
     card_id: str = Field(min_length=1)
     ok: bool
+    answer: str = ""  # a choice card's answer (registry `cards`): open / review / version / separate
     session: str = "bench"
 
 
@@ -560,6 +563,9 @@ def _answer_cards(ans: str, session: dict, latest: bool = False):
     (an answer leading a longer turn) takes the most recent of them.
     """
     cards = sorted(store.r["cards"].values(), key=lambda c: c["ts"], reverse=True)
+    if ans not in PLAIN_ANSWERS:  # "review again": the card that offers it
+        c = next(c for c in cards if ans in card_choices(c["kind"]))
+        return _resolve_cards([(c["id"], True, ans)], session)
     if ans == "all":
         targets = [(c["id"], True) for c in cards]
     else:  # yes / no / cancel
@@ -572,10 +578,17 @@ def _answer_cards(ans: str, session: dict, latest: bool = False):
     return _resolve_cards(targets, session)
 
 
+def _offered(ans: str | None) -> str | None:
+    """A plain answer, or a choice ("open it") an open card offers; else None."""
+    if ans in PLAIN_ANSWERS or any(ans in card_choices(c["kind"]) for c in store.r["cards"].values()):
+        return ans
+    return None
+
+
 def _resolve_cards(targets: list, session: dict):
     """Answer cards by id ((id, ok) pairs) through the store; no model call."""
-    calls = [{"name": "answer_card", "args": {"card_id": cid, "ok": ok}}
-             for cid, ok in targets]
+    calls = [{"name": "answer_card", "args": {"card_id": t[0], "ok": t[1], "answer": t[2] if len(t) > 2 else ""}}
+             for t in targets]
     res = store.apply_calls(calls, "card", "", "card", session)
     reply = _sentences(res["messages"]) or "Done."
     return [], res["messages"], reply, 0, "card", res["cards"], res["info"], []
@@ -806,11 +819,11 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     if _stop_search(session, text):
         return [], [], "", 0, "grammar", [], {"dropped": 0, "drop_reasons": []}, []
     if store.r["cards"]:
-        ans = match_card_answer(text)
+        ans = _offered(match_card_answer(text))
         if ans is not None:
             return _answer_cards(ans, session)
         ans, rest = split_card_answer(text)
-        if ans is not None:
+        if _offered(ans) is not None:
             # "Yes. Exclude C6.": the answer goes to the latest card, the rest is a new turn
             head = _answer_cards(ans, session, latest=True)
             if answer_or_filler(rest) or (not store.r.get("run") and bare_completion(rest)):
@@ -818,7 +831,7 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             tail = await run_utterance(client, key, rest, session, source)
             return (tail[0], head[1] + tail[1], _sentences([head[2], tail[2]]), tail[3],
                     tail[4], head[5] + tail[5], tail[6], tail[7])
-    elif match_card_answer(text) is not None and not ((session.get("turns") or [{}])[-1].get("asked")):
+    elif match_card_answer(text) in PLAIN_ANSWERS and not ((session.get("turns") or [{}])[-1].get("asked")):
         # "yes" with no card and no question of ours pending: nothing to answer
         reply = say("nothing_to_confirm", session)
         return [], [], reply, 0, "grammar", [], {"dropped": 0, "drop_reasons": []}, []
@@ -1401,10 +1414,10 @@ async def _handle_text(text: str, session: dict, source: str):
                                store.r["version"])
 
 
-def _resolve_card(card_id: str, answer: str, session: dict):
+def _resolve_card(card_id: str, answer: str, session: dict, choice: str = ""):
     """Shared card path for /input and the /confirm alias."""
     ok = answer.strip().lower() not in ("no", "cancel", "false", "0", "dismiss")
-    message, new_cards, _ = store.confirm(card_id, ok, "card", session)
+    message, new_cards, _ = store.confirm(card_id, ok, "card", session, choice)
     return message, new_cards
 
 
@@ -1433,7 +1446,8 @@ async def input_entry(body: InputIn):
         return _utterance_response(calls, res["messages"], reply, {"spark": 0}, "tap",
                                    res["cards"], res["info"], sources, store.r["version"])
     if body.card_id:
-        message, new_cards = _resolve_card(body.card_id, body.answer or "yes", session)
+        a = body.answer or "yes"  # a choice card's answer ("review") is a yes with that choice
+        message, new_cards = _resolve_card(body.card_id, a, session, "" if a in PLAIN_ANSWERS else a)
         log_turn(session, f"card:{body.card_id} {body.answer or 'yes'}", [], [message])
         return _utterance_response([], [message], message, {"spark": 0}, "card", new_cards,
                                    {"dropped": 0, "drop_reasons": []}, [], store.r["version"])
@@ -1682,7 +1696,7 @@ async def voice_live(ws: WebSocket):
 async def confirm(body: ConfirmIn):
     """Alias: forwards into /input's card path (same shapes)."""
     session = get_session(body.session)
-    message, new_cards = _resolve_card(body.card_id, "yes" if body.ok else "no", session)
+    message, new_cards = _resolve_card(body.card_id, "yes" if body.ok else "no", session, body.answer)
     log_turn(session, "yes" if body.ok else "no", [], [message])
     return {"message": message, "cards": new_cards, "record_version": store.r["version"]}
 
@@ -1758,27 +1772,34 @@ _IMPORTS: dict[str, asyncio.Future] = {}
 async def protocol_import(file: list[UploadFile] = File(default=[]), text: str = Form(""),
                           filename: str = Form(""), original_id: str = Form(""),
                           session: str = Form("bench")):
-    """Idempotent import: the same content (hash of the files and text) joins
-    an extraction in flight, or reuses the open draft from it; else it
-    extracts once. The turn shows "Reading the protocol…" (stage reading) and
-    Draft ready opens when it's done."""
+    """Where an import goes, decided here only (the original's hash, then the
+    extracted title). The active run is never touched.
+
+    ③ its draft is still in review: no extraction, the review picks up.
+    ② it is already a protocol: no extraction; "open it or review again?"
+    ① new: extract, review, save.
+    ④ new original, a saved protocol's title (a revision, the same page
+       photographed again): extract and review; saving asks "new version
+       or separate?" (draft meta `same_title`).
+    The same content in flight joins that extraction. The turn shows
+    "Reading the protocol…" (stage reading) and Draft ready opens when done."""
     if not PROTOCOL_FULL_MODE:
         raise HTTPException(403, "protocol import needs Full mode")
     sess = get_session(session)
     uploads = [(f.filename or "", await f.read()) for f in file]
     h = lib.source_hash([raw for _, raw in uploads], text)
-    known = lib.find_by_source(h, store.root)
-    if known:
-        # the same original is already a protocol: no extraction, open it (runs stack under it)
-        print(f"import {h}: already the protocol {known['id']}", flush=True)
-        reply = store.open_known_protocol(known["id"], sess)
-        return {"draft": None, "review": [], "errors": [], "reply": reply, "speak": speak_text(reply),
-                "ms": 0, "protocol_id": known["id"], "record_version": store.r["version"]}
     draft = store.r.get("draft")
     if draft and (draft.get("meta") or {}).get("content_hash") == h:
-        print(f"import {h}: the open draft already holds this", flush=True)
-        store.save_draft(draft)  # every import ends on Draft ready, a reused one too
-        return _import_reply(draft, sess, 0)
+        print(f"import {h}: case 3, its draft is in review", flush=True)
+        reply = store.resume_review(sess)
+        return {**_import_reply(draft, sess, 0), "reply": reply, "speak": speak_text(reply)}
+    known = lib.find_by_source(h, store.root)
+    if known:
+        print(f"import {h}: case 2, already the protocol {known['id']}", flush=True)
+        card = store.ask_known_import(known["id"], sess)
+        return {"draft": None, "review": [], "errors": [], "reply": card["question"],
+                "speak": speak_text(card["question"]), "card": card, "ms": 0, "protocol_id": known["id"],
+                "record_version": store.r["version"]}
     if h in _IMPORTS:
         print(f"import {h}: joining the extraction in flight", flush=True)
         return await asyncio.shield(_IMPORTS[h])
@@ -1786,7 +1807,14 @@ async def protocol_import(file: list[UploadFile] = File(default=[]), text: str =
     _IMPORTS[h] = fut
     _stage(sess, "reading")
     try:
-        out = await _import_once(uploads, text, filename, original_id, sess, h)
+        draft, ms = await _import_once(uploads, text, filename, original_id, h)
+        # the title the page says (flagged or not): a re-photographed page reads the same
+        same = lib.find_by_title((draft["plan"].get("title") or "").strip() or proto.resolve_name(draft), store.root)
+        draft["meta"]["same_title"] = same["id"] if same else ""
+        print(f"import {h}: case {4 if same else 1}", flush=True)
+        store.save_draft(draft)  # opens Draft ready (⑤b)
+        out = _import_reply(draft, sess, ms)
+        log_turn(sess, f"import {draft['meta'].get('source') or ''}", [], [out["reply"]])
         fut.set_result(out)
         _stage(sess, "done", reply=out["reply"])
         return out
@@ -1811,7 +1839,7 @@ def _import_reply(draft: dict, sess: dict, ms: int) -> dict:
             "speak": speak_text(reply), "ms": ms, "record_version": store.r["version"]}
 
 
-async def _import_once(uploads: list, text: str, filename: str, original_id: str, sess: dict, h: str) -> dict:
+async def _import_once(uploads: list, text: str, filename: str, original_id: str, h: str) -> tuple[dict, int]:
     """One extraction path for three origins. pdf: the file rides input_file;
     text: pasted text or a .txt; photo: page photos (several = pages) are
     transcribed first through the same Spark call path and the transcript is
@@ -1867,10 +1895,7 @@ async def _import_once(uploads: list, text: str, filename: str, original_id: str
     draft["meta"]["origin"] = origin
     draft["meta"]["original_id"] = re.sub(r"[^A-Za-z0-9_-]", "", original_id)[:64]
     draft["meta"]["content_hash"] = h
-    store.save_draft(draft)  # opens Draft ready (⑤b)
-    out = _import_reply(draft, sess, ms)
-    log_turn(sess, f"import {name}", [], [out["reply"]])
-    return out
+    return draft, ms
 
 
 @app.patch("/protocols/draft")
@@ -1934,6 +1959,11 @@ async def protocol_save(body: DraftStartIn):
     session = get_session(body.session)
     ok, info = store.save_draft_to_library()
     if not ok:
+        if isinstance(info, dict) and info.get("card"):  # ④ new version or separate?
+            reply = info["card"]["question"]
+            log_turn(session, "save protocol", [], [reply])
+            return {"saved": False, "card": info["card"], "reply": reply, "speak": speak_text(reply),
+                    "record_version": store.r["version"]}
         if isinstance(info, dict) and "errors" in info:
             n = len(info["errors"])
             reply = f"Fix {n} red item{'s' if n != 1 else ''} first."
