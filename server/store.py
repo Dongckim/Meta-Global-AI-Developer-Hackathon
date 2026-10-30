@@ -391,8 +391,10 @@ class RecordStore:
         run = self.r.get("run")
         steps = (self.r.get("plan") or {}).get("steps") or []
         if screen in ("home", "protocol_detail"):
-            # buttons show by state: Continue while a run goes, Review while a draft waits
-            out = {"running": "yes" if run else "", "draft": "yes" if self.r.get("draft") else ""}
+            # buttons show by state: Continue while a run goes (on a protocol's
+            # page, a run of that protocol), Review while a draft waits
+            mine = run and (screen == "home" or run.get("protocol_id") == target)
+            out = {"running": "yes" if mine else "", "draft": "yes" if self.r.get("draft") else ""}
             if screen == "home" and run and steps:
                 out.update({"run": self.run_label(self.active_run_doc())["display"], "step": self.current_step()})
         elif screen == "main" and run and steps:
@@ -496,6 +498,15 @@ class RecordStore:
                         "in_progress": sum(d.get("status") == "active" for d in mine),
                         "last_used": max([d.get("started_at") or 0 for d in mine] + [p.get("imported_at") or 0])})
         return sorted(out, key=lambda p: p["last_used"], reverse=True)
+
+    def protocol_by_title(self, said: str) -> str:
+        """A protocol's title said as the whole turn ("Drug A Dosing", "open
+        drug a dosing"): its id, when exactly one protocol has that title
+        (case, spaces and punctuation ignored); else ""."""
+        want = lib.title_key(re.sub(r"^\s*(?:open|show)\s+(?:the\s+)?", "", said or "", flags=re.I))
+        hits = [d["id"] for d in lib.all_docs(self.root) if want and want in {
+            lib.title_key(d.get("short_title")), lib.title_key(d.get("name")), lib.title_key(lib.page_title(d))}]
+        return hits[0] if len(hits) == 1 else ""
 
     def protocol_status(self, pid: str, runs: list[dict] | None = None) -> str:
         """active / paused while a run of it goes or waits; done when its
@@ -759,8 +770,8 @@ class RecordStore:
             return self._request_start_locked(protocol_id, session)
 
     def _request_start_locked(self, protocol_id: str, session: dict, again: bool = False):
-        """Every start goes through here; a finished protocol starts only by
-        Run again (or a draft of it just reviewed)."""
+        """Every start goes through here; a finished protocol doesn't start
+        (a draft of it just reviewed does: that is its review's Start)."""
         doc = lib.get(protocol_id, self.root)
         if doc is None:
             return False, {"reason": f"unknown protocol: {protocol_id}"}
@@ -1638,8 +1649,6 @@ class RecordStore:
             self._pick(args, res)
         elif name == "resume_run":
             self._resume_locked(str(args.get("target") or ""), session, res)
-        elif name == "run_again":
-            self._run_again(str(args.get("target") or "").strip(), session, res)
         elif name in self.DRAFT_ACTIONS:
             self._draft_action(name, args, session, res)
         else:
@@ -1858,22 +1867,6 @@ class RecordStore:
             draft["meta"]["review_at"] = int(n)
             self._push_view(screen, str(int(n)))
             res["messages"].append(self.screen_line(screen, str(int(n))))
-
-    def _run_again(self, named: str, session: dict, res: dict) -> None:
-        """Run again: the named protocol (or the one on screen / of the run on
-        screen) starts its next run at once, finished or not."""
-        v = self.r["view"]["current"]
-        pid = named or (v.get("target") if v.get("screen") == "protocol_detail"
-                        else (self._viewing_run() or self.r.get("run") or {}).get("protocol_id") or "")
-        if not pid:
-            res["messages"].append("Which protocol? Say its name, or pick one on Home.")
-            return
-        doc, cands = labels.select_protocol(pid, lib.all_docs(self.root))
-        if doc is None:
-            res["messages"].append(labels.which_one([labels.protocol_label(c)["spoken"] for c in cands])
-                                   if cands else "I couldn't find that protocol.")
-            return
-        self._started(*self._request_start_locked(doc["id"], session, again=True), session, res)
 
     def _fix_first(self, info) -> str:
         n = len((info or {}).get("errors") or []) if isinstance(info, dict) else 0

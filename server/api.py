@@ -174,7 +174,7 @@ PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "edit_note", "save_tip", "set_timer", "cancel_timer",
                    "extend_timer", "next_step", "end_run", "show", "navigate",
                    "open", "back", "make_robot", "edit_draft", "retry_sync",
-                   "skip_sync", "review_draft", "save_draft", "start_run", "run_again", "discard_draft",
+                   "skip_sync", "review_draft", "save_draft", "start_run", "discard_draft",
                    "show_step", "open_source_page", "web_search", "open_source", "control", "pick",
                    "resume_run"]
 #: Actions that aren't record writes; the coverage check counts only writes.
@@ -201,8 +201,7 @@ TOOLS = [
         "\"run latest of Drug A/B\"; a well is always open{target}); "
         "back; make_robot; "
         "edit_draft{path,value} (draft_open only); review_draft; save_draft (later); "
-        "start_run{target?} (the open draft, else the protocol on screen or named); "
-        "run_again{target?} (a finished protocol's next run: \"run X again\"); discard_draft; "
+        "start_run{target?} (the open draft, else the protocol on screen or named); discard_draft; "
         "show_step{step} / open_source_page{step?} (a draft's pipetting step, 1-based); "
         "web_search{query} ONLY for outside knowledge the record and protocol can't hold (reagent "
         "limits, stability, general method facts); query = the general question, never wells, run "
@@ -858,6 +857,9 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     b, which = button_match(text, shown, vslots)
     b = b or (None if which else control_call(text, v["current"]["screen"],
                                               store.screen_items.get(v["current"]["screen"])) or start_call(text))
+    if b is None and not which and v["current"]["screen"] in ("home", "protocol_detail") \
+            and (pid := store.protocol_by_title(button_words(text))):
+        b = {"name": "open", "args": {"target": f"protocol:{pid}"}}  # a row's title said: it opens (done: refused)
     # what the turn was matched against (iPad: "Continue" did nothing)
     print(f"[turn] screen={v['current']['screen']}:{v['current'].get('target') or ''} "
           f"buttons={[x['say'] for sid in shown for x in buttons_for(sid, vslots)]} "

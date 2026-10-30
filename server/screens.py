@@ -325,6 +325,4 @@ def start_call(text: str) -> dict | None:
     t = re.sub(r" (?:one|protocol)$", "", t).strip()
     if t in ("it", "this", "that", "this one", "that one") or re.fullmatch(r"\d+", t):
         t = ""
-    # "again" is Run again: the one way to run a finished protocol once more
-    again = said.endswith((" again", " one more time"))
-    return {"name": "run_again" if again else "start_run", "args": {"target": t}}
+    return {"name": "start_run", "args": {"target": t}}

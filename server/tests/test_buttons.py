@@ -70,6 +70,8 @@ def fresh(sid: str, b: dict | None = None) -> RecordStore:
     target = TARGET.get(sid, "")
     if sid == "web_answer" and ((b or {}).get("when") or {}).get("status") == "failed":
         target = "s2"
+    if sid == "protocol_detail":
+        target = st.r["run"]["protocol_id"]  # the protocol of the run going (Continue shows there)
     if sid == "run_view":
         status = ((b or {}).get("when") or {}).get("status")
         target = st.r["run"]["run_id"] if status == "active" else paused if status == "paused" else finished

@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import server.api as api  # noqa: E402
 from server import protocol as proto  # noqa: E402
+from server import runs as runlog  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
 DOC = "Media test\nSeed 3 control wells with cells.\nAdd 100 uL media to all wells.\nAdd PBS to control wells.\nIncubate 30 min."
@@ -127,7 +128,7 @@ assert (was["status"], was["state"]) == ("paused", "Paused at step 2"), was
 print("SF6 ok: start_run pauses the run going, no card")
 
 # SF7. A finished run's Start run (shown greyed) is refused: its protocol is
-# done. Run again ("run it again") starts the next run at once.
+# done, and "run it again" is the same start, refused too.
 from server.screens import buttons_for  # noqa: E402
 
 new = api.store.r["run"]["run_id"]
@@ -140,12 +141,12 @@ assert [(b["say"], b.get("look")) for b in bs] == [("Start run", "disabled"), ("
 j = said("start run")
 assert j["reply"] == "Media test is finished." and not api.store.r.get("run"), j
 j = said("run it again")
-assert j["route"] == "grammar" and not j["cards"] and api.store.r["run"]["run_id"] != new, j
-assert j["reply"].startswith("Run 2 started. Step 1: "), j
-print("SF7 ok: a finished run's Start run is refused; Run again starts the next one")
+assert j["reply"] == "Media test is finished." and not api.store.r.get("run"), j
+print("SF7 ok: a finished run's Start run and run again are refused")
 
 # SF8. A paused run continues where it stopped; the run going pauses.
 api.store.r["view"]["current"] = {"screen": "home", "target": ""}
+act("start_run", target="Demo protocol")
 j = act("open", target=f"run:{old}")
 bs = buttons_for("run_view", api.store.view_slots("run_view", old))
 assert [b["say"] for b in bs] == ["Continue", "Back"] and bs[0]["action"] == "resume_run", bs
@@ -226,9 +227,10 @@ assert api.store.r["view"]["current"]["screen"] == "main" and api.store.r["view"
 print("SF13 ok: start run closes the import flow")
 
 # SF14. Again by voice, no model: a saved protocol picked on Home -> Start
-# run is there and on; once its run finished it is done: "start a new run of
-# the media one" is refused, "run Media test again" adds the next run under
-# it; a draft waiting shows Review on Home.
+# run is there and on; "run Media test again" / "start a new run of the
+# media one" add the next run under it (the one going pauses); once its
+# newest run finished it is done and both are refused; a draft waiting
+# shows Review on Home.
 from server.screens import buttons_for  # noqa: E402
 
 api.store = fresh()
@@ -240,17 +242,20 @@ says = [b["say"] for b in buttons_for("protocol_detail", api.store.view_slots("p
 assert says == ["Start run", "Import protocol", "Searches"], says
 j = said("start run")
 assert api.store.r["run"]["protocol_id"] == pid and cur()["screen"] == "main", j
-api.store._finish_locked("finished")
-api.store.r["view"] = {**api.store.r["view"], "current": {"screen": "home", "target": ""}, "stack": []}
-j = said("Start a new run of the media one")
-assert j["reply"] == "Media test is finished." and not api.store.r.get("run"), j
-for phrase in ("run Media test again", "run the media one again"):
+for phrase in ("run Media test again", "Start a new run of the media one"):
+    api.store.r["view"] = {**api.store.r["view"], "current": {"screen": "home", "target": ""}, "stack": []}
     j = said(phrase)
     assert j["route"] == "grammar" and api.store.r["run"]["protocol_id"] == pid, (phrase, j)
-    api.store._finish_locked("finished")
-    api.store.r["view"] = {**api.store.r["view"], "current": {"screen": "home", "target": ""}, "stack": []}
 nums = [r["label"] for r in api.store.run_summaries(api.store.all_run_docs()) if r["protocol_id"] == pid]
 assert nums == ["Run 3", "Run 2", "Run 1"], nums
+for d in api.store.all_run_docs():  # every run of it finished: done
+    if d.get("status") == "paused":
+        runlog.write_run({**d, "status": "finished"}, api.store.root)
+api.store._finish_locked("finished")
+api.store.r["view"] = {**api.store.r["view"], "current": {"screen": "home", "target": ""}, "stack": []}
+for phrase in ("run Media test again", "Start a new run of the media one"):
+    j = said(phrase)
+    assert j["reply"] == "Media test is finished." and not api.store.r.get("run"), (phrase, j)
 j = said("start a run")  # Home, nothing picked: which one
 assert "Which protocol" in j["reply"] and not api.store.r.get("run"), j
 api.store.save_draft(proto.build_draft(RAW, proto.evidence_from_text(DOC + " v2"), "media2.pdf"))
@@ -269,30 +274,41 @@ assert lib.source_hash([b"a"]) != lib.source_hash([b"b"])
 print("SF15 ok: same original, same hash")
 
 # SF16. A done protocol (its newest run finished, none going or paused) is
-# off: tap, words and model are refused with one line; only Run again works.
-# A protocol with a paused run stays on.
+# off: tap, its title said, words and model are all refused with one line.
+# A protocol on (new, or with a paused run) opens when its title is said.
 api.store = fresh()
 said("later")
 pid = cur()["target"]
+api.store.r["view"].update(current={"screen": "home", "target": ""}, stack=[])
+j = said("Media test")
+assert cur() == {"screen": "protocol_detail", "target": pid} and j["route"] == "grammar", j
 said("start run")
 api.store._finish_locked("finished")
 home = lambda: api.store.r["view"].update(current={"screen": "home", "target": ""}, stack=[])  # noqa: E731
 home()
 row = lambda: next(p for p in c.get("/protocols").json()["protocols"] if p["id"] == pid)  # noqa: E731
 assert (row()["status"], row()["enabled"]) == ("done", False), row()
-for j in (act("open", target=f"protocol:{pid}"), said("start a run of Media test"), act("start_run", target=pid)):
+for j in (act("open", target=f"protocol:{pid}"), said("Media test"), said("open media test"),
+          said("start a run of Media test"), said("run Media test again"), act("start_run", target=pid)):
     assert j["reply"] == "Media test is finished." and cur()["screen"] == "home" and not api.store.r.get("run"), j
 for call in ({"name": "start_run", "args": {"target": pid}}, {"name": "open", "args": {"target": f"protocol:{pid}"}}):
     r = api.store.apply_calls([{**call, "from_model": True}], "voice", "start media", "spark", {})
     assert r["messages"] == ["Media test is finished."] and not api.store.r.get("run"), r
 assert cur()["screen"] == "home"
-j = act("run_again", target=pid)
-assert j["reply"].startswith("Run 2 started. Step 1: ") and api.store.r["run"]["protocol_id"] == pid, j
-assert (row()["status"], row()["enabled"]) == ("active", True), row()
-api.store._finish_locked("paused")
+last = api.store.all_run_docs()[0]
+runlog.write_run({**last, "status": "paused"}, api.store.root)
 assert (row()["status"], row()["enabled"]) == ("paused", True), row()
-home()
-j = act("open", target=f"protocol:{pid}")
+j = said("Media test")
 assert cur() == {"screen": "protocol_detail", "target": pid}, j
-print("SF16 ok: done protocols are off except Run again; paused stays on")
+print("SF16 ok: done protocols are off everywhere; a title said opens one that's on")
+
+# SF17. On a protocol's page Continue shows only while a run of that protocol
+# goes; Home shows it for any run going.
+api.store.r["view"].update(current={"screen": "home", "target": ""}, stack=[])
+said("Media test")
+said("start run")  # a run of it goes
+says = lambda sid, t: [b["say"] for b in buttons_for(sid, api.store.view_slots(sid, t))]  # noqa: E731
+assert api.store.r["run"]["protocol_id"] == pid and "Continue" in says("protocol_detail", pid)
+assert "Continue" not in says("protocol_detail", "another-protocol") and "Continue" in says("home", "")
+print("SF17 ok: Continue only on the page of the protocol going")
 print("ALL PASS")
