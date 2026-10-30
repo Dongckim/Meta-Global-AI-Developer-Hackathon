@@ -33,16 +33,35 @@ struct ConfirmScreen: View {
                 .benchCard(radius: 44 * u)
                 .modifier(ShakeIf(on: cards.first?.kind == "catch" && cards.count == 1, u: u))
                 .enter(.pop, u: u)
-            let row = buttons[layout] ?? []
+            // big buttons (Figma: two, 360 x 93, 36 apart); a `look: text` answer is a
+            // small line under them ("Not yet"), said or tapped the same
+            let all = buttons[layout] ?? []
+            let row = all.filter { $0.look != "text" }
+            let small = all.filter { $0.look == "text" }
             HStack(spacing: 36 * u) {
                 ForEach(Array(row.enumerated()), id: \.offset) { i, b in
-                    // two buttons 360 each under the 756 card; three share it
                     SayButton(button: b, kind: i == 0 ? .primary : .secondary, size: 34 * u, perform: answer)
                         .frame(width: (756 - 36 * CGFloat(max(1, row.count) - 1)) / CGFloat(max(1, row.count)) * u)
                         .modifier(EntranceFor(primary: i == 0, order: i + 1, u: u))
                 }
             }
             .frame(width: 756 * u, alignment: .leading)
+            // under the row without moving the card and buttons off their Figma place
+            .overlay(alignment: .bottom) {
+                if !small.isEmpty {
+                    HStack(spacing: 36 * u) {
+                        ForEach(Array(small.enumerated()), id: \.offset) { i, b in
+                            Button { answer(b) } label: {
+                                (Say.prefix(Theme.text2) + Text(b.say).fontWeight(.semibold).foregroundStyle(Theme.text1))
+                                    .font(Theme.ui(26 * u))
+                            }
+                            .buttonStyle(.plain)
+                            .enter(.rise, row.count + 1 + i, u: u)
+                        }
+                    }
+                    .offset(y: 62 * u)
+                }
+            }
         }
         .id(cards.map(\.id).joined())  // a new card replays the entrance
     }
@@ -57,6 +76,11 @@ struct ConfirmScreen: View {
 
     private func single(_ c: ServerCard) -> some View {
         VStack(spacing: 0) {
+            if let ctx = c.context, !ctx.isEmpty {
+                Text(ctx).font(Theme.ui(24 * u)).tracking(-0.3 * u).foregroundStyle(Theme.text2)
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                    .padding(.bottom, 18 * u)
+            }
             if c.kind == "next_step", let d = c.detail, !d.isEmpty {
                 Text(d).font(Theme.ui(28 * u)).tracking(-0.34 * u).foregroundStyle(Theme.text2)
                     .padding(.bottom, 22 * u)
@@ -85,6 +109,8 @@ struct ConfirmScreen: View {
             }
         }
         .frame(maxWidth: .infinity)
+        // ③c's card height (Figma 37:13777): the not-marked card sits where the catch card does
+        .frame(minHeight: c.kind == "unmarked" ? (360 - 2 * 56) * u : 0)
     }
 
     private var checklist: some View {

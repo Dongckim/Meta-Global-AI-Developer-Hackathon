@@ -388,15 +388,52 @@ j = c.post("/input", json={"text": "back", "session": "ho"}).json()  # sheet up:
 assert j["reply"] == "Finish sharing first." and st.r["view"]["current"]["screen"] == "export_files", j
 j = c.post("/input", json={"action": {"id": "share_result", "args": {"done": "no"}}, "session": "ho"}).json()
 assert j["reply"] == "Not shared. Say export to try again." and st.r["view"]["current"]["screen"] == "export_files", j
+c.post("/input", json={"text": "done", "session": "ho"})  # not shared, and done: Home
+assert st.r["view"]["current"]["screen"] == "home" and st.r["view"]["stack"] == [], st.r["view"]
+c.post("/input", json={"action": {"id": "navigate", "args": {"screen": "export_files", "target": run_id}},
+                       "session": "ho"})  # the approval still holds: straight back to the files
+assert st.r["view"]["current"] == {"screen": "export_files", "target": run_id}, st.r["view"]
 c.post("/input", json={"text": "export", "session": "ho"})
 j = c.post("/input", json={"action": {"id": "share_result", "args": {"done": "yes"}}, "session": "ho"}).json()
 assert st.r["view"]["current"] == {"screen": "exported", "target": run_id}, st.r["view"]
 assert j["reply"] == "Shared protocol.py and plate_map.csv. A copy stays with the run.", j
 assert runlog.get(run_id, st.root)["handoff"]["exported"] and "sharing" not in runlog.get(run_id, st.root)["handoff"]
-j = c.post("/input", json={"text": "done", "session": "ho"}).json()
-assert st.r["view"]["current"] == {"screen": "run_view", "target": run_id}, st.r["view"]
-print("HO9 ok: step, open PDF, looks right, export (share sheet, cancel, again, shared), done; "
-      "HO8 ok: run record untouched")
+j = c.post("/input", json={"text": "done", "session": "ho"}).json()  # shared, and done: Home
+assert st.r["view"]["current"]["screen"] == "home" and st.r["view"]["stack"] == [], st.r["view"]
+
+# Home: the finished run's robot code, each final protocol step with the lines it became
+code = c.get(f"/runs/{run_id}").json()["handoff"]
+lines = code["code"].splitlines()
+assert code["code"] == code_for(plan) and code["exported"] is True
+assert "# --- setup" in lines[code["setup"][0] - 1] and lines[code["setup"][1] - 1].strip() == "# --- steps ---", code["setup"]
+assert [(x["n"], x["title"], x["detail"]) for x in code["steps"]] == [
+    (1, "Add medium", "100 µL · B2, B3, B4, C2, C4"), (2, "Add PBS", "10 µL · B2, B4"),
+    (3, "Add Drug A", "0.01 mL · C2, C9"), (4, "Incubate", "35 min")], code["steps"]
+for x in code["steps"]:
+    a, b = x["lines"]
+    assert lines[a - 1].strip().startswith(f'protocol.comment("Step {x["n"]}:'), (x, lines[a - 1])
+    assert a <= b and not any("protocol.comment(\"Step" in ln for ln in lines[a:b]), x  # up to the next step
+assert [x["color"] for x in code["steps"]] == [hand.NEUTRAL_COLOR, hand.LIQUID_COLORS[0], hand.NEUTRAL_COLOR, hand.WAIT_COLOR]
+assert code["steps"][-1]["lines"][1] == len(lines) and code["steps"][3]["changes"] == ["ran 35 min (plan 30 min)"]
+# Home: the run record shares the files too (Share takes the greyed Start run's place)
+c.post("/input", json={"action": {"id": "navigate", "args": {"screen": "run_view", "target": run_id}}, "session": "ho"})
+slots = c.get("/record").json()["view"]["slots"]
+assert slots.get("status") == "finished" and slots.get("code") == "yes", slots
+j = c.post("/input", json={"text": "share", "session": "ho"}).json()
+assert [a["action"] for a in j["ui"]] == ["share"] and st.r["view"]["current"]["screen"] == "run_view", j
+j = c.post("/input", json={"text": "back", "session": "ho"}).json()
+assert j["reply"] == "Finish sharing first." and st.r["view"]["current"]["screen"] == "run_view", j
+j = c.post("/input", json={"action": {"id": "share_result", "args": {"done": "yes"}}, "session": "ho"}).json()
+assert j["reply"] == "Shared protocol.py and plate_map.csv." and st.r["view"]["current"]["screen"] == "run_view", j
+c.post("/input", json={"text": "back", "session": "ho"})
+assert st.r["view"]["current"]["screen"] == "home", st.r["view"]
+# the same map when Spark writes the comments in single quotes (a real run did)
+doc = runlog.get(run_id, st.root)
+doc["handoff"]["code"] = doc["handoff"]["code"].replace('comment("', "comment('").replace('")\n', "')\n")
+assert "comment('Step 1:" in doc["handoff"]["code"]
+assert [x["lines"] for x in st.handoff_code(doc)["steps"]] == [x["lines"] for x in code["steps"]]
+print("HO9 ok: step, open PDF, looks right, export (share sheet, cancel, done → Home, shared, done → Home); "
+      "HO8 ok: run record untouched; HO11 ok: Home shows the code by step")
 
 # HO2. A changed run record clears the approval: back to ⑨0, said why.
 doc = runlog.get(run_id, st.root)

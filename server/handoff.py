@@ -66,6 +66,8 @@ DECK = {"robot": "Flex", "api_level": API_LEVEL,
 #: (medium) takes the neutral.
 LIQUID_COLORS = ["#9E9E9E", "#2F80ED", "#F2994A", "#27AE60", "#9B51E0", "#EB5757"]
 NEUTRAL_COLOR = "#F7C6D0"
+#: A wait (no liquid) on Home's code map.
+WAIT_COLOR = "#C7C7CC"
 #: Reservoir fill: what the steps draw plus 10 %.
 OVERAGE = 1.1
 

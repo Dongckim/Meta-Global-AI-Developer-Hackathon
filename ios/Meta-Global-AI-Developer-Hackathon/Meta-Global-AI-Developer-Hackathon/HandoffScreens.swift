@@ -206,8 +206,6 @@ struct HandoffFilesScreen: View {
     var buttons: [ScreenButton]
     var u: CGFloat
     var perform: (ScreenButton) -> Void
-    /// Where the Export button is (screen points): the iPad share sheet's arrow.
-    var onAnchor: (CGRect) -> Void = { _ in }
 
     /// The columns ⑨b shows of plate_map.csv, by header name.
     private static let shown = [("well", "Well"), ("group", "Group"), ("contents", "Contents"), ("status", "Status")]
@@ -265,13 +263,6 @@ struct HandoffFilesScreen: View {
             }
             .frame(maxHeight: .infinity)
             SayRow(buttons: buttons, u: u, perform: perform).frame(width: 620 * u)
-                .background {
-                    GeometryReader { g in
-                        Color.clear
-                            .onAppear { onAnchor(g.frame(in: .global)) }
-                            .onChange(of: g.frame(in: .global)) { _, f in onAnchor(f) }
-                    }
-                }
         }
     }
 
@@ -357,13 +348,14 @@ struct ExportedScreen: View {
 
 // MARK: - Share sheet
 
-/// The iPad share sheet (AirDrop, Save to Files, Mail) for the hand off
-/// files, its popover arrow on ⑨b's Export button. `done` is false when it
-/// was cancelled.
+/// The share sheet (AirDrop, Save to Files, Mail) for the hand off files, as
+/// a sheet that comes up from the bottom (not a popover). `done` is false
+/// when it was cancelled.
 enum SharePresenter {
     @MainActor
-    static func present(_ urls: [URL], from anchor: CGRect, done: @escaping (Bool) -> Void) {
+    static func present(_ urls: [URL], done: @escaping (Bool) -> Void) {
         let vc = UIActivityViewController(activityItems: urls, applicationActivities: nil)
+        vc.modalPresentationStyle = .formSheet
         vc.completionWithItemsHandler = { _, completed, _, _ in done(completed) }
         guard let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
                 .flatMap(\.windows).first(where: \.isKeyWindow),
@@ -373,11 +365,125 @@ enum SharePresenter {
         }
         while let next = top.presentedViewController { top = next }
         if let pop = vc.popoverPresentationController {
+            // only if UIKit still makes it a popover: point it at the bottom middle
             pop.sourceView = window
-            pop.sourceRect = anchor == .zero ? CGRect(x: window.bounds.midX, y: window.bounds.maxY - 80, width: 1, height: 1)
-                : anchor
-            pop.permittedArrowDirections = [.down, .up]
+            pop.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.maxY - 80, width: 1, height: 1)
         }
         top.present(vc, animated: true)
+    }
+}
+
+// MARK: - Home: a finished run's code (Run record, Code tab)
+
+private extension RunCode.Step {
+    var tone: Color { Color(hex: UInt32(color.dropFirst(), radix: 16) ?? 0xC7C7CC) }
+}
+
+/// protocol.py with line numbers; a bar in the gutter marks which final
+/// protocol step each line belongs to (its liquid color, "1", "2" at the
+/// step's first line, "S" for setup). The selected step's lines light up
+/// and scroll into view; tapping a line selects its step.
+struct RunCodeView: View {
+    let code: RunCode
+    @Binding var selected: Int?
+    var u: CGFloat
+
+    private var lines: [String] { code.code.components(separatedBy: "\n") }
+
+    /// The step a line belongs to (0: setup), with its range.
+    private func owner(_ line: Int) -> (n: Int, range: ClosedRange<Int>, tone: Color)? {
+        if let s = code.steps.first(where: { $0.lines.map { $0[0]...$0[1] ~= line } ?? false }), let l = s.lines {
+            return (s.n, l[0]...l[1], s.tone)
+        }
+        if code.setup.count == 2, code.setup[0]...code.setup[1] ~= line {
+            return (0, code.setup[0]...code.setup[1], Theme.text4)
+        }
+        return nil
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { i, text in
+                        row(i + 1, text).id(i + 1)
+                    }
+                }
+                .padding(.vertical, 24 * u)
+            }
+            .onChange(of: selected) { _, n in
+                guard let n else { return }
+                let first = n == 0 ? code.setup.first : code.steps.first { $0.n == n }?.lines?.first
+                if let first { withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo(first, anchor: .top) } }
+            }
+        }
+    }
+
+    private func row(_ line: Int, _ text: String) -> some View {
+        let own = owner(line)
+        let on = own != nil && own?.n == selected
+        return HStack(alignment: .top, spacing: 0) {
+            ZStack {
+                if let own {
+                    Rectangle().fill(own.tone.opacity(on ? 1 : 0.45)).frame(width: 6 * u)
+                    if line == own.range.lowerBound {
+                        Text(own.n == 0 ? "S" : "\(own.n)").font(Theme.ui(14 * u, weight: .bold)).foregroundStyle(.white)
+                            .frame(width: 24 * u, height: 24 * u).background(Circle().fill(own.tone))
+                    }
+                }
+            }
+            .frame(width: 34 * u)
+            Text("\(line)").font(Theme.mono(14 * u)).foregroundStyle(Theme.text4)
+                .frame(width: 40 * u, alignment: .trailing).padding(.trailing, 14 * u)
+            // long lines wrap (a transfer's well list stays readable)
+            Text(text.isEmpty ? " " : text).font(Theme.mono(15 * u)).foregroundStyle(Theme.text1)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2 * u)
+        .background(on ? Theme.polishBlue.opacity(0.08) : .clear)
+        .contentShape(Rectangle())
+        .onTapGesture { if let own { selected = own.n } }
+    }
+}
+
+/// The final protocol beside the code: setup, then each step with what ran
+/// and what changed from the plan; tapping one lights its lines.
+struct RunCodeSteps: View {
+    let code: RunCode
+    @Binding var selected: Int?
+    var u: CGFloat
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6 * u) {
+                item(0, "Setup", "Deck, pipettes, liquids", [], Theme.text4)
+                ForEach(code.steps, id: \.n) { s in
+                    item(s.n, s.title, s.detail, s.changes, s.tone)
+                }
+            }
+        }
+    }
+
+    private func item(_ n: Int, _ title: String, _ detail: String, _ changes: [String], _ tone: Color) -> some View {
+        Button { selected = n } label: {
+            HStack(alignment: .top, spacing: 14 * u) {
+                Text(n == 0 ? "S" : "\(n)").font(Theme.ui(16 * u, weight: .bold)).foregroundStyle(.white)
+                    .frame(width: 30 * u, height: 30 * u).background(Circle().fill(tone))
+                VStack(alignment: .leading, spacing: 2 * u) {
+                    Text(title).font(Theme.ui(24 * u, weight: .semibold)).foregroundStyle(Theme.text1)
+                    Text(detail).font(Theme.ui(20 * u)).foregroundStyle(Theme.text2).lineLimit(1)
+                    ForEach(changes, id: \.self) { c in
+                        Text(c).font(Theme.ui(18 * u)).foregroundStyle(Theme.polishBlue).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 8 * u).padding(.horizontal, 12 * u)
+            .background(RoundedRectangle(cornerRadius: 16 * u).fill(selected == n ? Theme.rowFocus : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(n == 0 ? "Setup" : "Step \(n), \(title)")
     }
 }

@@ -48,8 +48,6 @@ struct ContentView: View {
     /// An import is being read (the server says "Reading the protocol…");
     /// a second start is ignored and the import screens are disabled.
     @State private var importing = false
-    /// ⑨b's Export button, where the iPad share sheet points from.
-    @State private var shareAnchor: CGRect = .zero
     /// The import's load pill: shown while reading, "Draft ready" a moment after.
     @State private var importPill: Bool? = nil
     @State private var showImporter = false
@@ -368,7 +366,8 @@ struct ContentView: View {
     private var mainBody: some View {
         VStack(spacing: 0) {
             contractBanners
-            TopHeader(voice: voice, speakText: lastReply, partialText: voice.partialText,
+            // a waiting card with its own header line shows it (pip_voice `cards.<kind>.header`)
+            TopHeader(voice: voice, speakText: lab.cards.first?.header ?? lastReply, partialText: voice.partialText,
                       // the plain bench lists its own timers; cards and the well card show the chip
                       timers: showsBench && lab.cards.isEmpty && selectedWell == nil ? [] : lab.timers,
                       onBlockedTap: openSync, mode: lab.headerMode)
@@ -585,8 +584,7 @@ struct ContentView: View {
         case "simulate":
             SimulateScreen(handoff: h, buttons: buttons(cur.screen), u: u, perform: performButton)
         case "export_files":
-            HandoffFilesScreen(handoff: h, buttons: buttons(cur.screen), u: u, perform: performButton,
-                               onAnchor: { shareAnchor = $0 })
+            HandoffFilesScreen(handoff: h, buttons: buttons(cur.screen), u: u, perform: performButton)
         case "exported":
             ExportedScreen(handoff: h, buttons: buttons(cur.screen), u: u, perform: performButton)
         default:
@@ -703,7 +701,8 @@ struct ContentView: View {
             RemainingCard(lab: lab, u: u)
                 .padding(.top, 10 * u)
                 .enter(.pop, 2, u: u)
-            if let b = screens.first(where: { $0.id == "main" })?.buttons?.first {
+            // Next step, or Finish on the last step (registry `when`, filled from the view's slots)
+            if let b = buttons("main").first {
                 SayButton(button: b, size: 34 * u) { sendAction($0.action, $0.args ?? [:]) }
                     .padding(.top, 36 * u)
                     .modifier(CommandIn(u: u, delay: Theme.Motion.enterStep * 3))
@@ -1090,7 +1089,7 @@ struct ContentView: View {
                 var urls: [URL] = []
                 for f in files { urls.append(try await PipClient.download(f.url, name: f.name, into: dir)) }
                 Log.voice.info("[share] up files=\(urls.count)")
-                SharePresenter.present(urls, from: shareAnchor) { done in
+                SharePresenter.present(urls) { done in
                     Log.voice.info("[share] closed done=\(done)")
                     voice.systemSheet(false)
                     sendAction("share_result", ["done": done ? "yes" : "no"])

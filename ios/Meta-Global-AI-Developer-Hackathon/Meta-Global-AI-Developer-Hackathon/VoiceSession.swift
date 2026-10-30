@@ -957,7 +957,8 @@ struct TopHeaderView: View {
                         .foregroundStyle(status ? Theme.blue : .primary)
                 }
                 // 22 px (design .t24) by review; the design .pip is 26
-                WordReveal(text: text, dots: dots, size: px(22), lines: 2,
+                // one line on every screen; a longer one ends in "…"
+                WordReveal(text: text, dots: dots, size: px(22), lines: 1,
                            color: muted ? Theme.mutT : (status ? Theme.blue : .primary),
                            prefix: you ? "You" : nil, weight: status ? .medium : .regular,
                            dotColor: status ? Theme.blue : Theme.mutT)

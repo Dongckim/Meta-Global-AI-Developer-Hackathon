@@ -2195,7 +2195,8 @@ async def run_get(run_id: str):
     lab = store.run_label(doc)
     # the record's bench as the app draws it (same rule as the live snapshot)
     doc = {**doc, "record": {**(doc.get("record") or {}), "bench": store.bench_view(doc.get("record") or {})}}
-    return {"run": doc, "label": lab["display"], "spoken": lab["spoken"]}
+    # the robot code it became, step by step (Home: Run record, Code tab)
+    return {"run": doc, "label": lab["display"], "spoken": lab["spoken"], "handoff": store.handoff_code(doc)}
 
 
 @app.delete("/protocols/draft")

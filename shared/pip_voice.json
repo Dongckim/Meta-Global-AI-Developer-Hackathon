@@ -172,7 +172,7 @@
     "{wells_spoken} is already out."
   ],
   "cards": {
-    "_note": "What a card shows: title (big line) and detail (small line) per card kind; {question} / {detail} are the spoken question and the old detail. Slots: wells, group, reason, note, step, done, minutes, label. An empty slot drops its ' · ' part.",
+    "_note": "What a card shows: title (big line) and detail (small line) per card kind, optional context (small line over the title) and header (the header's one line while the card waits); {question} / {detail} are the spoken question and the old detail. Slots: wells, group, reason, note, step, done, minutes, label. An empty slot drops its ' · ' part.",
     "confirm_exclude": {"title": "Exclude {wells}?", "detail": "{group} · {reason}"},
     "confirm_redo": {"title": "Redo {wells}?", "detail": "{group} · {note}"},
     "catch": {"title": "{wells} isn't in this plan", "detail": "Record anyway?"},
@@ -181,7 +181,7 @@
     "new_run": {"title": "{run} is finished", "detail": "Start a new run of {name}?"},
     "confirm_search": {"title": "Search the web?", "detail": "“{query}”"},
     "confirm_photo": {"title": "Send a photo?", "detail": "Only the part you ask about leaves the iPad"},
-    "unmarked": {"title": "{wells} not marked", "detail": "Mark all {n} done and go to step {step}?"},
+    "unmarked": {"context": "Step {now} · {now_title}", "title": "{wells} not marked", "detail": "Mark all {n} done and go to step {step}?", "header": "{wells} not marked."},
     "import_known": {"title": "Already saved as {name}", "detail": "Open it or review again?"},
     "save_as": {"title": "{name} already exists", "detail": "Save as version {version}, or keep it separate?"},
     "default": {"title": "{question}", "detail": "{detail}"}
@@ -239,6 +239,8 @@
   "handoff_needs_you": ["It didn't pass: {error}. Fix it?"],
   "handoff_timing_run": ["Step {step} keeps the time it ran."],
   "handoff_timing_plan": ["Step {step} uses the plan's time."],
+  "handoff_shared": ["Shared protocol.py and plate_map.csv."],
+  "handoff_no_code": ["This run has no robot code yet. Say make the robot protocol."],
   "handoff_share": ["Pick where to send them."],
   "handoff_not_shared": ["Not shared. Say export to try again."],
   "handoff_sharing": ["Finish sharing first."],

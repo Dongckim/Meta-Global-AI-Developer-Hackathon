@@ -71,6 +71,18 @@ def card_lines(kind: str, slots: dict) -> tuple[str, str]:
     return title or slots.get("question") or "", detail
 
 
+def card_more(kind: str, slots: dict) -> tuple[str, str]:
+    """A card's optional small line over the title (`context`) and the one
+    line the header shows while it waits (`header`), from pip_voice.json
+    `cards`; "" when the kind has none."""
+    from collections import defaultdict
+    from server.tone import section
+    tpl = section("cards").get(kind)
+    tpl = tpl if isinstance(tpl, dict) else {}
+    fill = lambda t: (t or "").format_map(defaultdict(str, {k: v for k, v in slots.items() if v is not None}))
+    return fill(tpl.get("context")).strip(" ·"), fill(tpl.get("header")).strip()
+
+
 def step_short_title(step: dict) -> str:
     """Screen title of a plan step (<= 4 words): the extracted short_title,
     else "Add <liquid>" for a pipette step, else the step sentence through

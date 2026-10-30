@@ -218,6 +218,10 @@ struct ServerCard: Decodable, Equatable, Identifiable {
     var question: String
     var title: String?
     var detail: String?
+    /// Small line over the title ("Step 1 · Add medium"), when the kind has one.
+    var context: String?
+    /// The header's one line while this card waits ("B2–B8 not marked.").
+    var header: String?
     var ts: Double
     /// What a yes would do (op and its wells / step); drawn, never acted on here.
     var payload: CardPayload?

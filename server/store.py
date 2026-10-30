@@ -408,11 +408,14 @@ class RecordStore:
                 out.update({"run": self.run_label(self.active_run_doc())["display"], "step": self.current_step()})
         elif screen == "main" and run and steps:
             i = min(self.r.get("step_index", 0), len(steps) - 1)
-            out = {"step": i + 1, "of": len(steps), "title": labels.step_short_title(steps[i])}
+            out = {"step": i + 1, "of": len(steps), "title": labels.step_short_title(steps[i]),
+                   "last": "yes" if i >= len(steps) - 1 else "no"}  # the last step's button is Finish
         elif screen == "run_view" and (doc := self._viewing_run()):
             lab = self.run_label(doc)
             out = {"name": lab["display"], "state": lab["state"],
                    "status": doc.get("status") if doc.get("status") in ("active", "paused") else "finished"}
+            if out["status"] == "finished":  # its robot code passed: Share instead of a greyed Start run
+                out["code"] = "yes" if self.handoff_code(doc) else "no"
         elif screen == "import_file" and "import_file" in self.screen_items:
             # only once the app said what's there: never "no files" before the list arrives
             k = len(self.screen_items["import_file"])
@@ -1266,18 +1269,22 @@ class RecordStore:
         conds = (self.r.get("plan") or {}).get("conditions") or {}
         group = next((c.get("label") for c in conds.values() if wells and wells[0] in (c.get("wells") or [])), "")
         target = p.get("target") if isinstance(p.get("target"), int) else None
-        title, sub = labels.card_lines(kind, {
+        fill = {
             "question": question, "detail": detail or "", "wells": join_wells_ranges(wells),
             "group": group, "reason": p.get("reason"), "note": p.get("note"), "label": p.get("label"),
             "step": target, "done": target - 1 if target else None,
             "minutes": fmt_minutes(p["minutes"]) if p.get("minutes") is not None else None,
-            **(slots or {})})
+            **(slots or {})}
+        title, sub = labels.card_lines(kind, fill)
+        context, header = labels.card_more(kind, fill)
         card = {
             "id": uuid.uuid4().hex[:8],
             "kind": kind,
             "question": question,  # spoken
             "title": title,  # shown big, and the detail small (pip_voice.json `cards`)
             "detail": sub,
+            **({"context": context} if context else {}),  # small line over the title
+            **({"header": header} if header else {}),  # the header's one line while it waits
             "payload": payload,
             "ts": time.time(),
         }
@@ -1594,6 +1601,7 @@ class RecordStore:
             res["info"]["setup_done"] = True
         elif name == "next_step":
             steps = self.steps()
+            steps_full = self.r["plan"]["steps"]
             if self.r["step_index"] >= len(steps) - 1:
                 res["messages"].append("Already at the last step")
             elif not force and (left := sort_wells(self._left_now() or [])):
@@ -1602,7 +1610,8 @@ class RecordStore:
                 rng = join_wells_ranges(left)
                 self._card(res, "unmarked", say("unmarked_step", session, wells=rng, n=len(left), step=nxt + 1),
                            None, {"op": "next_step", "target": nxt + 1, "unmarked": left},
-                           {"wells": rng, "n": len(left), "step": nxt + 1})
+                           {"wells": rng, "n": len(left), "step": nxt + 1, "now": nxt,
+                            "now_title": labels.step_short_title(steps_full[nxt - 1])})
             elif not force:
                 nxt = self.r["step_index"] + 1
                 self._card(res, "next_step", say("step_move", session, step=nxt + 1),
@@ -2081,8 +2090,16 @@ class RecordStore:
         self._push_view(screen, f"{run_id}:{int(n)}")
         res["messages"].append(self.screen_line(screen, f"{run_id}:{int(n)}"))
 
+    def _share_run(self) -> str:
+        """The finished run whose files Share sends: a hand off screen's, or
+        the run record open on Home (run_view: Share and its result only)."""
+        v = self.r["view"]["current"]
+        return self._handoff_here() or (v.get("target") or "" if v.get("screen") == "run_view" else "")
+
     def _handoff_action(self, name: str, args: dict, session: dict, res: dict) -> None:
         run_id = self._handoff_here()
+        if not run_id and name in ("export_handoff", "share_result"):
+            run_id = self._share_run()
         doc = self._handoff_doc(run_id)
         if doc is None:
             res["messages"].append(say("handoff_none", session))
@@ -2117,6 +2134,9 @@ class RecordStore:
                 self.spawn_handoff(run_id)
         elif name == "export_handoff":
             if not self._handoff_ok(doc) or h.get("stage") != "passed":
+                if self.r["view"]["current"].get("screen") == "run_view":
+                    res["messages"].append(say("handoff_no_code", session))
+                    return
                 self._open_handoff(res, session, run_id, "export_files")
                 return
             out = self.root / "exports" / run_id
@@ -2148,6 +2168,9 @@ class RecordStore:
             if str(args.get("done") or "") == "yes":
                 h["exported"] = time.time()
                 runlog.write_run(doc, self.root)
+                if self.r["view"]["current"].get("screen") == "run_view":
+                    res["messages"].append(say("handoff_shared", session))  # shared from Home: the record stays
+                    return
                 self._push_view("exported", run_id)
                 res["messages"].append(self.screen_line("exported", run_id))
             else:
@@ -2162,10 +2185,10 @@ class RecordStore:
         return f"{short}_Run{self.run_label(doc).get('number') or 1}"
 
     def _sharing(self) -> bool:
-        """The share sheet is up on ⑨b: it holds the screen (no screen changes)."""
-        if self.r["view"]["current"].get("screen") != "export_files":
+        """The share sheet is up (⑨b, or a run record on Home): it holds the screen."""
+        if self.r["view"]["current"].get("screen") not in ("export_files", "run_view"):
             return False
-        doc = self._handoff_doc(self._handoff_here())
+        doc = self._handoff_doc(self._share_run())
         t = ((doc or {}).get("handoff") or {}).get("sharing")
         return bool(t) and time.time() - t < self.SHARE_HOLD_S
 
@@ -2316,6 +2339,39 @@ class RecordStore:
         gone = [t for t in self.r["timers"] if now - t["started_at"] >= t["minutes"] * 60 + 60]
         self._log_timers(gone, now)
         self.r["timers"] = [t for t in self.r["timers"] if t not in gone]
+
+    def handoff_code(self, doc: dict) -> dict | None:
+        """A finished run's robot code for Home (Run record, Code tab): the
+        final protocol's steps, each with its changes and the lines of
+        protocol.py it became ("Step N" comment to the next), and the setup
+        block's lines. None until the code passed (or once the run changed)."""
+        h = doc.get("handoff") or {}
+        if not (h.get("code") and h.get("stage") == "passed" and self._handoff_ok(doc)):
+            return None
+        lines = h["code"].splitlines()
+        starts = {int(m.group(1)): i + 1 for i, line in enumerate(lines)
+                  if (m := re.search(r'protocol\.comment\(\s*[rRfF]?["\']{1,3}Step (\d+)\b', line))}  # any quotes Spark picks
+        order = sorted(starts.values())
+        end = len(lines)
+        while end and not lines[end - 1].strip():
+            end -= 1
+
+        def span(n: int) -> list[int]:
+            a = starts[n]
+            b = next((x - 1 for x in order if x > a), end)
+            return [a, b]
+        setup = [next((i + 1 for i, line in enumerate(lines) if "# --- setup" in line), 1),
+                 next((i + 1 for i, line in enumerate(lines) if "# --- steps ---" in line), order[0] - 1 if order else end)]
+        rows = {r["index"]: r for r in hand.changes(doc["record"], h.get("timing"))["rows"]}
+        steps = []
+        for s in h["approved"]["steps"]:
+            row = rows.get(s["index"]) or {}
+            color = next((lq["color"] for lq in h["approved"].get("liquids") or [] if lq["liquid"] == s.get("liquid")),
+                         hand.WAIT_COLOR)  # the step's liquid, as the Opentrons App shows it
+            steps.append({"n": s["n"], "title": s["title"], "detail": row.get("run") or "", "color": color,
+                          "plan": row.get("plan") or "", "changes": [c["text"] for c in row.get("changes") or []],
+                          "lines": span(s["n"]) if s["n"] in starts else None})
+        return {"code": h["code"], "setup": setup, "steps": steps, "exported": bool(h.get("exported"))}
 
     def _log_timers(self, timers: list[dict], now: float) -> None:
         """Timers leave `timers`; their actual time stays, in seconds

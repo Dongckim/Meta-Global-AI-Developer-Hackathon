@@ -52,6 +52,26 @@ committed). Milo's line at the top of each screen is the registry screen's
 the registry `buttons` (templated ones like "Step {step}" fill from the view's
 slots).
 
+## Not in the design (디자인에 없음, for Eunbi to check)
+
+States the app draws that have no Figma frame; each is built from the
+nearest frame's parts and should get a look.
+
+- **Not marked card** (③ family, card kind `unmarked`): "Next step" with wells
+  left. ③c's place and size (x 310, w 756, h 360), a small line over the title
+  "Step {n} · {step short title}", title "{wells} not marked", detail "Mark all
+  {n} done and go to step {m}?"; two buttons 360 x 93, 36 apart (primary "Mark
+  them", muted "Skip them") and "Not yet" as a small text button under them.
+  The header shows one line, "{wells} not marked."
+- **⑨0 Final protocol**: the ⑤c-⑤e review screens in final protocol mode
+  (plan → run, Changed badge, the step's changes with their record event;
+  Keep as run / Use plan on a timer step). See `handoff.md`.
+- **⓪b Run record · Code tab**: protocol.py where the plate is, a colored bar
+  and step badge per final protocol step; the steps list on the right.
+- **⓪b Run record · Share**: in place of the greyed Start run once the run's
+  robot code passed.
+- **① Main · Finish**: the last step's button in place of Next step.
+
 ## Later
 
 - ③b checklist **"One by one"** (answer the cards one at a time): needs a card

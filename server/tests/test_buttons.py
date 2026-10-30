@@ -15,7 +15,7 @@ os.environ["MODEL_API_KEY"] = "dummy"
 from fastapi.testclient import TestClient  # noqa: E402
 
 import server.api as api  # noqa: E402
-from server.screens import PLANNED, SCREENS, button_call  # noqa: E402
+from server.screens import PLANNED, SCREENS, button_call, buttons_for  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
 def noid(ui):
@@ -98,11 +98,19 @@ def fresh(sid: str, b: dict | None = None) -> RecordStore:
         doc["handoff"] = {"approved": {"hash": handoff.record_hash(doc["record"]), "ts": 1, "steps": []},
                           "stage": ((b or {}).get("when") or {}).get("stage") or "passed", "attempt": 1}
         runlog.write_run(doc, st.root)
+    if sid == "main" and ((b or {}).get("when") or {}).get("last") == "yes":
+        st.r["step_index"] = len(st.r["plan"]["steps"]) - 1  # the last step: Finish
     if sid == "protocol_detail":
         target = st.r["run"]["protocol_id"]  # the protocol of the run going (Continue shows there)
     if sid == "run_view":
         status = ((b or {}).get("when") or {}).get("status")
         target = st.r["run"]["run_id"] if status == "active" else paused if status == "paused" else finished
+        if ((b or {}).get("when") or {}).get("code") == "yes":
+            # its robot code passed: the record shares it
+            doc = runlog.get(finished, st.root)
+            doc["handoff"] = {"approved": {"hash": handoff.record_hash(doc["record"]), "ts": 1, "steps": []},
+                              "stage": "passed", "attempt": 1, "code": "protocol.comment(\"Step 1: x\")\n"}
+            runlog.write_run(doc, st.root)
     st.r["view"]["current"] = {"screen": sid, "target": target}  # said on its own screen
     return st
 
@@ -159,6 +167,13 @@ assert not j["cards"] and api.store.r["run"]["run_id"] != before and api.store.r
 api.store = fresh("home")
 j = c.post("/input", json={"text": "Continue", "session": "bt"}).json()
 assert api.store.r["view"]["current"]["screen"] == "main", j
+# the last step's button is Finish: said or tapped, it asks to end the run (its yes opens hand off)
+for said in ("Finish", "finish.", "okay finish"):
+    api.store = fresh("main", {"when": {"last": "yes"}})
+    j = c.post("/input", json={"text": said, "session": "bt"}).json()
+    assert [x["kind"] for x in j["cards"]] == ["end_run"] and j["route"] == "grammar", (said, j)
+api.store = fresh("main", {"when": {"last": "no"}})
+assert [b["say"] for b in buttons_for("main", api.store.view_slots("main"))] == ["Next step"]
 print("BT2b ok: Continue / Start run on the run screens, Continue on Home")
 
 # BT3. A button's word is one of its action's registry verbs (one vocabulary).

@@ -5,7 +5,7 @@ import SwiftUI
 // Data: /protocols (short title, source file, steps, wells, run counts) and
 // /runs (server labels: "Run 3", day, "Step 4 of 5" / "Ended at step 3" /
 // "Finished"), a run's record for the run record.
-// Server to do: robot code per run (Code tab).
+// Code tab: the run's protocol.py beside its final protocol steps (RunCodeView).
 
 /// Runs of one protocol, oldest first.
 func runsOf(_ protocolId: String?, in runs: [RunSummary]) -> [RunSummary] {
@@ -275,14 +275,23 @@ struct RunRecordScreen: View {
     @State private var error = ""
     @State private var tab = 0
     @State private var selected: WellSelect?
+    /// Code tab: the run's robot code, and the step lit in it (0: setup).
+    @State private var code: RunCode?
+    @State private var codeStep: Int?
 
     private var summary: RunSummary? { runs.first { $0.runId == runId } }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: Theme.Layout.column * u) {
-                PlateView(lab: rlab, selected: $selected)
-                    .padding(28 * u)
+                Group {
+                    if tab == 3, let code {
+                        // Code tab: protocol.py where the plate was, each step's lines marked
+                        RunCodeView(code: code, selected: $codeStep, u: u)
+                    } else {
+                        PlateView(lab: rlab, selected: $selected).padding(28 * u)
+                    }
+                }
                     .frame(width: 800 * u, height: 566 * u)
                     .benchCard(radius: 44 * u)
                 side.frame(maxWidth: .infinity, alignment: .leading)
@@ -309,7 +318,12 @@ struct RunRecordScreen: View {
                 case 0: notes
                 case 1: timers
                 case 2: searchList
-                default: Text("That isn't ready yet.").foregroundStyle(Theme.text2)  // Code: planned
+                default:
+                    if let code {
+                        RunCodeSteps(code: code, selected: $codeStep, u: u)
+                    } else {
+                        Text("No robot code yet. Say \u{201C}make the robot protocol\u{201D}.").foregroundStyle(Theme.text2)
+                    }
                 }
             }
             .font(Theme.ui(28 * u))
@@ -399,6 +413,7 @@ struct RunRecordScreen: View {
             let r = try await PipClient.runDetail(id: runId)
             doc = r.run
             rlab.sync(r.run.record)
+            code = r.handoff
         } catch {
             self.error = error.localizedDescription
         }

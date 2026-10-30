@@ -137,6 +137,29 @@ struct SearchListResponse: Decodable {
 struct RunDetailResponse: Decodable {
     let run: RunDoc
     let label: String?
+    /// The robot code the run became, step by step (nil until it passed).
+    let handoff: RunCode?
+}
+
+/// A finished run's protocol.py and where each final protocol step sits in
+/// it (server store.handoff_code): 1-based line ranges.
+struct RunCode: Decodable, Equatable {
+    let code: String
+    let setup: [Int]
+    let steps: [Step]
+    let exported: Bool
+
+    struct Step: Decodable, Equatable {
+        let n: Int
+        let title: String
+        let detail: String
+        let plan: String
+        let changes: [String]
+        /// [first, last] line of protocol.py ("Step N" comment to the next step).
+        let lines: [Int]?
+        /// The step's liquid color in the Opentrons App (gray for a wait).
+        let color: String
+    }
 }
 
 enum SSEvent {

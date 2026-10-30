@@ -132,6 +132,10 @@ for answer, expect in (("yes", "done"), ("mark them", "done"), ("skip them", "sk
     said("B2 to B8 done")
     j = said("next step")
     assert j["reply"] == "C2–C8, D2–D8 not marked. Mark all 14 done and go to step 2?", j["reply"]
+    card = unmarked_card()[0]
+    # the card's small line names the step whose wells are left; the header shows one line
+    assert (card["context"], card["title"], card["header"]) == (
+        "Step 1 · Add culture medium", "C2–C8, D2–D8 not marked", "C2–C8, D2–D8 not marked."), card
     said("next step")  # the same question again: one card, not two
     assert len(unmarked_card()) == 1 and api.store.r["step_index"] == 0
     said(answer)
