@@ -236,7 +236,7 @@
   "handoff_simulating": ["Running it on a virtual robot…"],
   "handoff_fixing": ["Fixing the code, try {attempt}…"],
   "handoff_passed": ["All {of} steps match your record. Export?"],
-  "handoff_needs_you": ["It didn't pass: {error}. Write it again?"],
+  "handoff_needs_you": ["It didn't pass: {error}. Fix it?"],
   "handoff_none": ["No finished run to hand off yet."],
   "handoff_private": ["Hand off is off in Private mode."],
   "handoff_changed": ["The run changed since you approved it. Look again?"],

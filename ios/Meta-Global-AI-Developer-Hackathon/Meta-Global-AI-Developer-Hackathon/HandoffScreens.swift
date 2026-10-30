@@ -5,7 +5,7 @@ import SwiftUI
 // protocol is the ⑤c-⑤e review in final protocol mode (StartScreens).
 // Data: snapshot handoff (stage, check, code, csv) and the run's record for
 // the plate (GET /runs/{id}, as the run record draws it). Buttons are the
-// registry's (Export / Write it again / Back, Export, Done).
+// registry's (Export / Fix it / Back, Export, Done).
 
 // MARK: - ⑨ Simulate
 

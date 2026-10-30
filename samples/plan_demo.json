@@ -22,7 +22,7 @@
       "temp_c": null,
       "tip": null,
       "caution": null,
-      "pipette": {"liquid": "vehicle", "volume": null, "unit": null, "wells": ["B2", "B3", "B4", "B5", "B6", "B7", "B8"], "target_label": "Control wells"},
+      "pipette": {"liquid": "vehicle", "volume": 10, "unit": "ul", "wells": ["B2", "B3", "B4", "B5", "B6", "B7", "B8"], "target_label": "Control wells"},
       "wells": ["B2", "B3", "B4", "B5", "B6", "B7", "B8"]
     },
     {
@@ -32,7 +32,7 @@
       "temp_c": null,
       "tip": "do not mix up and down after adding",
       "caution": null,
-      "pipette": {"liquid": "Drug A", "volume": null, "unit": null, "wells": ["C2", "C3", "C4", "C5", "C6", "C7", "C8"], "target_label": "Drug A wells"},
+      "pipette": {"liquid": "Drug A", "volume": 10, "unit": "ul", "wells": ["C2", "C3", "C4", "C5", "C6", "C7", "C8"], "target_label": "Drug A wells"},
       "wells": ["C2", "C3", "C4", "C5", "C6", "C7", "C8"]
     },
     {
@@ -42,7 +42,7 @@
       "temp_c": null,
       "tip": null,
       "caution": null,
-      "pipette": {"liquid": "Drug B", "volume": null, "unit": null, "wells": ["D2", "D3", "D4", "D5", "D6", "D7", "D8"], "target_label": "Drug B wells"},
+      "pipette": {"liquid": "Drug B", "volume": 10, "unit": "ul", "wells": ["D2", "D3", "D4", "D5", "D6", "D7", "D8"], "target_label": "Drug B wells"},
       "wells": ["D2", "D3", "D4", "D5", "D6", "D7", "D8"]
     },
     {

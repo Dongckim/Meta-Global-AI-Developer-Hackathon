@@ -91,7 +91,7 @@ tools; none writes the record.
 Stage (in `handoff.stage`, drawn on ⑨'s header): `generating`,
 `simulating`, `fixing` (a generate after a failed simulate), `passed`,
 `needs_you` (3 failed simulates or the model stopped). `needs_you` shows the
-error with `Write it again` / `Back`; no files without `passed`.
+error with `Fix it` / `Back`; no files without `passed`.
 
 Match check (code): the simulator's run log as events (aspirate source well,
 dispense well + volume into the plate, delay minutes; mix strokes left out)

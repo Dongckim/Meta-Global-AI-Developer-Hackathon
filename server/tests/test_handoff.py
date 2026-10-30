@@ -286,6 +286,15 @@ doc2 = st2._finish_locked("finished")
 assert hand.blockers(hand.as_run(doc2["record"])) == ["Step 2 (Add PBS) has no volume in µL."]
 print("HO-vol ok: no volume, no approval")
 
+# The demo seed (samples/plan_demo.json, the volumes of protocol_demo_v2.pdf) hands off whole.
+seed = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+seed.start_demo_run()
+seed.r["done"] = [m for i, stp in enumerate(seed.r["plan"]["steps"]) for m in mark(i + 1, *stp.get("wells") or [])]
+seed.r["step_index"] = len(seed.r["plan"]["steps"]) - 1
+seed_steps = hand.as_run(seed._finish_locked("finished")["record"])
+assert hand.blockers(seed_steps) == [] and [s.get("volume_ul") for s in seed_steps] == [100, 10, 10, 10, None], seed_steps
+print("HO-seed ok: the demo protocol has every volume")
+
 # HO10. Private runs have no hand off.
 api.store = st = ran("private")
 card = st.request_end_run({})[1]["card"]
@@ -301,7 +310,9 @@ if hand.SIM_PYTHON.exists():
     assert res["ok"], res
     chk = hand.check(res["events"], steps)
     assert chk["ok"], chk
-    print("HO-live ok: opentrons_simulate run log matches the approved steps")
+    res = hand.simulate(code_for(seed_steps))
+    assert res["ok"] and hand.check(res["events"], seed_steps)["ok"], res
+    print("HO-live ok: opentrons_simulate run log matches the approved steps (test plan, demo seed)")
 else:
     print("HO-live skipped: .venv-sim not installed")
 print("ALL PASS")
