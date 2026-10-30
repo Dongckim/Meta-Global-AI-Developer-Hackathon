@@ -22,7 +22,11 @@ as-run protocol, and code (not the model) proves the robot code matches it.
      Say "Looks right" → approval written, the loop starts
  └ ⑨  Simulate        simulate: generating → simulating → (fixing) → passed
  └ ⑨b Files           export_files: plate_map.csv + protocol.py
- └ ⑨d Exported        exported: files saved with the run, Done → run_view
+ └ ⑨d Exported        exported: "Shared protocol.py and plate_map.csv", Done → run_view
+     ⑨b Export opens the iPad share sheet (AirDrop, Save to Files, Mail) with
+     <Short>_Run<n>_protocol.py / _plate_map.csv from GET /handoff/<run>/files/<name>;
+     the app sends share_result done yes → ⑨d, no → stays on ⑨b. While the sheet
+     is up the session stays and the server takes no screen changes.
 ```
 
 ⑨a Export and ⑨c Where to stay `planned`. ⑨c's Robot card will read

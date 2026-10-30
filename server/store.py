@@ -1299,6 +1299,11 @@ class RecordStore:
         step_before, left_before = self.r.get("step_index"), self._left_now()
         for c in calls:
             m0, c0 = len(res["messages"]), len(res["cards"])
+            if self._sharing() and c.get("name") not in ("share_result", "read_record", "ask"):
+                # the iOS share sheet is up: the session stays, the screen holds (like Browse files)
+                res["messages"].append(say("handoff_sharing", session))
+                res["outcomes"].append({"messages": res["messages"][m0:], "cards": []})
+                continue
             self._apply_call(c, source, origin, route, session, res, force=False,
                              evidence=evidence)
             for card in res["cards"][c0:]:
@@ -2014,7 +2019,11 @@ class RecordStore:
     # --- hand off: a finished run -> approved as-run protocol -> robot code (docs/design/handoff.md) ---
 
     HANDOFF_SCREENS = ("final_protocol", "final_step", "final_page", "simulate", "export_files", "exported")
-    HANDOFF_ACTIONS = ("approve_handoff", "retry_handoff", "export_handoff")
+    HANDOFF_ACTIONS = ("approve_handoff", "retry_handoff", "export_handoff", "share_result")
+    #: The files a hand off shares (server/data/exports/<run>/).
+    HANDOFF_FILES = ("protocol.py", "plate_map.csv")
+    #: A share sheet left open longer than this (app gone) no longer holds the screen.
+    SHARE_HOLD_S = 600
     #: Screens that need an approval that still matches the run record.
     _HANDOFF_APPROVED = ("simulate", "export_files", "exported")
 
@@ -2109,10 +2118,45 @@ class RecordStore:
             out.mkdir(parents=True, exist_ok=True)
             (out / "protocol.py").write_text(h.get("code") or "")
             (out / "plate_map.csv").write_text(h.get("csv") or "")
-            h["exported"] = time.time()
+            h["sharing"] = time.time()  # the iOS share sheet is up until the app says how it closed
             runlog.write_run(doc, self.root)
-            self._push_view("exported", run_id)
-            res["messages"].append(self.screen_line("exported", run_id))
+            stem = self._share_stem(doc)
+            res["ui"].append({"action": "share", "files": [
+                {"name": f"{stem}_{f}", "url": f"/handoff/{run_id}/files/{f}"} for f in self.HANDOFF_FILES]})
+            res["messages"].append(say("handoff_share", session))
+        elif name == "share_result":
+            h.pop("sharing", None)
+            if str(args.get("done") or "") == "yes":
+                h["exported"] = time.time()
+                runlog.write_run(doc, self.root)
+                self._push_view("exported", run_id)
+                res["messages"].append(self.screen_line("exported", run_id))
+            else:
+                runlog.write_run(doc, self.root)
+                res["messages"].append(say("handoff_not_shared", session))
+
+    def _share_stem(self, doc: dict) -> str:
+        """DrugA_Run2: the protocol's short title and the run's number, file-name safe."""
+        title = labels.protocol_short(lib.get(doc.get("protocol_id"), self.root), doc.get("protocol_name") or "")
+        words = re.findall(r"[A-Za-z0-9]+", title)
+        short = "".join(w[:1].upper() + w[1:] for w in words)[:24] or "Protocol"
+        return f"{short}_Run{self.run_label(doc).get('number') or 1}"
+
+    def _sharing(self) -> bool:
+        """The share sheet is up on ⑨b: it holds the screen (no screen changes)."""
+        if self.r["view"]["current"].get("screen") != "export_files":
+            return False
+        doc = self._handoff_doc(self._handoff_here())
+        t = ((doc or {}).get("handoff") or {}).get("sharing")
+        return bool(t) and time.time() - t < self.SHARE_HOLD_S
+
+    def handoff_file(self, run_id: str, name: str) -> Path | None:
+        """A shared hand off file on disk, only by its known name under its run."""
+        if name not in self.HANDOFF_FILES or self._handoff_doc(run_id) is None:
+            return None
+        base = (self.root / "exports").resolve()
+        p = (base / run_id / name).resolve()
+        return p if p.parent.parent == base and p.is_file() else None
 
     def handoff_steps(self, run_id: str) -> list[dict] | None:
         """The approved steps the loop writes code for (None: not approved now)."""

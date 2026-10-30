@@ -48,6 +48,8 @@ struct ContentView: View {
     /// An import is being read (the server says "Reading the protocol…");
     /// a second start is ignored and the import screens are disabled.
     @State private var importing = false
+    /// ⑨b's Export button, where the iPad share sheet points from.
+    @State private var shareAnchor: CGRect = .zero
     /// The import's load pill: shown while reading, "Draft ready" a moment after.
     @State private var importPill: Bool? = nil
     @State private var showImporter = false
@@ -583,7 +585,8 @@ struct ContentView: View {
         case "simulate":
             SimulateScreen(handoff: h, buttons: buttons(cur.screen), u: u, perform: performButton)
         case "export_files":
-            HandoffFilesScreen(handoff: h, buttons: buttons(cur.screen), u: u, perform: performButton)
+            HandoffFilesScreen(handoff: h, buttons: buttons(cur.screen), u: u, perform: performButton,
+                               onAnchor: { shareAnchor = $0 })
         case "exported":
             ExportedScreen(handoff: h, buttons: buttons(cur.screen), u: u, perform: performButton)
         default:
@@ -895,6 +898,11 @@ struct ContentView: View {
             guard let f = files.first(where: { $0.id == a.target }) else { return uiFail("I couldn't open that file.") }
             importLocal(f)
             return true
+        case "share":
+            // ⑨b Export: both files to the iPad share sheet; how it closes goes back to the server
+            guard let files = a.files, !files.isEmpty else { return uiFail("I couldn't share those files.") }
+            shareFiles(files)
+            return true
         case "flash":
             lab.flash(Set(a.wells ?? []))
             return true
@@ -1067,6 +1075,30 @@ struct ContentView: View {
                 say("Import failed: \(error.localizedDescription)")
                 importing = false
                 withAnimation { importPill = nil }
+            }
+        }
+    }
+
+    /// The share sheet holds a live session like the iOS file picker; the
+    /// server holds the screen until share_result says done or cancelled.
+    private func shareFiles(_ files: [ShareFile]) {
+        voice.systemSheet(true)
+        Task { @MainActor in
+            let dir = FileManager.default.temporaryDirectory.appending(path: "share-\(UUID().uuidString)")
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                var urls: [URL] = []
+                for f in files { urls.append(try await PipClient.download(f.url, name: f.name, into: dir)) }
+                Log.voice.info("[share] up files=\(urls.count)")
+                SharePresenter.present(urls, from: shareAnchor) { done in
+                    Log.voice.info("[share] closed done=\(done)")
+                    voice.systemSheet(false)
+                    sendAction("share_result", ["done": done ? "yes" : "no"])
+                }
+            } catch {
+                voice.systemSheet(false)
+                say("Share failed: \(error.localizedDescription)")
+                sendAction("share_result", ["done": "no"])
             }
         }
     }

@@ -2222,6 +2222,17 @@ async def searches_list():
     return {"searches": store.search_summaries(), "sent": len(store.searches())}
 
 
+@app.get("/handoff/{run_id}/files/{name}")
+async def handoff_file(run_id: str, name: str):
+    """A hand off file the share sheet sends (protocol.py, plate_map.csv), by name only."""
+    from fastapi.responses import FileResponse
+
+    path = store.handoff_file(run_id, name)
+    if path is None:
+        raise HTTPException(404, "no such file")
+    return FileResponse(path, filename=name)
+
+
 @app.get("/health")
 async def health():
     return {"ok": True, "commit": git_commit(), "tools": len(TOOLS),

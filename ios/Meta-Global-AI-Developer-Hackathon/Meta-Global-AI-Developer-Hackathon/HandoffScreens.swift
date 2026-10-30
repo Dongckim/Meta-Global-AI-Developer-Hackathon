@@ -206,6 +206,8 @@ struct HandoffFilesScreen: View {
     var buttons: [ScreenButton]
     var u: CGFloat
     var perform: (ScreenButton) -> Void
+    /// Where the Export button is (screen points): the iPad share sheet's arrow.
+    var onAnchor: (CGRect) -> Void = { _ in }
 
     /// plate_map.csv rows as v36 shows them: Well, Group, Status, Source.
     private var table: [[String]] {
@@ -256,6 +258,13 @@ struct HandoffFilesScreen: View {
             }
             .frame(maxHeight: .infinity)
             SayRow(buttons: buttons, u: u, perform: perform).frame(width: 620 * u)
+                .background {
+                    GeometryReader { g in
+                        Color.clear
+                            .onAppear { onAnchor(g.frame(in: .global)) }
+                            .onChange(of: g.frame(in: .global)) { _, f in onAnchor(f) }
+                    }
+                }
         }
     }
 
@@ -303,11 +312,11 @@ struct ExportedScreen: View {
                 Image(systemName: "checkmark").font(Theme.ui(56 * u, weight: .bold)).foregroundStyle(.white)
             }
             .frame(width: 140 * u, height: 140 * u).enter(.pop, 0, u: u)
-            Text("Exported safely").font(Theme.ui(70 * u, weight: .semibold)).tracking(-1.79 * u)
+            Text("Shared").font(Theme.ui(70 * u, weight: .semibold)).tracking(-1.79 * u)
                 .foregroundStyle(Theme.text1).enter(.text, 1, u: u)
             VStack(alignment: .leading, spacing: 14 * u) {
-                // what really happened: files saved with the run, nothing pushed to a robot
-                ForEach(Array(["protocol.py · simulation passed", "Matches the approved record",
+                // what really happened: the two files went through the share sheet, a copy stays
+                ForEach(Array(["Shared protocol.py and plate_map.csv", "Matches the approved record",
                                "A copy stays with the run"].enumerated()), id: \.offset) { i, line in
                     HStack(spacing: 14 * u) {
                         Image(systemName: "checkmark").foregroundStyle(Theme.polishBlue)
@@ -319,5 +328,32 @@ struct ExportedScreen: View {
             SayRow(buttons: buttons, u: u, perform: perform).frame(width: 620 * u).padding(.top, 10 * u)
         }
         .frame(maxHeight: .infinity)
+    }
+}
+
+// MARK: - Share sheet
+
+/// The iPad share sheet (AirDrop, Save to Files, Mail) for the hand off
+/// files, its popover arrow on ⑨b's Export button. `done` is false when it
+/// was cancelled.
+enum SharePresenter {
+    @MainActor
+    static func present(_ urls: [URL], from anchor: CGRect, done: @escaping (Bool) -> Void) {
+        let vc = UIActivityViewController(activityItems: urls, applicationActivities: nil)
+        vc.completionWithItemsHandler = { _, completed, _, _ in done(completed) }
+        guard let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+                .flatMap(\.windows).first(where: \.isKeyWindow),
+              var top = window.rootViewController else {
+            done(false)
+            return
+        }
+        while let next = top.presentedViewController { top = next }
+        if let pop = vc.popoverPresentationController {
+            pop.sourceView = window
+            pop.sourceRect = anchor == .zero ? CGRect(x: window.bounds.midX, y: window.bounds.maxY - 80, width: 1, height: 1)
+                : anchor
+            pop.permittedArrowDirections = [.down, .up]
+        }
+        top.present(vc, animated: true)
     }
 }

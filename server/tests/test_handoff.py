@@ -259,13 +259,31 @@ assert snap["handoff"]["stage"] == "passed" and "protocol.comment(\"step 1\")" i
 assert snap["handoff"]["steps"] == steps  # what ⑨ replays
 j = c.post("/input", json={"text": "export", "session": "ho"}).json()
 assert st.r["view"]["current"] == {"screen": "export_files", "target": run_id}, st.r["view"]
+# ⑨b Export: the iPad share sheet gets both files (named by protocol and run); the screen holds
 j = c.post("/input", json={"text": "export", "session": "ho"}).json()
+assert st.r["view"]["current"] == {"screen": "export_files", "target": run_id}, st.r["view"]
+assert j["reply"] == "Pick where to send them.", j
+share = [a for a in j["ui"] if a["action"] == "share"][0]
+assert [f["name"] for f in share["files"]] == ["HandTest_Run1_protocol.py", "HandTest_Run1_plate_map.csv"], share
+r = c.get(share["files"][0]["url"])
+assert r.status_code == 200 and r.text == code_for(steps), r.text[:80]
+assert c.get(share["files"][1]["url"]).text.startswith("well,group,status")
+for bad in (f"/handoff/{run_id}/files/record.json", "/handoff/..%2F..%2Fserver/files/protocol.py",
+            "/handoff/run-nope/files/protocol.py"):
+    assert c.get(bad).status_code == 404, bad  # known names under a finished run only
+j = c.post("/input", json={"text": "back", "session": "ho"}).json()  # sheet up: no screen changes
+assert j["reply"] == "Finish sharing first." and st.r["view"]["current"]["screen"] == "export_files", j
+j = c.post("/input", json={"action": {"id": "share_result", "args": {"done": "no"}}, "session": "ho"}).json()
+assert j["reply"] == "Not shared. Say export to try again." and st.r["view"]["current"]["screen"] == "export_files", j
+c.post("/input", json={"text": "export", "session": "ho"})
+j = c.post("/input", json={"action": {"id": "share_result", "args": {"done": "yes"}}, "session": "ho"}).json()
 assert st.r["view"]["current"] == {"screen": "exported", "target": run_id}, st.r["view"]
-out = st.root / "exports" / run_id
-assert (out / "protocol.py").read_text() == code_for(steps) and (out / "plate_map.csv").exists()
+assert j["reply"] == "Shared protocol.py and plate_map.csv. A copy stays with the run.", j
+assert runlog.get(run_id, st.root)["handoff"]["exported"] and "sharing" not in runlog.get(run_id, st.root)["handoff"]
 j = c.post("/input", json={"text": "done", "session": "ho"}).json()
 assert st.r["view"]["current"] == {"screen": "run_view", "target": run_id}, st.r["view"]
-print("HO9 ok: step, open PDF, looks right, export, export, done; HO8 ok: run record untouched")
+print("HO9 ok: step, open PDF, looks right, export (share sheet, cancel, again, shared), done; "
+      "HO8 ok: run record untouched")
 
 # HO2. A changed run record clears the approval: back to ⑨0, said why.
 doc = runlog.get(run_id, st.root)

@@ -37,6 +37,13 @@ struct UIAction: Decodable {
     let id: String?
     /// camera: the photo question it's for (Retake sends it again).
     let search_id: String?
+    /// share: the files the iPad share sheet sends (name to save as, server path).
+    let files: [ShareFile]?
+}
+
+struct ShareFile: Decodable {
+    let name: String
+    let url: String
 }
 
 struct OrchestrateResponse: Decodable {
@@ -373,6 +380,15 @@ enum PipClient {
             }
             cont.onTermination = { _ in task.cancel() }
         }
+    }
+
+    /// A server file (a hand off's protocol.py / plate_map.csv) saved as `name` in `dir`.
+    static func download(_ path: String, name: String, into dir: URL) async throws -> URL {
+        let (data, resp) = try await URLSession.shared.data(from: Config.baseURL.appending(path: path))
+        try check(resp, data)
+        let url = dir.appending(path: name)
+        try data.write(to: url, options: .atomic)
+        return url
     }
 
     private static func get<T: Decodable>(_ path: String) async throws -> T {
