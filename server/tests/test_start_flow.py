@@ -93,7 +93,8 @@ assert j["reply"] == "Draft ready. 1 condition, 3 steps.", j
 print("SF2 ok: prompts from the draft, buttons said == tapped")
 
 # SF3. Start run: the draft goes to the library, the run starts on the bench.
-j = act("start_run")
+j = c.post("/input", json={"action": {"id": "start_run", "args": {}, "source": "voice"},  # spoken: said aloud
+                           "session": "sf"}).json()
 assert api.store.r.get("draft") is None and api.store.r["run"]["protocol_name"] == "Media test", j
 assert here()["screen"] == "main" and j["reply"] == "Run 1 started. Step 1: add 100 µL media to B2–B6.", j
 assert j["speak"] == "Run 1 started. Step 1: add 100 microliters media to B 2 to B 6.", j  # said as words
