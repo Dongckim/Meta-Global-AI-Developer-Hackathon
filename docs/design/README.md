@@ -27,7 +27,7 @@ Status: **done** = matches ver 2 · **old** = exists in the pre-ver-2 style ·
 | Start | ⑤b Import protocol | 37:13167 | done (Text, File, Photo) | 3 |
 | Start | ⑤b Draft ready | 37:13203 | done | 3 |
 | Start | ⑤c Review steps | 37:13230 | done | 3 |
-| Start | ⑤d Step source | 37:13288 | done (Fix it: tap editor) | 3 |
+| Start | ⑤d Step source | 37:13288 | done (Fix it: planned) | 3 |
 | Start | ⑤e PDF page | 37:13320 | done (PDF, photo or text) | 3 |
 | Start | ⑤f Plan check | 37:13351 | done | 3 |
 | In run | ① Main | 37:13521 | done | 1 |
@@ -58,6 +58,6 @@ slots).
   mode in the server view and an answer word; the checklist shows "Yes to all"
   only until then.
 - ⑥ Learn.
-- Draft value edits by voice (⑤d "Fix it" opens the tap editor for now).
+- Draft value edits (⑤d "Fix it"): the old tap editor sheet is gone; "Fix it" says it isn't ready yet.
 
 Update the status column when a bundle lands.

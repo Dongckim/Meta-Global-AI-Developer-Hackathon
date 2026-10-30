@@ -70,13 +70,16 @@ final class FakeSpeaker: SpeakerControlling {
     var texts: [String?] = []
     var lastWordAt = Date.distantPast
     var stops = 0
-    private var done: (() -> Void)?
+    private var dones: [() -> Void] = []
     func speak(_ text: String?, onDone: @escaping () -> Void) {
         texts.append(text)
-        done = onDone
+        dones.append(onDone)
     }
     func stop() { stops += 1 }
-    func complete() { let d = done; done = nil; d?() }
+    /// The latest utterance finishes.
+    func complete() { if let d = dones.popLast() { d() } }
+    /// An earlier utterance finishes (the synth cut it off for a newer one).
+    func completeOldest() { if !dones.isEmpty { dones.removeFirst()() } }
 }
 
 @MainActor
@@ -587,6 +590,34 @@ struct VoiceSessionTests {
         speaker.complete()
         #expect(await settle { ended.value && voice.state == .ready })
         #expect(speaker.texts == ["Anytime! Call me whenever you need me."]) // no close line after it
+    }
+
+    /// One speaking path: a line cut off by a newer one must not reopen the
+    /// live mic while the newer one still plays (Milo heard himself).
+    @Test func earlierLineEndingKeepsTheMicMuted() async {
+        let wake = FakeWake(), speaker = FakeSpeaker(), live = FakeLive()
+        let voice = makeSession(wake: wake, speaker: speaker, live: live)
+        await openSession(voice, wake)
+        voice.speak("In the Files app, put PDFs in On My iPad.")
+        voice.speak("2 files. Which one?")
+        #expect(live.muted)
+        speaker.completeOldest()
+        #expect(live.muted && voice.state == .speaking) // the newer line still plays
+        speaker.complete()
+        #expect(!live.muted && voice.state == .listening)
+    }
+
+    /// An iOS picker (Browse files…) keeps a live session; background alone ends it.
+    @Test func systemSheetKeepsTheSession() async {
+        let wake = FakeWake(), live = FakeLive()
+        let voice = makeSession(wake: wake, live: live)
+        await openSession(voice, wake)
+        voice.systemSheet(true)
+        voice.deactivate()
+        #expect(voice.inSession)
+        voice.systemSheet(false)
+        voice.deactivate()
+        #expect(!voice.inSession)
     }
 
     @Test func brokenStreamFallsBackForAWhile() async {
