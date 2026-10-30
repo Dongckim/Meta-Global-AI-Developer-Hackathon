@@ -73,7 +73,7 @@ api._stage = lambda session, stage, **d: stages.append((stage, d.get("say")))
 # the schedule and the names are the deployed ones
 assert (glimmer_modal.MODEL_FILE, glimmer_modal.MMPROJ_FILE, glimmer_modal.DRAFT_FILE) == tuple(section("private")["files"])
 assert glimmer_modal.REPO == section("private")["repo"]
-assert api.WAKE_TIMEOUT_S == 60
+assert api.WAKE_TIMEOUT_S == 90
 assert [x["at"] for x in LINES] == [0, 5, 10, 16, 22, 28, 40]
 
 # file size: weights + mmproj only, from the bytes
@@ -142,7 +142,7 @@ async def failed_at_timeout():
     api.WAKE_TIMEOUT_S = 0.05
     tap(st, s, "choose_mode", mode="private")
     await settle()
-    api.WAKE_TIMEOUT_S = 60
+    api.WAKE_TIMEOUT_S = 90
     assert st.wake.state == "failed" and len(calls) == 1, "the timeout covers the retry too"
 
 
@@ -241,4 +241,13 @@ api._stage = real_stage
 st, s = fresh()
 assert [b["say"] for b in api.buttons_for("private_wait", {"wake": "warming"})] == ["Use Full mode", "Full mode"]
 assert [b["say"] for b in api.buttons_for("private_wait", {"wake": "failed"})][:2] == ["Try again", "Use Full mode"]
+
+# the chosen mode outlives a restart and a new record
+st, s = fresh()
+st.spawn_wake = lambda session, gen: None
+tap(st, s, "choose_mode", mode="private")
+tone.set_run_mode(None)
+RecordStore(path=st.path)
+assert tone.run_mode() == "private"
+tone.set_run_mode(None)
 print("test_private_wake OK")

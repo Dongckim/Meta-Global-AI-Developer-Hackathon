@@ -204,8 +204,14 @@ class RecordStore:
         self.wake = PrivateWake()
         self.spawn_wake = None
         self._load_or_seed()
+        self._restore_mode()
 
     # --- persistence / broadcast ---
+
+    def _restore_mode(self) -> None:
+        saved = self.root / "run_mode.txt"
+        if saved.exists():
+            set_run_mode(saved.read_text().strip())
 
     def _load_or_seed(self):
         if self.path.exists():
@@ -374,6 +380,7 @@ class RecordStore:
             res["messages"].append("Full or Private?")
             return
         set_run_mode(mode)
+        (self.root / "run_mode.txt").write_text(mode)  # outlives the record: a new run keeps it
         waiting = self.r["view"]["current"]["screen"] == "private_wait"
         if mode == "private" and not self.wake.fresh():
             self._wait_for_private(session, "import_choice")
