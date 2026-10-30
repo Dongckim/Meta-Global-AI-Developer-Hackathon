@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import contextvars
 import json
 import os
 import re
@@ -128,6 +129,8 @@ SYSTEM = (
     "One set_timer per distinct duration; the server fans each out per well. "
     "Ground every value in this message, the plan, or read results. "
     "For questions about the record, call read_record once, then answer briefly for speech. "
+    "On a photo answer (photo_answer in state), answer a follow-up from what was read and the "
+    "protocol (protocol: liquids, conditions, steps, notes): say plainly whether it fits and why. "
     "Speak at most two short sentences. For a list, say how many and the top one, "
     "and perform navigate to the screen that shows it all; never read a whole list. "
     "Name runs and protocols by their `spoken` labels, never by ids. "
@@ -763,12 +766,16 @@ async def _turn_search(client, query: str, session: dict) -> tuple:
 async def _turn(client, key, text: str, session: dict, source: str) -> tuple:
     """One owner turn with its stages around it (heard ... done/failed)."""
     _stage(session, "heard", text=text)
+    token = _TURN_DROPS.set([])  # this turn's drops only (a new list every turn)
     try:
         out = await run_utterance(client, key, text, session, source)
         out = await _finish_search(client, key, out, session)
+        out = (*out[:2], _user_facing(out[2], session), *out[3:])
     except Exception as e:
         _stage(session, "failed", reason=type(e).__name__)
         raise
+    finally:
+        _TURN_DROPS.reset(token)
     if out[6].get("look"):  # a photo question: the turn waits for the photo (POST /look)
         _stage(session, "looking", search_id=out[6]["look"]["search_id"])  # its line is the reply's, said once
         return out
@@ -971,8 +978,8 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             asked = {"question": q, "target": recent_target() or ""}
             info = {"dropped": 0, "drop_reasons": [], "asked": asked}
             return [], [], q, ms, "spark", [], info, sources
-        if texts.strip():
-            t = _short_text(texts)
+        if texts.strip() and _no_promises(_short_text(texts)):
+            t = _no_promises(_short_text(texts))
             bad = ungrounded_targets(t)
             if not bad["wells"] and not bad["timer"] and not bad["step"] and not bad["memo"]:
                 return [], [], t, ms, "spark", [], {"dropped": 0, "drop_reasons": []}, sources
@@ -1021,7 +1028,7 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             rc, res2, question2, ordered2, outcomes2, gdrop2, t2 = more
             if question is None and question2 is None and pre_all_reads and not res2["cards"]:
                 nav_only = all(c.get("name") in ("navigate", "open", "back", "show") for c in rc)
-                line = _short_text(t2) if t2.strip() and (not rc or nav_only) else ""
+                line = _no_promises(_short_text(t2)) if t2.strip() and (not rc or nav_only) else ""
                 # a summary names something it read (a well or a count);
                 # "pulling up your notes" names nothing, so the read is said
                 if line and (find_well_mentions(line) & find_well_mentions(reads_text)
@@ -1091,6 +1098,9 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         reply = model_line if model_line and not failed else base or model_line
         if not reply:
             reply = _executed_reply(calls, read_lines, session)
+        if any(d[0] == "read_record" for d in _TURN_DROPS.get() or []):
+            # a read dropped this turn: say what couldn't be read, never that it's being done
+            reply = f"{reply} {_couldnt_now(session)}".strip()
         if not reply:
             print(f"ORPHAN REPLY: {sorted({c.get('name') for c in calls})} produced nothing",
                   flush=True)
@@ -1245,9 +1255,70 @@ def _result(ok: bool, message: str) -> str:
     return json.dumps({"ok": ok, "message": message}, ensure_ascii=False)
 
 
+#: What this turn dropped (name, args, reason): the reply says what it couldn't do,
+#: never why in the server's words.
+_TURN_DROPS: contextvars.ContextVar = contextvars.ContextVar("turn_drops", default=None)
+
+
 def _log_drop(name, args, reason: str):
     blob = json.dumps(args if isinstance(args, dict) else {}, ensure_ascii=False)[:300]
     print(f"drop {name} args={blob} reason={reason}", flush=True)
+    drops = _TURN_DROPS.get()
+    if drops is not None:
+        drops.append((name, args if isinstance(args, dict) else {}, reason))
+
+
+#: The server's own words for why something was dropped: logged, never said.
+INTERNAL_REASONS = ("unknown tool", "lookup depth", "tool without a name", "no action", "unbound",
+                    "call_id", "pending confirmation")
+#: A model sentence promising work after the answer ("Checking the protocol…"):
+#: a turn is over when it answers, so the promise is never kept.
+_PROMISE = re.compile(r"\b(let me|i'll|i will|i'm going to|i am going to|checking|looking (?:it )?up|"
+                      r"looking into|pulling (?:it |that )?up|one (?:moment|sec)|give me a (?:moment|sec)|"
+                      r"hang on|hold on)\b", re.I)
+
+
+def _sentence_split(text: str) -> list[str]:
+    return [x for x in re.split(r"(?<=[.!?…])\s+", (text or "").strip()) if x]
+
+
+def _no_promises(line: str) -> str:
+    """The model's own line without sentences promising work the turn didn't do."""
+    keep = []
+    for s in _sentence_split(line):
+        if _PROMISE.search(s):
+            print(f"[reply] cut promise {s!r}", flush=True)
+            continue
+        keep.append(s)
+    return " ".join(keep)
+
+
+def _couldnt_now(session) -> str:
+    """What to say when this turn dropped a tool: a read of the record or
+    protocol -> couldn't open it; anything else -> couldn't do it."""
+    drops = _TURN_DROPS.get() or []
+    kinds = {str((a or {}).get("kind") or "") for n, a, _ in drops if n == "read_record"}
+    if kinds & {"source", "steps", "protocols"}:
+        return say("couldnt_open", session, what="the protocol")
+    if kinds:
+        return say("couldnt_open", session, what="the record")
+    return say("couldnt_now", session)
+
+
+def _user_facing(reply: str, session) -> str:
+    """The last check on what Milo says: a sentence holding the server's own
+    reasons ("unknown tool") gives way to a line a person can act on."""
+    keep, cut = [], False
+    for s in _sentence_split(reply):
+        if any(r in s.lower() for r in INTERNAL_REASONS):
+            print(f"[reply] cut internal {s!r}", flush=True)
+            cut = True
+            continue
+        keep.append(s)
+    if not cut:
+        return reply
+    line = _couldnt_now(session)
+    return " ".join(keep + [line]) if keep else line
 
 
 def _note_lost(outcomes: dict, before: list, after: list, reason: str):

@@ -1171,6 +1171,19 @@ class RecordStore:
             "pending_cards": len(self.r["cards"]),
             "draft_open": bool(self.r.get("draft")),
         }
+        cur = (self.r.get("view") or {}).get("current") or {}
+        if cur.get("screen") == "web_answer":
+            doc = next((d for d in self.searches() if d["id"] == cur.get("target")), None)
+            if doc and doc.get("kind") == "photo" and doc.get("status") == "ok":
+                # a follow-up on a photo answer: what was just read, and the protocol it's for
+                st["photo_answer"] = {"question": doc.get("question") or "",
+                                      "read": doc.get("answer_short") or "", "detail": doc.get("detail") or ""}
+                plan = self.r.get("plan") or {}
+                if not plan.get("steps") and doc.get("run_id"):
+                    rd = runlog.resolve(doc["run_id"], self.all_run_docs())
+                    plan = ((rd or {}).get("record") or {}).get("plan") or {}
+                if plan.get("steps"):
+                    st["protocol"] = self._protocol_brief(plan)
         if self.r.get("draft"):
             draft = self.r["draft"]
             st["draft"] = proto.draft_summary(draft.get("plan") or {})
@@ -1183,6 +1196,24 @@ class RecordStore:
             if session.get("last_web") and "attach" in last_asked.lower():
                 st["last_answer"] = session["last_web"]
         return st
+
+    @staticmethod
+    def _protocol_brief(plan: dict) -> dict:
+        """The protocol in a few lines for a follow-up: what goes in (liquid and
+        volume per step), the conditions by name, the steps, the notes."""
+        steps = plan.get("steps") or []
+        liquids = []
+        for st in steps:
+            p = st.get("pipette") or {}
+            if p.get("liquid"):
+                vol = f" {fmt_minutes(p['volume'])} {p.get('unit') or ''}".rstrip() if p.get("volume") else ""
+                liquids.append(f"{p['liquid']}{vol}")
+        conds = "; ".join(f"{(c or {}).get('label') or k} {join_wells_ranges((c or {}).get('wells') or [])}"
+                          for k, c in sorted((plan.get("conditions") or {}).items()))
+        return {"liquids": "; ".join(dict.fromkeys(liquids)), "conditions": conds,
+                "steps": "; ".join(f"{i + 1}. {(st.get('text') or '')[:60]}" for i, st in enumerate(steps)),
+                "notes": "; ".join(st.get("caution") or st.get("tip") for st in steps
+                                   if st.get("caution") or st.get("tip"))}
 
     @staticmethod
     def _turn_line(t: dict, with_asked: bool = True) -> str:

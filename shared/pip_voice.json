@@ -246,6 +246,8 @@
   "handoff_review_none": ["{robot}, as planned. Make robot code, or save without it?"],
   "handoff_review_first": ["Review the changes first."],
   "handoff_saved": ["Saved the as-run protocol, without robot code."],
+  "couldnt_open": ["I couldn't open {what} just now. Ask again?"],
+  "couldnt_now": ["I couldn't do that just now. Ask again?"],
   "handoff_share": ["Pick where to send them."],
   "handoff_not_shared": ["Not shared. Say export to try again."],
   "handoff_sharing": ["Finish sharing first."],

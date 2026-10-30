@@ -672,7 +672,7 @@ with patch("httpx.AsyncClient", FakeClient):
         r = c.post("/orchestrate", json={"text": "do the unknown thing", "session": "s31"})
     FakeClient.spark_payload = SPARK_OK
     j = r.json()
-    assert j["reply"] == "I couldn't do that: unknown tool.", j
+    assert j["reply"] == "I couldn't do that just now. Ask again?", j  # the reason stays in the log
     assert "frobnicate" not in j["reply"] and "propose_plan" not in j["reply"], j["reply"]
     log = buf.getvalue()
     assert 'drop frobnicate args={"wells": "C9"} reason=unknown tool' in log, log
@@ -683,7 +683,7 @@ with patch("httpx.AsyncClient", FakeClient):
     with contextlib.redirect_stdout(buf):
         r = c.post("/orchestrate", json={"text": "tell me nothing", "session": "s31b"})
     FakeClient.spark_payload = SPARK_OK
-    assert r.json()["reply"] == "I couldn't do that: unknown tool.", r.json()
+    assert r.json()["reply"] == "I couldn't do that just now. Ask again?", r.json()
     assert 'drop frobnicate args={"wells": "C9"} reason=unknown tool' in buf.getvalue(), buf.getvalue()
     print("31 ok: drops logged with raw args, replies stay human")
 
