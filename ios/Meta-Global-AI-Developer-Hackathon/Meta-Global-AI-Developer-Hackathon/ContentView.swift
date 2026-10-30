@@ -621,34 +621,44 @@ struct ContentView: View {
             let w = g.size.width, h = g.size.height
             let wide = w >= h
             let u = Theme.Layout.unit(g.size, bench: true)
-            Group {
-                if !lab.cards.isEmpty {
-                    // ③ a waiting card takes the bench (Figma 37:13714...)
+            let carded = !lab.cards.isEmpty
+            ZStack {
+                // the bench stays built under a card (hidden, not torn down): when the card
+                // goes, the plate and step don't replay their entrance (Next step "bounced")
+                Group {
+                    if wide {
+                        // the side column takes what the margins, plate and gap leave
+                        let side = max(0, w - 2 * Theme.Layout.side * u - 800 * u - Theme.Layout.column * u)
+                        HStack(alignment: .top, spacing: Theme.Layout.column * u) {
+                            plateColumn(u)
+                            benchSide(u).frame(width: side)
+                        }
+                        .frame(height: Theme.Layout.benchHeight * u)
+                    } else {
+                        VStack(spacing: 40 * u) {
+                            plateColumn(u)
+                            benchSide(u).frame(width: 800 * u)
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                // landscape: the bench block centers in the content box (bench top 222);
+                // portrait keeps its top-aligned bench
+                .padding(.top, (wide ? Theme.Layout.contentTop : 32) * u)
+                .padding(.bottom, (wide ? Theme.Layout.contentBottom : 0) * u)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: wide ? .center : .top)
+                .opacity(carded ? 0 : 1)
+                .allowsHitTesting(!carded)
+                .accessibilityHidden(carded)
+                if carded {
+                    // ③ a waiting card takes the bench's place (Figma 37:13714...), centered on 572
                     ConfirmScreen(lab: lab, buttons: registry.cards, u: u,
                                   onAnswer: answer(id:ok:), onAnswerAll: answerAll, onChoice: choose(id:answer:))
+                        .padding(.top, Theme.Layout.contentTop * u)
+                        .padding(.bottom, Theme.Layout.contentBottom * u)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if wide {
-                    // the side column takes what the margins, plate and gap leave
-                    let side = max(0, w - 2 * Theme.Layout.side * u - 800 * u - Theme.Layout.column * u)
-                    HStack(alignment: .top, spacing: Theme.Layout.column * u) {
-                        plateColumn(u)
-                        benchSide(u).frame(width: side)
-                    }
-                    .frame(height: Theme.Layout.benchHeight * u)
-                } else {
-                    VStack(spacing: 40 * u) {
-                        plateColumn(u)
-                        benchSide(u).frame(width: 800 * u)
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            // landscape: the bench block and the cards center in the content box
-            // (bench top 222, cards on 572); portrait keeps its top-aligned bench
-            .padding(.top, (wide || !lab.cards.isEmpty ? Theme.Layout.contentTop : 32) * u)
-            .padding(.bottom, (wide || !lab.cards.isEmpty ? Theme.Layout.contentBottom : 0) * u)
-            .frame(maxWidth: .infinity, maxHeight: .infinity,
-                   alignment: wide || !lab.cards.isEmpty ? .center : .top)
         }
         .ignoresSafeArea(.container, edges: .bottom)
         .background { BenchCanvas() }
