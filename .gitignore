@@ -13,3 +13,4 @@ Secrets.xcconfig
 server/data/
 .claude/settings.local.json
 *.wav
+.venv-sim/
