@@ -242,12 +242,13 @@ enum PipClient {
         return try JSONDecoder().decode(VoiceResponse.self, from: data)
     }
 
+    /// A tapped action: the server answers it on screen only (no `speak`).
     static func inputAction(id: String, args: [String: Any] = [:]) async throws -> OrchestrateResponse {
         var req = URLRequest(url: Config.baseURL.appending(path: "input"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: [
-            "action": ["id": id, "args": args],
+            "action": ["id": id, "args": args, "source": "tap"],
         ])
         let (data, resp) = try await URLSession.shared.data(for: req)
         try check(resp, data)

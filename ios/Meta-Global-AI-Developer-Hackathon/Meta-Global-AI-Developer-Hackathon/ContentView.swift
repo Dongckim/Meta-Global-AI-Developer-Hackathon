@@ -63,9 +63,6 @@ struct ContentView: View {
     /// The photo in flight per question; Retake clears it, so a late reply for it is dropped.
     @State private var lookToken: [String: UUID] = [:]
     @State private var files: [LocalFile] = []
-    /// The last view change came from a tap (its screen line is spoken only
-    /// in a live session; a voice reply already says it).
-    @State private var navByTap = false
     @State private var promptKey = ""
     @State private var ttsOn = SpeechBus.shared.enabled
     @State private var routeLine = ""
@@ -144,17 +141,13 @@ struct ContentView: View {
         } else {
             viewingSource = nil
         }
-        // Milo's line for the screen (registry prompt): shown on entry, and
-        // said when a tap opened it during a live session
+        // Milo's line for the screen (registry prompt): shown on entry; said
+        // only when voice opened it (that reply says it), never for a tap
         let key = "\(cur)#\(tgt)"
         if key != promptKey {
             promptKey = key
-            if !v.prompt.isEmpty {
-                lastReply = v.prompt
-                if navByTap && voice.inSession { sayAloud(v.promptSpeak) }
-            }
+            if !v.prompt.isEmpty { lastReply = v.prompt }
         }
-        navByTap = false
         showHome = cur == "home"
         // "setup" is the old id for the same screen (records saved before)
         if cur == "sync" || cur == "setup", top.front != .sync,
@@ -1058,7 +1051,6 @@ struct ContentView: View {
         guard !importing else { return }  // one import at a time; the server joins repeats too
         importing = true
         withAnimation { importPill = false }
-        navByTap = true  // Draft ready's line is said in a live session, like a tap
         Task { @MainActor in
             do {
                 let r = try await PipClient.importProtocol(
@@ -1165,7 +1157,6 @@ struct ContentView: View {
     /// Taps travel as Actions; the server updates view and broadcasts.
     private func sendAction(_ id: String, _ args: [String: Any] = [:], quiet: Bool = true) {
         Log.view.info("[view] send action \(id, privacy: .public) \(String(describing: args), privacy: .public)")
-        navByTap = true
         Task { @MainActor in
             do {
                 let r = try await PipClient.inputAction(id: id, args: args)

@@ -180,6 +180,22 @@ api.store = fresh("main", {"when": {"last": "no"}})
 assert [b["say"] for b in buttons_for("main", api.store.view_slots("main"))] == ["Next step"]
 print("BT2b ok: Continue / Start run on the run screens, Continue on Home")
 
+# BT2c. A tap is answered on screen only: the same action sent as a tap and as voice
+# differs only in speech (no speak for a tap), reply and record alike.
+outs = {}
+for src in ("tap", "voice"):
+    api.store = fresh("main", {"when": {"last": "no"}})
+    outs[src] = c.post("/input", json={"action": {"id": "next_step", "args": {}, "source": src},
+                                       "session": f"bt-{src}"}).json()
+assert "speak" not in outs["tap"] and outs["voice"]["speak"], outs
+assert {k: v for k, v in outs["tap"].items() if k not in ("record_version", "cards")} == \
+    {k: v for k, v in outs["voice"].items() if k not in ("record_version", "cards", "speak")}, outs
+assert [x["kind"] for x in outs["tap"]["cards"]] == [x["kind"] for x in outs["voice"]["cards"]]
+api.store = fresh("main", {"when": {"last": "no"}})
+assert "speak" not in c.post("/input", json={"action": {"id": "next_step", "args": {}},
+                                             "session": "bt"}).json()  # no source: a tap
+print("BT2c ok: a tapped action is answered without speech; voice with it")
+
 # BT3. A button's word is one of its action's registry verbs (one vocabulary).
 from server.screens import verbs  # noqa: E402
 

@@ -16,7 +16,7 @@ import json
 import os
 import re
 import subprocess
-from typing import Any
+from typing import Any, Literal
 import time
 import uuid
 import wave
@@ -394,6 +394,9 @@ class ConfirmIn(BaseModel):
 class ActionIn(BaseModel):
     id: str = Field(min_length=1)
     args: dict = {}
+    #: Where the action came from: a tap answers on screen only (no speech);
+    #: voice and the model are answered aloud.
+    source: Literal["tap", "voice", "model"] = "tap"
 
 
 class InputIn(BaseModel):
@@ -1447,6 +1450,14 @@ def _utterance_response(calls, messages, reply, ms, route, cards, info, sources,
     return out
 
 
+def _quiet_tap(source: str, out: dict) -> dict:
+    """A tap is answered on screen (reply, header) but never aloud, even in a
+    live voice session; voice and the model keep `speak`."""
+    if source == "tap":
+        out.pop("speak", None)
+    return out
+
+
 async def _handle_text(text: str, session: dict, source: str):
     """Shared text path for /input and the /orchestrate alias."""
     key = _key()
@@ -1475,12 +1486,13 @@ async def input_entry(body: InputIn):
         q = str((body.action.args or {}).get("query") or "")
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             calls, messages, reply, ms, route, cards, info, sources = await _turn_search(client, q, session)
-        return _utterance_response(calls, messages, reply, {"spark": ms}, "tap", cards, info, sources,
-                                   store.r["version"])
+        return _quiet_tap(body.action.source, _utterance_response(
+            calls, messages, reply, {"spark": ms}, "tap", cards, info, sources, store.r["version"]))
     if body.action is not None:
+        src = body.action.source
         calls = [{"name": body.action.id, "args": body.action.args or {}}]
         calls = expand_tool_wells(calls)
-        res = store.apply_calls(calls, "tap", "", "tap", session)
+        res = store.apply_calls(calls, src, "", src, session)
         reply = _compose_reply(calls, res, store.prompt_state(session), session)
         if not reply:
             reply = _executed_reply(calls, [], session)
@@ -1489,9 +1501,9 @@ async def input_entry(body: InputIn):
             async with httpx.AsyncClient(timeout=TIMEOUT) as client:
                 reply, sources = await _run_search(client, _key(), res["info"]["search"]["question"],
                                                    res["info"]["search"]["query"], session)
-        log_turn(session, f"tap:{body.action.id}", calls, [reply] if reply else [])
-        return _utterance_response(calls, res["messages"], reply, {"spark": 0}, "tap",
-                                   res["cards"], res["info"], sources, store.r["version"])
+        log_turn(session, f"{src}:{body.action.id}", calls, [reply] if reply else [])
+        return _quiet_tap(src, _utterance_response(calls, res["messages"], reply, {"spark": 0}, "tap",
+                                                   res["cards"], res["info"], sources, store.r["version"]))
     if body.card_id:
         a = body.answer or "yes"  # a choice card's answer ("review") is a yes with that choice
         message, new_cards = _resolve_card(body.card_id, a, session, "" if a in PLAIN_ANSWERS else a)
