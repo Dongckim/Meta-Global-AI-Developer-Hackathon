@@ -163,4 +163,24 @@ with patch("httpx.AsyncClient", FakeClient), patch.object(api, "_run_search", fa
     j = c.post("/input", json={"text": "search it", "session": "fu6"}).json()
 assert searched == ["Corning 96-well plate, Non-Tissue Culture Treated Flat bottom, polystyrene, sterile."], searched
 print("FU6 ok: search it on a photo answer searches the label")
+
+# FU7. A live turn said whole for the screen isn't held for "the rest" (3 s): a card's
+# "yes" (with the agent's name too), Import's "file" / "photo" / "text"; a real
+# cut-off word ("add", "I want to") still waits.
+api.store = st = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+st.start_demo_run()
+st.r["step_index"] = 0
+st.apply_calls([{"name": "next_step", "args": {}}], "voice", "", "grammar", {})  # a card: wells not marked
+assert st.r["cards"], "a card is up"
+for said in ("yes", "Yes.", "yes Milo", "Milo, yes", "mark them", "not yet"):
+    assert not api.live_unfinished(said, {}), said
+st.r["cards"] = {}
+st.r["view"]["current"] = {"screen": "import_choice", "target": ""}
+for said in ("file", "File.", "photo", "text", "okay file"):
+    assert not api.live_unfinished(said, {}), said
+for said in ("add", "I want to"):
+    assert api.live_unfinished(said, {}), said
+st.r["view"]["current"] = {"screen": "draft_page", "target": "1"}
+assert not api.live_unfinished("page 2", {}) and not api.live_unfinished("zoom in", {})
+print("FU7 ok: whole for this screen goes now; a cut-off word still waits")
 print("ALL PASS")

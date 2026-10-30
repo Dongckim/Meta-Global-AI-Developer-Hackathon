@@ -61,7 +61,7 @@ from server.grammar import (
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
 from server.screens import (PLAIN_ANSWERS, ask_choice, button_match, button_words, buttons_for, card_choices,
-                            control_call, look_call, planned_screen, start_call)
+                            control_call, look_call, planned_screen, start_call, verbs)
 from server import handoff
 from server import look as lookmod
 from server.screens import guide as _screen_guide
@@ -801,6 +801,39 @@ def _photo_read_here() -> str:
     if not doc or doc.get("kind") != "photo" or doc.get("status") != "ok":
         return ""
     return " ".join(x for x in (doc.get("answer_short"), doc.get("detail")) if x).strip()
+
+
+def whole_here(text: str) -> bool:
+    """Said whole for this screen: the words (lead-ins and the agent's name
+    dropped) are exactly a button on screen or one of its bare action's
+    verbs, a card answer, or one of the screen's controls ("page 2")."""
+    said = button_words(text)
+    if not said:
+        return False
+    v = store.r["view"]
+    cur = v["current"]
+    shown = [x for x in ((v.get("sheet") or {}).get("name"), cur["screen"]) if x]
+    slots = store.view_slots(cur["screen"], cur.get("target") or "")
+    words = set()
+    for b in (b for sid in shown for b in buttons_for(sid, slots) if not b.get("tap_only")):
+        words.add(button_words(b["say"]))
+        if not b.get("args"):
+            words |= {button_words(x) for x in verbs(b["action"])}
+    return said in words or match_card_answer(said) is not None \
+        or control_call(text, cur["screen"], store.screen_items.get(cur["screen"])) is not None
+
+
+def live_unfinished(text: str, session: dict) -> bool:
+    """Hold a live turn for the rest (LIVE_HOLD_S)? Never when it's said whole
+    for this screen ("yes", "file"); else the grammar's cut-off rule ("add",
+    "I want to")."""
+    if whole_here(text):
+        return False
+    held = unfinished(text, store.prompt_state(session), tone.agent_name())
+    if held:
+        print(f"live unfinished: {text!r} (words={button_words(text)!r} screen="
+              f"{store.r['view']['current']['screen']})", flush=True)
+    return held
 
 
 async def _finish_search(client, key, out: tuple, session: dict) -> tuple:
@@ -1809,8 +1842,7 @@ async def voice_live(ws: WebSocket):
         while True:
             item = await next_owner_item(held)
             held = ""
-            if item["type"] == "owner" and not item.get("flush") \
-                    and unfinished(item["text"], store.prompt_state(session), tone.agent_name()):
+            if item["type"] == "owner" and not item.get("flush") and live_unfinished(item["text"], session):
                 held = item["text"]  # "I want to see": wait for the rest
                 print(f'live hold: "{held}"', flush=True)
                 continue
