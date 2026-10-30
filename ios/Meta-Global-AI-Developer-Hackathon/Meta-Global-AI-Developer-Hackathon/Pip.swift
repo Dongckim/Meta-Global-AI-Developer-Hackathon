@@ -316,6 +316,10 @@ struct ProtocolSummary: Decodable, Identifiable {
     var wells: Int?
     var runs: Int?
     var inProgress: Int?
+    /// The row's state from the server (registry `items.protocol`): active /
+    /// paused / done / new, and whether it takes taps at all.
+    var status: String?
+    var enabled: Bool?
     /// Device key of the PDF or photos (OriginalStore); empty for older imports.
     var originalId: String?
 
@@ -324,7 +328,7 @@ struct ProtocolSummary: Decodable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, name, sourceFilename = "source_filename", importedAt = "imported_at",
              conditions, steps, label, shortTitle = "short_title", wells, runs, inProgress = "in_progress",
-             originalId = "original_id"
+             status, enabled, originalId = "original_id"
     }
 }
 
@@ -974,6 +978,10 @@ struct ScreenRegistry: Decodable {
     /// Card answer buttons by card layout (single / next_step / checklist):
     /// action "answer_card", args.answer one of the registry `answers`.
     var cards: [String: [ScreenButton]]?
+    /// List rows by kind (`items`): the buttons a row keeps while it is off ("Run again").
+    var items: [String: ItemRule]?
+
+    struct ItemRule: Decodable { var buttons: [ScreenButton]? }
 
     static func decode(_ data: Data) throws -> ScreenRegistry {
         var reg = try JSONDecoder().decode(ScreenRegistry.self, from: data)
@@ -992,11 +1000,11 @@ struct ScreenRegistry: Decodable {
 
 /// Loaded registry, or the reason it couldn't be (shown as a banner).
 func loadScreens(from url: URL? = Bundle.main.url(forResource: "screens", withExtension: "json"))
-    -> (screens: [ScreenDef], cards: [String: [ScreenButton]], error: String?) {
+    -> (screens: [ScreenDef], cards: [String: [ScreenButton]], rows: [String: [ScreenButton]], error: String?) {
     do {
         guard let url else { throw ScreenRegistry.RegistryError.missing }
         let reg = try ScreenRegistry.decode(Data(contentsOf: url))
-        return (reg.screens, reg.cards ?? [:], nil)
+        return (reg.screens, reg.cards ?? [:], (reg.items ?? [:]).mapValues { $0.buttons ?? [] }, nil)
     } catch {
         let reason = switch error {
         case ScreenRegistry.RegistryError.missing: "screens.json not in the app bundle"
@@ -1004,6 +1012,6 @@ func loadScreens(from url: URL? = Bundle.main.url(forResource: "screens", withEx
         default: syncReason(error)
         }
         Log.view.error("[view] screen registry unreadable: \(reason, privacy: .public)")
-        return ([], [:], reason)
+        return ([], [:], [:], reason)
     }
 }

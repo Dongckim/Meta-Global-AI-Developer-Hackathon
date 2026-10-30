@@ -91,7 +91,7 @@ struct WebAnswerScreen: View {
                 }
                 if let second {
                     Button { perform(second) } label: {
-                        (Text("Say ").foregroundStyle(Theme.polishBlue)
+                        (Say.prefix(Theme.polishBlue)
                          + Text(second.say).fontWeight(.semibold).foregroundStyle(Theme.text1))
                     }
                     .buttonStyle(.plain)

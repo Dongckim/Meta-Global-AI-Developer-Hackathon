@@ -201,7 +201,7 @@ struct DraftStepScreen: View {
                     Spacer(minLength: 12 * u)
                     if let open {
                         Button { perform(open) } label: {
-                            (Text("Say ").foregroundStyle(Theme.polishBlue)
+                            (Say.prefix(Theme.polishBlue)
                              + Text(open.say).fontWeight(.semibold).foregroundStyle(Theme.text1)
                              + Text(" to see the page").foregroundStyle(Theme.text2))
                                 .font(.system(size: 22 * u))

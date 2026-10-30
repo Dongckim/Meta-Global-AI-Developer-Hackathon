@@ -15,11 +15,14 @@ struct ConfirmScreen: View {
     var u: CGFloat
     var onAnswer: (String, Bool) -> Void
     var onAnswerAll: () -> Void
+    /// A choice card's answer (registry `cards.<kind>`: open / review, version / separate).
+    var onChoice: (String, String) -> Void
 
     /// Newest first, as the server answers a bare "yes".
     private var cards: [ServerCard] { lab.cards.sorted { $0.ts > $1.ts } }
+    /// The card kind's own buttons when the registry has them, else single.
     private var layout: String {
-        cards.count > 1 ? "checklist" : cards.first?.kind == "next_step" ? "next_step" : "single"
+        cards.count > 1 ? "checklist" : cards.first.flatMap { buttons[$0.kind] == nil ? nil : $0.kind } ?? "single"
     }
 
     var body: some View {
@@ -110,6 +113,7 @@ struct ConfirmScreen: View {
         case "all": onAnswerAll()
         case "yes": if let c = cards.first { onAnswer(c.id, true) }
         case "no", "cancel": if let c = cards.first { onAnswer(c.id, false) }
+        case let a?: if let c = cards.first { onChoice(c.id, a) }
         default: break
         }
     }

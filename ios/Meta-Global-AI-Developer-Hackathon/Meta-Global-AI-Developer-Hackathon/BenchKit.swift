@@ -36,6 +36,13 @@ extension View {
     }
 }
 
+/// The one "Say" rule: buttons (big buttons, pills, chips) put "Say" before
+/// their word, the words that run them; list rows (protocols, runs,
+/// searches) show only their name.
+enum Say {
+    static func prefix(_ color: Color) -> Text { Text("Say ").foregroundStyle(color) }
+}
+
 /// "Say Continue": a registry button (screens.json `buttons`). The label is
 /// the button's `say`, which is also a screen command and what the server
 /// matches when spoken; a tap sends the same action through `perform`
@@ -53,7 +60,7 @@ struct SayButton: View {
         Button { perform(button) } label: {
             if button.greyed {
                 // registry `look: disabled`: greyed, with its note; a tap still asks the server why
-                (Text("Say ").foregroundStyle(Theme.text4)
+                (Say.prefix(Theme.text4)
                  + Text(word).fontWeight(.semibold).foregroundStyle(Theme.text2)
                  + Text(button.note.map { "  \($0)" } ?? "").foregroundStyle(Theme.text4))
                     .font(.system(size: size))
@@ -63,7 +70,7 @@ struct SayButton: View {
                     .background(Capsule().fill(Theme.cardOff))
                     .contentShape(Capsule())
             } else {
-                (Text("Say ").foregroundStyle(kind == .primary ? Color.white.opacity(0.72) : Theme.polishBlue)
+                (Say.prefix(kind == .primary ? Color.white.opacity(0.72) : Theme.polishBlue)
                  + Text(word).fontWeight(.semibold).foregroundStyle(kind == .primary ? .white : Theme.text1))
                     .font(.system(size: size))
                     .tracking(-0.54 * size / 34)
@@ -94,7 +101,7 @@ struct ControlChips: View {
         HStack(spacing: 12 * u) {
             ForEach(Array(buttons.enumerated()), id: \.offset) { _, b in
                 Button { perform(b) } label: {
-                    (Text("Say ").foregroundStyle(Theme.polishBlue) + Text(b.say).foregroundStyle(Theme.text1))
+                    (Say.prefix(Theme.polishBlue) + Text(b.say).foregroundStyle(Theme.text1))
                         .font(.system(size: 20 * u, weight: .medium)).lineLimit(1)
                         .padding(.horizontal, 18 * u).frame(height: 44 * u)
                         .background(Capsule().fill(Theme.chip))

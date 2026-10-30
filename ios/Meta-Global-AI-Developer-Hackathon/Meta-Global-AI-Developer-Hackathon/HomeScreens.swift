@@ -56,6 +56,8 @@ struct ProtocolsHome: View {
     var perform: (ScreenButton) -> Void
     /// The open draft's title (shown with Review while it waits).
     var draftTitle = ""
+    /// Registry `items.protocol` buttons: what an off row keeps ("Run again").
+    var rowButtons: [ScreenButton] = []
 
     private var selected: ProtocolSummary? {
         protocols.first { $0.id == selectedId }
@@ -106,8 +108,8 @@ struct ProtocolsHome: View {
                 Button { perform(review) } label: {
                     VStack(alignment: .leading, spacing: 4 * u) {
                         Text(draftTitle).font(.system(size: 34 * u, weight: .semibold)).foregroundStyle(Theme.text1)
-                        (Text(review.line ?? "").foregroundStyle(Theme.text2) + Text("  ·  Say ").foregroundStyle(Theme.text2)
-                         + Text(review.say).fontWeight(.semibold).foregroundStyle(Theme.polishBlue))
+                        (Text(review.line ?? "").foregroundStyle(Theme.text2) + Text("  ·  ")
+                         + Say.prefix(Theme.text2) + Text(review.say).fontWeight(.semibold).foregroundStyle(Theme.polishBlue))
                             .font(.system(size: 22 * u))
                     }
                     .lineLimit(1).minimumScaleFactor(0.6)
@@ -121,31 +123,43 @@ struct ProtocolsHome: View {
             ForEach(Array(shown.enumerated()), id: \.element.id) { i, p in
                 let n = p.runs ?? runsOf(p.id, in: runs).count
                 let live = p.inProgress ?? 0
-                Button { onProtocol(p.id) } label: {
-                    VStack(alignment: .leading, spacing: 4 * u) {
-                        if p.id == selected?.id {
-                            Text(p.title).font(.system(size: 34 * u, weight: .semibold)).foregroundStyle(Theme.text1)
-                        } else {
-                            (Text("Say ").foregroundStyle(Theme.polishBlue)
-                             + Text(p.title).foregroundStyle(Theme.text2))
-                                .font(.system(size: 34 * u, weight: .semibold))
+                // the server says whether the row is on (a done protocol isn't); nothing is worked out here
+                let on = p.enabled ?? true
+                // a list row shows its name only (Say belongs to buttons); an off row
+                // keeps its registry buttons (Run again) fixed on the right, the title
+                // truncating before them
+                HStack(spacing: 16 * u) {
+                    Button { onProtocol(p.id) } label: {
+                        VStack(alignment: .leading, spacing: 4 * u) {
+                            Text(p.title).font(.system(size: 34 * u, weight: .semibold))
+                                .foregroundStyle(p.id == selected?.id ? Theme.text1 : on ? Theme.text2 : Theme.text4)
+                                .truncationMode(.tail)
+                            (Text(n == 1 ? "1 run" : "\(n) runs").foregroundStyle(Theme.text2)
+                             + Text(live > 0 ? " · \(live) in progress" : "").foregroundStyle(Theme.polishBlue))
+                                .font(.system(size: 22 * u)).minimumScaleFactor(0.6)
                         }
-                        (Text(n == 1 ? "1 run" : "\(n) runs").foregroundStyle(Theme.text2)
-                         + Text(live > 0 ? " · \(live) in progress" : "").foregroundStyle(Theme.polishBlue))
-                            .font(.system(size: 22 * u))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
-                    .lineLimit(1).minimumScaleFactor(0.6)
-                    .padding(.horizontal, 32 * u).padding(.vertical, 26 * u)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background {
-                        if p.id == selected?.id {
-                            Color.clear.benchCard(radius: 32 * u)
-                        } else {
-                            RoundedRectangle(cornerRadius: 32 * u, style: .continuous).fill(Theme.cardOff)
+                    .buttonStyle(.plain)
+                    .disabled(!on)
+                    if !on {
+                        ForEach(rowButtons.compactMap { $0.filled(["status": p.status ?? "", "id": p.id]) },
+                                id: \.say) { b in
+                            SayButton(button: b, kind: .secondary, size: 22 * u, perform: perform)
+                                .fixedSize().layoutPriority(1)
                         }
                     }
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 32 * u).padding(.vertical, 26 * u)
+                .background {
+                    if p.id == selected?.id {
+                        Color.clear.benchCard(radius: 32 * u)
+                    } else {
+                        RoundedRectangle(cornerRadius: 32 * u, style: .continuous).fill(Theme.cardOff)
+                    }
+                }
                 .enter(.left, i, u: u)
             }
             if pages > 1 {
@@ -163,7 +177,7 @@ struct ProtocolsHome: View {
                 Button { perform(b) } label: {
                     HStack(spacing: 18 * u) {
                         Image(systemName: "globe").foregroundStyle(Theme.polishBlue)
-                        (Text("Say ").foregroundStyle(Theme.polishBlue) + Text(b.say).foregroundStyle(Theme.text1))
+                        Text(b.say).foregroundStyle(Theme.text1)  // a list row: its name only
                         Spacer(minLength: 0)
                         if searchCount > 0 { Text("\(searchCount)").foregroundStyle(Theme.text2) }
                     }
@@ -227,18 +241,14 @@ struct ProtocolsHome: View {
                     .overlay(Circle().strokeBorder(first ? Theme.polishBlue.opacity(0.3) : .clear, lineWidth: 5 * u))
                     .frame(width: 24 * u)
                 HStack(spacing: 18 * u) {
-                    if first {
-                        Text(r.label ?? "").font(.system(size: 28 * u, weight: .semibold)).foregroundStyle(Theme.text1)
-                    } else {
-                        (Text("Say ").foregroundStyle(Theme.polishBlue)
-                         + Text(r.label ?? "").foregroundStyle(Theme.polishBlue))
-                            .font(.system(size: 28 * u, weight: .semibold))
-                    }
+                    // a list row: its name only
+                    Text(r.label ?? "").font(.system(size: 28 * u, weight: .semibold))
+                        .foregroundStyle(first ? Theme.text1 : Theme.text5)
                     Text(r.day ?? "").font(.system(size: 24 * u)).foregroundStyle(Theme.text2)
                     Spacer(minLength: 0)
                     Text(r.state ?? "")
-                        .font(.system(size: 24 * u, weight: r.status == "active" ? .semibold : .regular))
-                        .foregroundStyle(r.status == "active" ? Theme.polishBlue : Theme.text2)
+                        .font(.system(size: 24 * u, weight: r.status == "finished" ? .regular : .semibold))
+                        .foregroundStyle(Theme.runState(r.status))
                 }
                 .lineLimit(1).minimumScaleFactor(0.6)
                 .padding(.horizontal, 30 * u).frame(height: 80 * u)
@@ -416,7 +426,7 @@ struct ChoiceCard: View {
             VStack(spacing: 0) {
                 Image(systemName: icon).font(.system(size: 40 * u)).foregroundStyle(Theme.text2)
                     .frame(height: 50 * u)
-                (Text("Say ").font(.system(size: 52 * u)).foregroundStyle(Theme.polishBlue)
+                (Say.prefix(Theme.polishBlue).font(.system(size: 52 * u))
                  + Text(button.say).font(.system(size: 64 * u, weight: .semibold)).foregroundStyle(Theme.text1))
                     .tracking(-1.2 * u).lineLimit(1).minimumScaleFactor(0.6)
                     .padding(.top, 70 * u)
