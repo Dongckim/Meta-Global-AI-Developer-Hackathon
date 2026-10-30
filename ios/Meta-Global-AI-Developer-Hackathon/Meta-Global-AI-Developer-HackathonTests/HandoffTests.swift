@@ -49,4 +49,13 @@ struct HandoffTests {
         let code = try #require(try JSONDecoder().decode(Only.self, from: Data(json.utf8)).handoff)
         #expect(code.steps.first?.lines == [2, 3] && code.steps.first?.color == "#F7C6D0" && code.exported)
     }
+
+    /// Scroll down / up on an original page: each one a new move, the page and zoom kept.
+    @Test func originalPagingScrolls() {
+        var p = OriginalPaging(page: 2, zoom: 1.5)
+        #expect(p.apply("scroll_down", n: nil, quotePage: 2, count: 3) && p.scroll == .init(gen: 1, dir: 1))
+        #expect(p.apply("scroll_down", n: nil, quotePage: 2, count: 3) && p.scroll == .init(gen: 2, dir: 1))
+        #expect(p.apply("scroll_up", n: nil, quotePage: 2, count: 3) && p.scroll == .init(gen: 3, dir: -1))
+        #expect(p.page == 2 && p.zoom == 1.5)
+    }
 }

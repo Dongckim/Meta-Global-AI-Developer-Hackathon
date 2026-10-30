@@ -75,6 +75,8 @@ struct PDFDocView: UIViewRepresentable {
     var phrase: String?
     /// 1 = fit the page; zoom in / out multiply it.
     var zoom: CGFloat = 1
+    /// Scroll down / up: a new `gen` moves the view most of a screen in `dir` (1 down, -1 up).
+    var scroll: OriginalPaging.Scroll = .init()
 
     func makeUIView(context: Context) -> PDFView {
         let v = PDFView()
@@ -84,6 +86,15 @@ struct PDFDocView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: PDFView, context: Context) {
+        if context.coordinator.lastScroll != scroll.gen {
+            context.coordinator.lastScroll = scroll.gen
+            if scroll.gen > 0, let sv = view.subviews.compactMap({ $0 as? UIScrollView }).first {
+                let room = sv.contentSize.height - sv.bounds.height + sv.adjustedContentInset.bottom
+                let y = min(max(sv.contentOffset.y + CGFloat(scroll.dir) * sv.bounds.height * 0.8,
+                                -sv.adjustedContentInset.top), max(room, 0))
+                sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: y), animated: true)
+            }
+        }
         if context.coordinator.lastZoom != zoom {
             context.coordinator.lastZoom = zoom
             view.autoScales = zoom == 1
@@ -117,6 +128,7 @@ struct PDFDocView: UIViewRepresentable {
     final class Coord {
         var lastKey = ""
         var lastZoom: CGFloat = 1
+        var lastScroll = 0
     }
 }
 
@@ -127,6 +139,13 @@ struct OriginalPaging: Equatable {
     var zoom: CGFloat = 1
     /// true: the quote's page with it highlighted; false: paged by hand.
     var onQuote = true
+    /// The last Scroll down / up (each one a new gen).
+    var scroll = Scroll()
+
+    struct Scroll: Equatable {
+        var gen = 0
+        var dir = 1
+    }
 
     /// Applies one control command; `count` pages exist. False when it isn't one.
     mutating func apply(_ cmd: String, n: Int?, quotePage: Int, count: Int) -> Bool {
@@ -138,6 +157,8 @@ struct OriginalPaging: Equatable {
         case "quote": page = quotePage; onQuote = true; zoom = 1
         case "zoom_in": zoom = min(zoom * 1.5, 4)
         case "zoom_out": zoom = max(zoom / 1.5, 1)
+        case "scroll_down": scroll = Scroll(gen: scroll.gen + 1, dir: 1)
+        case "scroll_up": scroll = Scroll(gen: scroll.gen + 1, dir: -1)
         default: return false
         }
         return true
@@ -160,7 +181,7 @@ struct SourceView: View {
                 let url = OriginalStore.url(protocolId: parsed.protocolId)
                 PDFDocView(url: url, page: paging.page,
                            phrase: paging.onQuote ? (phrase ?? textPhrase(fragment: parsed.fragment)) : nil,
-                           zoom: paging.zoom)
+                           zoom: paging.zoom, scroll: paging.scroll)
                     .onChange(of: commands?.gen) { _, _ in
                         guard let c = commands?.last else { return }
                         _ = paging.apply(c.cmd, n: c.n, quotePage: page ?? 1,

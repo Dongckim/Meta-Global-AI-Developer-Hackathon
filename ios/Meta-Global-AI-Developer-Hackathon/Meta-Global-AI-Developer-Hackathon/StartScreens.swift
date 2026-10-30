@@ -136,13 +136,14 @@ struct DraftStepsScreen: View {
             .benchCard(radius: 44 * u)
             .padding(.top, 34 * u)
             if final {
-                // Figma confirm card buttons: 360 x 93 each, 36 apart, the group centered
+                // the buttons share the steps card's width (1122), 36 apart: room for "Say Save without code"
                 HStack(spacing: 36 * u) {
                     ForEach(Array(buttons.enumerated()), id: \.offset) { i, b in
                         SayButton(button: b, kind: i == 0 ? .primary : .secondary, size: 34 * u, perform: perform)
-                            .frame(width: 360 * u)
+                            .frame(maxWidth: .infinity)
                     }
                 }
+                .frame(width: 1122 * u)
                 .padding(.top, 30 * u)
             } else {
                 SayRow(buttons: buttons, u: u, perform: perform).frame(width: 1122 * u).padding(.top, 30 * u)
@@ -360,7 +361,8 @@ struct DraftPageScreen: View {
 
     @ViewBuilder private func content(page: Int) -> some View {
         if let pdfURL {
-            PDFDocView(url: pdfURL, page: page, phrase: paging.onQuote ? row?.quote : nil, zoom: paging.zoom)
+            PDFDocView(url: pdfURL, page: page, phrase: paging.onQuote ? row?.quote : nil, zoom: paging.zoom,
+                       scroll: paging.scroll)
         } else if photos.indices.contains(page - 1), let img = UIImage(contentsOfFile: photos[page - 1].path) {
             // the photo is the original; the quote was checked against its transcript
             Image(uiImage: img).resizable().scaledToFit().scaleEffect(paging.zoom).padding(24 * u)
