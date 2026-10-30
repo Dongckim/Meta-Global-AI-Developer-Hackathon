@@ -2,6 +2,7 @@
 
 Run from repo root (live model, ~3 calls per case per repeat):
     .venv/bin/python eval/multi_action.py [repeats=3] [label]
+    RUN_MODE=private .venv/bin/python eval/multi_action.py 3 glimmer
 Appends a table to eval/results/multi_action.md.
 
 A case passes when every expected action ran and every pre-turn card was
@@ -44,6 +45,8 @@ def run_case(pre, text):
     api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
     api.store.start_demo_run()
     api.store.r["step_index"] = 2  # mid-run bench, as tool_choice
+    api.store.wake.begin()
+    api.store.wake.finish(True)  # RUN_MODE=private: the model is up
     api._SESSIONS.clear()
     c = TestClient(api.app)
     for p in pre:

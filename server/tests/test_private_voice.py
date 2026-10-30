@@ -133,6 +133,29 @@ with patch.object(api, "_post", calls):
 assert j["route"] == "wait" and not calls.glimmer and not calls.meta, j
 print("PV7 ok: asleep: the turn waits for the wake-up")
 
+# A named well is never dropped quietly --------------------------------------
+c = private()
+timer = ("perform", {"action": "set_timer", "minutes": 5, "target": "C5"})
+calls = Calls(chat(timer), chat(("perform", {"action": "mark_done", "wells": ["C6"]})))
+with patch.object(api, "_post", calls):
+    j = say(c, "put a five minute clock on C5 and also tick off C6")
+assert "C6" in done_wells(api.store.r) and len(calls.glimmer) == 2, j
+print("PV-lost1 ok: a verb grammar doesn't know still gets the followup round")
+
+c = private()
+calls = Calls(chat(timer), chat(text="Done."))
+with patch.object(api, "_post", calls):
+    j = say(c, "put a five minute clock on C5 and also tick off C6")
+assert "C6" not in done_wells(api.store.r) and "C6" in j["reply"] and j["reply"].endswith("?"), j
+print("PV-lost2 ok: still not done: it says so")
+
+c = private()
+calls = Calls(chat(("read_record", {"kind": "wells", "filter": "C2"})), chat(text="C2 is pending."))
+with patch.object(api, "_post", calls):
+    j = say(c, "how is C2 compared to C3")
+assert len(calls.glimmer) == 2 and "log" not in j["reply"], j
+print("PV-lost3 ok: a read turn isn't asked about")
+
 # Nothing reaches Meta before its card --------------------------------------
 c = private()
 calls = Calls(chat(("web_search", {"query": "max DMSO for HeLa cells"})))

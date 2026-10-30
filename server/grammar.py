@@ -1023,6 +1023,18 @@ def unserved_parts(parts: list[dict], calls: list, views) -> list[dict]:
             and (short or (p["wells"] and not p["wells"] & wells) or (p["timer"] and not timers))]
 
 
+def untouched_wells(text, calls: list, views, said: list) -> list[str]:
+    """Wells the owner named that a turn with writes neither touched nor
+    spoke of, whatever verb asked for them ("also tick off C6"). A turn of
+    only reads or views answers about what it found instead."""
+    if all(c.get("name") in views for c in calls):
+        return []
+    seen = {w for c in calls for w in call_wells(c)}
+    seen |= find_well_mentions(json.dumps([c.get("args") or {} for c in calls]))
+    seen |= find_well_mentions(" ".join(said))
+    return sorted(find_well_mentions(text) - seen)
+
+
 def bare_completion(text) -> bool:
     """A finish said with no target ("Finished.", "all done", "that's it"):
     only completion or end-run verbs, no wells, a few words. On the last

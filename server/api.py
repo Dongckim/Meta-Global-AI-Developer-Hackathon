@@ -52,6 +52,7 @@ from server.grammar import (
     answer_or_filler,
     unfinished,
     unserved_parts,
+    untouched_wells,
     relevant_plan_numbers,
     speak_text,
     split_ask,
@@ -1244,8 +1245,10 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
                 gdrop = gdrop or gdrop2
             _store_outputs(session, ordered2, outcomes2)
     also = ""
-    missing = unserved_parts(parts, calls, VIEW_ACTIONS) if question is None and not gdrop else []
-    if missing:
+    settled = question is None and not gdrop
+    missing = unserved_parts(parts, calls, VIEW_ACTIONS) if settled else []
+    lost = untouched_wells(text, calls, VIEW_ACTIONS, res["messages"]) if settled else []
+    if missing or lost:
         # one followup round, only when a requested part didn't run
         session["pending_outputs"] = [{"call_id": c["call_id"], "output": outcomes[c["call_id"]]}
                                       for c in model_raw if c.get("call_id") in outcomes]
@@ -1262,13 +1265,17 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
             question = question3
             gdrop = gdrop or gdrop3
             _store_outputs(session, ordered3, outcomes3)
-        still = unserved_parts(parts, calls, VIEW_ACTIONS) if question is None and not gdrop else []
-        print(f"[orch] followup ms={ms3} missing={[p['text'] for p in missing]} "
+        settled = question is None and not gdrop
+        still = unserved_parts(parts, calls, VIEW_ACTIONS) if settled else []
+        lost = untouched_wells(text, calls, VIEW_ACTIONS, res["messages"]) if settled else []
+        print(f"[orch] followup ms={ms3} missing={[p['text'] for p in missing]} lost={lost} "
               f"filled={[c.get('name') for c in (more[0] if more else [])]} "
               f"still={[p['text'] for p in still]}", flush=True)
         if still:
             what = " and ".join(p["text"][:1].lower() + p["text"][1:] for p in still)
             also = say("also_ask", session, what=what)
+        if lost and not also:  # whatever verb asked for it, a named well is never dropped quietly
+            also = say("didnt_act_target", session, target=wells_label(lost))
     calls = _strip_ids(calls)
     asked: dict = {}
     if question is not None:
@@ -1299,7 +1306,7 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         if also:
             # what ran is said first, then the part that didn't, as a question
             reply = f"{reply} {also}"
-            wells = sorted({w for p in still for w in p["wells"]})
+            wells = sorted({w for p in still for w in p["wells"]} | set(lost))
             asked = {"question": also, "target": wells_label(wells) if wells else ""}
     for m in res["messages"]:
         if m.startswith("Note updated.") and res["info"].get("edited"):
