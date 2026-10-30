@@ -432,3 +432,39 @@ struct PlanCheckScreen: View {
         plan.conditions = draft.plan.conditions.mapValues(PlanCondition.init)
     }
 }
+
+// MARK: - Import load pill (v36 `loadpill`)
+
+/// "Reading" while an import runs, then "Draft ready ✓". The server doesn't
+/// report progress, so the fill eases toward the end without a number and
+/// only reaches it when the draft is in (v36 shows a timed %).
+struct LoadPill: View {
+    var done: Bool
+    var u: CGFloat
+    @State private var start = Date()
+
+    var body: some View {
+        TimelineView(.animation(paused: done)) { ctx in
+            let t = ctx.date.timeIntervalSince(start)
+            let p = done ? 1 : 0.92 * (1 - exp(-t / 8))
+            GeometryReader { g in
+                let w = max(360 * u, g.size.width * p)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Theme.wellEmpty)
+                    HStack {
+                        Text(done ? "Draft ready" : "Reading")
+                        Spacer(minLength: 0)
+                        if done { Image(systemName: "checkmark").fontWeight(.semibold) }
+                    }
+                    .font(Theme.ui(34 * u)).foregroundStyle(.white)
+                    .padding(.horizontal, 48 * u)
+                    .frame(width: w, height: g.size.height)
+                    .background(Capsule().fill(Theme.polishBlue))
+                    .animation(.easeOut(duration: 0.35), value: done)
+                }
+            }
+        }
+        .frame(width: 1248 * u, height: 96 * u)
+        .accessibilityLabel(done ? "Draft ready" : "Reading the protocol")
+    }
+}

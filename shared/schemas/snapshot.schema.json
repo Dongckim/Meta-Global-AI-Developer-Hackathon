@@ -237,6 +237,7 @@
         "stage": {"enum": [null, "generating", "simulating", "fixing", "passed", "needs_you"]},
         "attempt": {"type": "integer"}, "error": {"type": "string"}, "check": {"type": ["object", "null"]},
         "code": {"type": "string"}, "csv": {"type": "string"}, "exported": {"type": ["number", "null"]},
+        "steps": {"type": "array", "description": "The approved as-run steps (n, title, kind transfer | delay, wells, volume_ul, minutes); empty unless approved."},
         "meta": {"type": "object"},
         "summary": {"type": "object", "required": ["rows", "others", "of", "changed"],
                     "properties": {

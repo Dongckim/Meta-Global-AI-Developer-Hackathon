@@ -256,6 +256,7 @@ assert 'C3,"Drug A",excluded,1,voice,"bubbles"' in doc["handoff"]["csv"], doc["h
 snap = c.get("/record").json()
 assert snap["view"]["prompt"] == "All 4 steps match your record. Export?", snap["view"]
 assert snap["handoff"]["stage"] == "passed" and "protocol.comment(\"step 1\")" in snap["handoff"]["code"]
+assert snap["handoff"]["steps"] == steps  # what ⑨ replays
 j = c.post("/input", json={"text": "export", "session": "ho"}).json()
 assert st.r["view"]["current"] == {"screen": "export_files", "target": run_id}, st.r["view"]
 j = c.post("/input", json={"text": "export", "session": "ho"}).json()

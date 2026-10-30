@@ -637,6 +637,25 @@ struct Handoff: Decodable {
     var code: String
     var csv: String
     var exported: Double?
+    /// The approved steps the virtual robot replays on ⑨ (empty until approved).
+    var steps: [Step]?
+
+    struct Step: Decodable {
+        var n: Int
+        var title: String
+        /// transfer | delay
+        var kind: String
+        var wells: [String]?
+        var volumeUl: Double?
+        var minutes: Double?
+        enum CodingKeys: String, CodingKey { case n, title, kind, wells, volumeUl = "volume_ul", minutes }
+
+        /// "10 µL" / "30 min", as v36's sim rows read.
+        var amount: String {
+            if kind == "delay" { return "\((minutes ?? 0).formatted()) min" }
+            return volumeUl.map { "\($0.formatted()) µL" } ?? ""
+        }
+    }
 
     struct Check: Decodable {
         var ok: Bool
@@ -646,7 +665,7 @@ struct Handoff: Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case runId = "run_id", label, summary, meta, approved, stage, attempt, error, check, code, csv, exported
+        case runId = "run_id", label, summary, meta, approved, stage, attempt, error, check, code, csv, exported, steps
     }
 }
 

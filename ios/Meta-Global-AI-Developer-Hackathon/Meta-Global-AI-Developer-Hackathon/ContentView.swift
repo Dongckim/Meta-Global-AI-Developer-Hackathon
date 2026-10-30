@@ -48,6 +48,8 @@ struct ContentView: View {
     /// An import is being read (the server says "Reading the protocol…");
     /// a second start is ignored and the import screens are disabled.
     @State private var importing = false
+    /// The import's load pill: shown while reading, "Draft ready" a moment after.
+    @State private var importPill: Bool? = nil
     @State private var showImporter = false
     @State private var showTextImport = false
     /// Control commands for the screen on top (next page, take it, scroll down…).
@@ -262,6 +264,18 @@ struct ContentView: View {
         }
         // One voice edge above every screen (touches pass through).
         .overlay { EdgeGlow(voice: voice).ignoresSafeArea() }
+        // v36 load pill while a protocol is read (text, file or photo)
+        .overlay(alignment: .bottom) {
+            if let done = importPill {
+                GeometryReader { g in
+                    LoadPill(done: done, u: Theme.Layout.unit(g.size))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .padding(.bottom, 48 * Theme.Layout.unit(g.size))
+                }
+                .transition(.opacity)
+                .allowsHitTesting(false)
+            }
+        }
         // hidden from the first frame on and never toggled: a status bar
         // appearing with Main changed the safe area under it (the bands)
         .statusBarHidden(true)
@@ -1036,6 +1050,7 @@ struct ContentView: View {
                         oid: String = UUID().uuidString) {
         guard !importing else { return }  // one import at a time; the server joins repeats too
         importing = true
+        withAnimation { importPill = false }
         navByTap = true  // Draft ready's line is said in a live session, like a tap
         Task { @MainActor in
             do {
@@ -1045,9 +1060,13 @@ struct ContentView: View {
                 lab.draft = r.draft
                 say(r.reply)
                 importing = false
+                importPill = true
+                try? await Task.sleep(for: .milliseconds(900))
+                withAnimation { importPill = nil }
             } catch {
                 say("Import failed: \(error.localizedDescription)")
                 importing = false
+                withAnimation { importPill = nil }
             }
         }
     }

@@ -2148,6 +2148,8 @@ class RecordStore:
                 "error": h.get("error") or "", "check": h.get("check"),
                 "code": (h.get("code") or "") if ok else "", "csv": (h.get("csv") or "") if ok else "",
                 "exported": h.get("exported") if ok else None,
+                # what the virtual robot replays on ⑨: the approved steps (wells, µL, minutes)
+                "steps": ((h.get("approved") or {}).get("steps") or []) if ok else [],
                 "meta": {"source": p.get("source_filename") or p.get("name") or "", "layout": {},
                          "origin": p.get("origin"), "original_id": p.get("original_id"),
                          "evidence": {"text": p.get("source_text") or ""}}}
