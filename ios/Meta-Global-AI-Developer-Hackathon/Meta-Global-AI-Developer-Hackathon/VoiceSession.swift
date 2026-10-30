@@ -509,6 +509,10 @@ final class VoiceSession {
         case "searching", "summarizing":
             stage = s.stage == "summarizing" ? TurnStage(stage: s.stage, query: stage?.query) : s
             serverBusy = .searching
+        case "waking", "awake", "answer":
+            // the private model's wake-up and a turn held for it: not a turn of its own
+            if let line = s.say, !line.isEmpty { speak(line) }
+            return
         case "looking":
             // a photo question waits for its photo: the turn rests ("Show me."), Take it comes next
             stage = nil
@@ -874,13 +878,15 @@ struct TopHeader: View {
     var onBlockedTap: () -> Void = {}
     /// The run mode label (server header.mode); nil on screens before a mode is chosen.
     var mode: RecordSnapshot.RunModeLabel? = nil
+    /// The private model is waking: the orb breathes slower while Milo is idle.
+    var waking = false
 
     var body: some View {
         let line = Theme.pipText(for: voice.state, speakText: speakText,
                                  partialText: partialText, wake: voice.wakeSupport,
                                  wakeOn: VoiceSession.wakeEnabled, stage: voice.stage)
         let idle = voice.inSession && voice.state == .listening
-        TopHeaderView(style: Theme.orbStyle(for: voice.state),
+        TopHeaderView(style: waking && voice.state == .ready ? Theme.orbWaking : Theme.orbStyle(for: voice.state),
                       text: voice.aside ?? (idle ? Theme.sessionIdleLine : line.text),
                       icon: voice.aside == nil && !idle ? line.icon : nil,
                       dots: voice.aside == nil && !idle && line.dots,

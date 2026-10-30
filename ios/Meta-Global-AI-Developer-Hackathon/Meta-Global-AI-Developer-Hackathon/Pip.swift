@@ -751,6 +751,15 @@ struct RecordSnapshot: Decodable {
     var headerMode: RunModeLabel?
     /// The bench as the server worked it out from the run so far.
     var bench: Bench?
+    /// The private model's wake-up (server `private`); nil until Private asks for it.
+    var privateWake: PrivateWake?
+
+    struct PrivateWake: Decodable, Equatable {
+        var state: String
+        var elapsedS: Int
+        var line: String
+        enum CodingKeys: String, CodingKey { case state, elapsedS = "elapsed_s", line }
+    }
 
     /// Snapshot `bench`: each touched well's state (done / now / excluded),
     /// wells per condition (legend), the last steps passed (Done rows).
@@ -773,6 +782,7 @@ struct RecordSnapshot: Decodable {
     enum CodingKeys: String, CodingKey {
         case epoch, view, version, plan, stepIndex = "step_index", done, excluded, redo,
              notes, tips, timers, stamps, cards, draft, handoff, run, recent, header, bench
+        case privateWake = "private"
     }
 
     init(from decoder: Decoder) throws {
@@ -799,6 +809,7 @@ struct RecordSnapshot: Decodable {
         run = try c.decodeIfPresent(RunBlock.self, forKey: .run)
         recent = try c.decodeIfPresent([HistoryEntry].self, forKey: .recent) ?? []
         headerMode = try c.decodeIfPresent(Header.self, forKey: .header)?.mode
+        privateWake = (try? c.decodeIfPresent(PrivateWake.self, forKey: .privateWake)) ?? nil  // auxiliary, like draft
         bench = try c.decodeIfPresent(Bench.self, forKey: .bench)
     }
 }
@@ -918,6 +929,8 @@ final class LabState {
     var headerMode: RecordSnapshot.RunModeLabel?
     /// The server's bench (plate well states, legend, Done rows); drawn as is.
     var bench: RecordSnapshot.Bench?
+    /// The private model's wake-up, drawn as the server sends it.
+    var privateWake: RecordSnapshot.PrivateWake?
     var cards: [ServerCard] = []
     var draft: ProtocolDraft?
     var handoff: Handoff?
@@ -955,6 +968,7 @@ final class LabState {
         notes = snap.notes
         timers = snap.timers
         headerMode = snap.headerMode
+        privateWake = snap.privateWake
         bench = snap.bench
         cards = snap.cards
         draft = snap.draft
@@ -1086,6 +1100,8 @@ struct ScreenButton: Decodable, Equatable {
     var line: String?
     /// An iOS picker we can't drive by voice ("Browse files…"): tap only.
     var tapOnly: Bool?
+    /// More words for the same action, heard but not drawn ("Full mode").
+    var voiceOnly: Bool?
     /// Shown only in this state of the screen's slots ({"status": "finished"}).
     var when: [String: String]?
     /// "disabled": drawn greyed (a tap or the words still run the action,
@@ -1096,7 +1112,7 @@ struct ScreenButton: Decodable, Equatable {
     var greyed: Bool { look == "disabled" }
 
     enum CodingKeys: String, CodingKey {
-        case say, action, args, line, when, look, note, tapOnly = "tap_only"
+        case say, action, args, line, when, look, note, tapOnly = "tap_only", voiceOnly = "voice_only"
     }
 
     /// A templated button ("Step {step}") filled from the screen's slots;

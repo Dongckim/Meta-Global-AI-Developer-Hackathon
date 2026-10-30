@@ -23,11 +23,19 @@ def keys() -> list[str]:
     return [k for k, v in _data().items() if not k.startswith("_") and isinstance(v, list)]
 
 
+#: The mode chosen on the Mode screen; until then the RUN_MODE setting.
+_chosen_mode: str | None = None
+
+
+def set_run_mode(mode: str | None) -> None:
+    global _chosen_mode
+    _chosen_mode = mode
+
+
 def run_mode() -> str:
-    """The run mode now (settings: RUN_MODE; only Full exists yet), a key of
-    pip_voice.json `modes`."""
+    """The run mode now, a key of pip_voice.json `modes`."""
     import os
-    return os.environ.get("RUN_MODE", "full")
+    return _chosen_mode or os.environ.get("RUN_MODE", "full")
 
 
 def section(name: str) -> dict:

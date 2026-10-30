@@ -211,6 +211,11 @@ enum Theme {
         /// sheen 1.4s ease-in-out: a white band (.35 at 50%) crossing a loading card.
         static let sheen = 1.4
         static let sheenPeak = 0.35
+        /// The same band on the private model's wait: slower and quieter.
+        static let shimmer = 1.6
+        static let shimmerPeak = 0.16
+        /// The wait's line changes with a crossfade, the screens with `screen`.
+        static let lineFade = 0.5
         /// --ease cubic-bezier(.22,1,.36,1) and --spring cubic-bezier(.34,1.36,.64,1).
         static func ease(_ duration: Double) -> Animation { .timingCurve(0.22, 1, 0.36, 1, duration: duration) }
         static func spring(_ duration: Double) -> Animation { .timingCurve(0.34, 1.36, 0.64, 1, duration: duration) }
@@ -483,6 +488,9 @@ enum Theme {
             case sweep
         }
     }
+
+    /// The private model is waking: the ready orb at a slower breath.
+    static let orbWaking = OrbStyle(breathe: breathe * 2, ring: nil, scale: 1, aurora: .breath, hollow: false)
 
     static func orbStyle(for state: VoiceSession.State) -> OrbStyle {
         switch state {

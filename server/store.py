@@ -30,7 +30,8 @@ from server.grammar import (
 )
 from server.screens import READ_KINDS as SCREEN_READ_KINDS
 from server.screens import FLOWS, PLANNED, SCREENS, canonical, card_answers, card_choices, item_off, ITEMS, parent_of, result_of, title_of, ui_of
-from server.tone import run_mode, say, section
+from server.private_wake import PrivateWake
+from server.tone import run_mode, say, section, set_run_mode
 from server import library as lib
 from server import protocol as proto
 from server import labels
@@ -199,6 +200,9 @@ class RecordStore:
         self.screen_items: dict[str, list[dict]] = {}
         #: Starts a run's hand off loop (api sets it; None in plain store tests).
         self.spawn_handoff = None
+        #: The private model's wake-up; its task lives in api (None in plain store tests).
+        self.wake = PrivateWake()
+        self.spawn_wake = None
         self._load_or_seed()
 
     # --- persistence / broadcast ---
@@ -339,6 +343,75 @@ class RecordStore:
             v["stack"].append(dict(v["current"]))
         v["current"] = new
         v["sheet"] = {"name": "", "target": ""}
+
+    # --- run mode, the private model's wake-up ---
+
+    def _start_wake(self, session: dict) -> None:
+        gen = self.wake.begin()
+        if self.spawn_wake:
+            self.spawn_wake(session, gen)
+
+    def _wait_for_private(self, session: dict, then: str) -> None:
+        """The wait screen over this one; `then` is what it opens once awake."""
+        if self.wake.state != "warming":
+            self._start_wake(session)
+        if self.r["view"]["current"]["screen"] != "private_wait":
+            self._push_view("private_wait", then)
+
+    def _leave_wait(self, res: dict, session: dict) -> None:
+        v = self.r["view"]
+        if v["current"]["screen"] != "private_wait":
+            return
+        then = v["current"]["target"]
+        v["current"] = v["stack"].pop() if v["stack"] else {"screen": then, "target": ""}
+        if then != v["current"]["screen"]:
+            self._navigate_locked(res, session, then, "")
+
+    def _choose_mode(self, res: dict, session: dict, mode) -> None:
+        """Full or Private, then the import flow. Private waits for its model;
+        leaving it drops a turn parked for it: those words were meant to stay private."""
+        if mode not in section("modes"):
+            res["messages"].append("Full or Private?")
+            return
+        set_run_mode(mode)
+        waiting = self.r["view"]["current"]["screen"] == "private_wait"
+        if mode == "private" and not self.wake.fresh():
+            self._wait_for_private(session, "import_choice")
+            return
+        if mode == "full":
+            self.wake.reset()
+            session.pop("wake_pending", None)
+        if waiting:
+            self._leave_wait(res, session)
+        else:
+            self._navigate_locked(res, session, "import_choice", "")
+
+    def park_for_private(self, text: str, session: dict, source: str) -> str:
+        """A turn for the model before it's awake: kept until ready (the latest
+        one). Returns what to say now."""
+        with self._lock:
+            session["wake_pending"] = (text, source)
+            if self.wake.state == "failed":
+                return section("private")["failed_line"]
+            self._wait_for_private(session, self.r["view"]["current"]["screen"])
+            self._commit()
+            return ""
+
+    def wake_tick(self, gen: int) -> None:
+        with self._lock:
+            if gen == self.wake.gen and self.wake.state == "warming":
+                self._commit()  # the seconds on screen
+
+    def wake_done(self, gen: int, ok: bool, session: dict) -> bool:
+        """The wake-up's end; False when it was retired meanwhile."""
+        with self._lock:
+            if gen != self.wake.gen or self.wake.state != "warming":
+                return False
+            self.wake.finish(ok)
+            if ok:
+                self._leave_wait({"messages": [], "cards": [], "info": {}, "ui": []}, session)
+            self._commit()
+            return True
 
     def _flow_gate(self, screen: str, session: dict) -> str:
         """A flow has one way in (registry `flows`): a step opens only through
@@ -497,6 +570,8 @@ class RecordStore:
                 out["searched"] = lab["searched"]
             if out["sources"] > 1:
                 out["second"] = "2"
+        elif screen == "private_wait":
+            out = {"wake": self.wake.state}
         elif screen in self.HANDOFF_SCREENS:
             out = self._handoff_slots(screen, target)
         elif screen in self.DRAFT_SCREENS and (draft := self.r.get("draft")):
@@ -968,6 +1043,7 @@ class RecordStore:
                 else labels.shorten_title(t.get("step") or t.get("label") or "")
         snap["handoff"] = self.handoff_view(self._handoff_here()) if self._handoff_here() else None
         snap["bench"] = self.bench_view(self.r)
+        snap["private"] = self.wake.view()
         snap["header"] = {"mode": self.header_mode(cur.get("screen") or ("main" if snap.get("run") else "home"))}
         if snap.get("run"):  # what the app shows instead of the run id
             snap["run"]["label"] = self.run_label(self.active_run_doc() or snap["run"])["display"]
@@ -1709,6 +1785,8 @@ class RecordStore:
             res["messages"].append(result_of(sid, target=wells_label(wells), name=args.get("target")))
             if wells:
                 res["ui"].append({"action": "flash", "wells": wells})
+        elif name == "choose_mode":
+            self._choose_mode(res, session, args.get("mode"))
         elif name == "navigate":
             raw = args.get("screen")
             screen = canonical(raw) if isinstance(raw, str) else None

@@ -363,9 +363,16 @@ struct ContentView: View {
             TopHeader(voice: voice, speakText: lab.cards.first?.header ?? lastReply, partialText: voice.partialText,
                       // the plain bench lists its own timers; cards and the well card show the chip
                       timers: showsBench && lab.cards.isEmpty && selectedWell == nil ? [] : lab.timers,
-                      onBlockedTap: openSync, mode: lab.headerMode)
+                      onBlockedTap: openSync, mode: lab.headerMode,
+                      waking: lab.privateWake?.state == "warming")
             Group {
-                if let src = viewingSource {
+                if lab.view.current.screen == "private_wait", let wake = lab.privateWake {
+                    stage { u in
+                        PrivateWaitScreen(wake: wake, next: lab.view.current.target,
+                                          buttons: buttons("private_wait"), u: u, perform: performButton)
+                    }
+                    .transition(.opacity)
+                } else if let src = viewingSource {
                 VStack(spacing: 8) {
                     HStack {
                         Button { sendAction("back") } label: {
@@ -502,6 +509,7 @@ struct ContentView: View {
                 experimentView
             }
         }
+        .animation(Theme.Motion.ease(Theme.Motion.screen), value: lab.view.current.screen == "private_wait")
         }
     }
 

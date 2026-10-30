@@ -115,6 +115,9 @@ def fresh(sid: str, b: dict | None = None) -> RecordStore:
             doc["handoff"] = {"approved": {"hash": handoff.record_hash(doc["record"]), "ts": 1, "steps": []},
                               "stage": "passed", "attempt": 1, "code": "protocol.comment(\"Step 1: x\")\n"}
             runlog.write_run(doc, st.root)
+    if sid == "private_wait":  # its buttons show once the wake-up failed
+        st.wake.begin()
+        st.wake.finish(False)
     st.r["view"]["current"] = {"screen": sid, "target": target}  # said on its own screen
     return st
 
@@ -282,7 +285,7 @@ from server.screens import button_match  # noqa: E402
 
 for said in ("full please full please", "um full", "let's go full", "Oh. Full."):
     call, ask = button_match(said, ["mode"])
-    assert call == {"name": "navigate", "args": {"screen": "import_choice"}} and ask is None, (said, call, ask)
+    assert call == {"name": "choose_mode", "args": {"mode": "full"}} and ask is None, (said, call, ask)
 assert button_match("not full", ["mode"]) == (None, None)
 assert button_match("full or private", ["mode"]) == (None, "Full or Private?")
 assert button_match("what's the next step?", ["main"]) == (None, None), "a question isn't a press"

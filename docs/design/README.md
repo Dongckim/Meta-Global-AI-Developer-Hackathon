@@ -63,6 +63,15 @@ nearest frame's parts and should get a look.
   {n} done and go to step {m}?"; two buttons 360 x 93, 36 apart (primary "Mark
   them", muted "Skip them") and "Not yet" as a small text button under them.
   The header shows one line, "{wells} not marked."
+- **Private model waking** (screen `private_wait`): after Private on ⑤a, or
+  when a turn needs the model while it sleeps. Header as usual with a slower
+  orb breath (6.4 s) and lock + "Private". Behind: the next screen as a
+  skeleton (⑤b's three 345 tall cards, else one) in `cardGlass` with the
+  search sheen slower and quieter (1.6 s, peak .16). Over it, a 1000 wide white
+  card: one line (40 semibold, opacity crossfade .5 s) and the seconds ("12 s",
+  28). Awake: crossfade to the real screen (`Motion.screen`). Failed: a 900
+  wide card, "The private model didn't wake up." with Try again (primary) and
+  Use Full mode (secondary), both 360 wide.
 - **⑨0 Final protocol**: the ⑤c-⑤e review screens in final protocol mode
   (plan → run, Changed badge, the step's changes with their record event;
   Keep as run / Use plan on a timer step). See `handoff.md`.

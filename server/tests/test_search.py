@@ -184,6 +184,8 @@ print("S5 ok: slow search times out")
 # S6. A mode that asks first (setting, not a branch): card, then yes searches.
 st = fresh()
 with patch.dict(os.environ, {"RUN_MODE": "private"}):
+    api.store.wake.begin()
+    api.store.wake.finish(True)  # the private model is up
     ScriptClient.queue = [perform("web_search", "c4", query="max DMSO for HeLa cells")]
     with patch("httpx.AsyncClient", ScriptClient):
         j = c.post("/input", json={"text": "Max DMSO for HeLa cells?", "session": "s"}).json()

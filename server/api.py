@@ -78,6 +78,7 @@ from server.grammar import match_session_end
 from server.live_session import LiveSender, LiveConversation, live_keywords
 from server.live_session import settings as live_settings
 from server.tone import keys as tone_keys
+from server.private_wake import wake_up, weights_gb
 from server.tone import run_mode, say, section
 
 import httpx
@@ -90,7 +91,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 21
+API_VERSION = 22
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -183,7 +184,7 @@ PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "skip_sync", "review_draft", "save_draft", "start_run", "discard_draft", "look", "retake_look",
                    "show_step", "open_source_page", "web_search", "open_source", "control", "pick",
                    "resume_run", "approve_handoff", "save_handoff", "next_change", "retry_handoff",
-                   "export_handoff", "set_timing"]
+                   "export_handoff", "set_timing", "choose_mode"]
 #: Model actions the turn runs itself, not the store: they leave the turn for
 #: their own path (web_search -> _web_search_turn, a card first in Private).
 #: Every other PERFORM_ACTIONS entry is the store's (pinned by test).
@@ -225,7 +226,7 @@ TOOLS = [
         "opens a past search; open_source{n?} on a search answer (a page in the app); "
         "control{cmd,n?} = the screen's own buttons (next_page, page n, zoom_in, scroll_down, take, done...); "
         "pick{n|name} = an item on a list screen (a file); "
-        "retry_sync; skip_sync (setup screen only). Never answer_card. "
+        "retry_sync; skip_sync (setup screen only). choose_mode{mode: full|private}. Never answer_card. "
         f"Screens (navigate.screen): {SCREEN_GUIDE} "
         "Backup well: read free_wells first, then act on the first candidate at once.",
         {
@@ -249,6 +250,7 @@ TOOLS = [
             "cmd": {"type": "string"},
             "name": {"type": "string"},
             "n": {"type": "integer"},
+            "mode": {"type": "string", "enum": ["full", "private"]},
         },
         # only what the action uses: a strict call spelled out all 16 props
         # (~250 output tokens each) and three of them overran the cap
@@ -384,6 +386,79 @@ def _spawn_handoff(run_id: str) -> None:
 
 
 store.spawn_handoff = _spawn_handoff
+
+#: The whole wake-up, one retry included.
+WAKE_TIMEOUT_S = section("private")["wake_timeout_s"]
+WAKE_TICK_S = 1.0
+WAKE_SPEAK_AFTER_S = section("private")["speak_after_s"]
+HF_TREE = "https://huggingface.co/api/models/{repo}/tree/main"
+_wake_tasks: set[asyncio.Task] = set()
+
+
+async def _wake_post() -> None:
+    """One token from the private model: its container is up when this returns."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
+        resp = await client.post(os.environ["PRIVATE_LLM_URL"].rstrip("/") + "/v1/chat/completions",
+                                 json={"messages": [{"role": "user", "content": "hi"}], "max_tokens": 1})
+        resp.raise_for_status()
+
+
+async def _weights_sizes() -> dict:
+    """{file: bytes} as the model's repo lists them."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(HF_TREE.format(repo=section("private")["repo"]))
+        resp.raise_for_status()
+    return {f["path"]: f["size"] for f in resp.json()}
+
+
+async def _learn_weights_size() -> None:
+    """Only a line waits on this: no size, no line."""
+    try:
+        store.wake.gb = store.wake.gb or weights_gb(await _weights_sizes(), section("private")["files"])
+    except Exception as e:
+        print(f"private wake: size unknown: {type(e).__name__}: {e}", flush=True)
+
+
+async def _wake_ticks(session: dict, gen: int) -> None:
+    """The seconds on screen; Milo speaks only if this isn't over at once."""
+    spoke, t0 = False, time.monotonic()
+    while True:
+        await asyncio.sleep(WAKE_TICK_S)
+        store.wake_tick(gen)
+        if not spoke and time.monotonic() - t0 >= WAKE_SPEAK_AFTER_S:
+            spoke = session["wake_spoke"] = True
+            _stage(session, "waking", say=section("private")["waking_line"])
+
+
+async def _wake_task(session: dict, gen: int) -> None:
+    """Wake the private model; a turn parked for it runs after."""
+    session["wake_spoke"] = False
+    size = asyncio.create_task(_learn_weights_size())
+    ticks = asyncio.create_task(_wake_ticks(session, gen))
+    try:
+        ok = await wake_up(_wake_post, WAKE_TIMEOUT_S)
+    finally:
+        ticks.cancel()
+    await asyncio.gather(size, return_exceptions=True)
+    if not store.wake_done(gen, ok, session):
+        return
+    print(f"private wake: {store.wake.state} in {store.wake.elapsed:.1f}s", flush=True)
+    if ok and session.get("wake_spoke"):
+        _stage(session, "awake", say=section("private")["awake_line"])
+    pending = session.pop("wake_pending", None) if ok else None
+    if pending:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            out = await _turn(client, _key(), pending[0], session, pending[1])
+        _stage(session, "answer", say=out[2])
+
+
+def _spawn_wake(session: dict, gen: int) -> None:
+    task = asyncio.get_running_loop().create_task(_wake_task(session, gen))
+    _wake_tasks.add(task)
+    task.add_done_callback(_wake_tasks.discard)
+
+
+store.spawn_wake = _spawn_wake
 
 
 class OrchestrateIn(BaseModel):
@@ -860,7 +935,7 @@ REQUIRED_ARGS = {
     "mark_done": ["wells"], "exclude_well": ["well"], "record_redo": ["wells"],
     "add_note": ["target", "text"], "edit_note": ["text"],
     "save_tip": ["step_id", "text"], "set_timer": ["minutes"],
-    "navigate": ["screen"], "open": ["target"], "edit_draft": ["path", "value"],
+    "navigate": ["screen"], "choose_mode": ["mode"], "open": ["target"], "edit_draft": ["path", "value"],
     "web_search": ["query"], "control": ["cmd"],
 }
 ASK_FOR = {
@@ -1030,6 +1105,9 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         if res["info"].get("edited"):
             reply = f"Note updated ({res['info']['edited']['target']})."
         return calls, res["messages"], reply, 0, "grammar", res["cards"], res["info"], []
+    if run_mode() == "private" and not store.wake.fresh():  # asleep: this turn runs once it's up
+        return [], [], store.park_for_private(text, session, source), 0, "wait", [], \
+            {"dropped": 0, "drop_reasons": []}, []
     summary = evidence_summary(session.get("turns"))
     _stage(session, "thinking")
     calls, texts, ms, cut, _ = await _call_spark(

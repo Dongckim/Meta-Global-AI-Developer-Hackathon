@@ -34,6 +34,16 @@
                  "properties": {"id": {"type": "string"}, "label": {"type": "string"}}}
       }
     },
+    "private": {
+      "type": ["object", "null"],
+      "required": ["state", "elapsed_s", "line"],
+      "description": "Served snapshots only: the private model's wake-up, null until Private asks for it. The app draws it as is.",
+      "properties": {
+        "state": {"enum": ["warming", "ready", "failed"]},
+        "elapsed_s": {"type": "integer"},
+        "line": {"type": "string"}
+      }
+    },
     "epoch": {"type": "string",
               "description": "Record lineage id: minted when record.json is created, carried across start/end, new only on data reset or server move. The app resets its stale guard on change."},
     "version": {"type": "integer"},

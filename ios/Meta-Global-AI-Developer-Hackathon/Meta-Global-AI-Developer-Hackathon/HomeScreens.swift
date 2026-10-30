@@ -427,11 +427,9 @@ struct RunRecordScreen: View {
 
 // MARK: - ⑤a Mode, ⑤b Import (Start)
 // ⑤a (Figma 37:13141): Full or Private, lines from pip_voice.json `modes`;
-// Private is planned (the server answers "That isn't ready yet.").
+// Private waits for its model (PrivateWaitScreen), then goes on to ⑤b.
 // ⑤b (37:13167): Text / File / Photo from the registry import_choice
 // buttons; File opens the importer, Text and Photo are planned.
-// Server to do: a Private mode (on-device model, asks before anything
-// leaves), text and photo import.
 
 /// A big "Say Full" choice card with its line.
 struct ChoiceCard: View {
@@ -488,6 +486,74 @@ struct ModeScreen: View {
         }
         .padding(.bottom, Theme.Layout.choiceLift * u)
         .frame(maxHeight: .infinity)
+    }
+}
+
+/// Private's model is waking (not in the design): the next screen as a
+/// skeleton, the server's line and seconds over it; failed: a card with the
+/// registry's buttons. The server decides all of it (snapshot `private`).
+struct PrivateWaitScreen: View {
+    var wake: RecordSnapshot.PrivateWake
+    /// The screen that opens once it's awake (view target).
+    var next: String
+    var buttons: [ScreenButton]
+    var u: CGFloat
+    var perform: (ScreenButton) -> Void
+
+    var body: some View {
+        ZStack {
+            skeleton
+            if wake.state == "failed" { failed } else { waiting }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var skeleton: some View {
+        let cards = next == "import_choice" ? 3 : 1
+        return HStack(spacing: 36 * u) {
+            ForEach(0..<cards, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 44 * u, style: .continuous).fill(Theme.cardGlass)
+                    .overlay {
+                        Sheen(period: Theme.Motion.shimmer, peak: Theme.Motion.shimmerPeak)
+                            .clipShape(RoundedRectangle(cornerRadius: 44 * u, style: .continuous))
+                    }
+                    .frame(maxWidth: .infinity).frame(height: 345 * u)
+            }
+        }
+        .frame(width: 1248 * u)
+        .padding(.bottom, Theme.Layout.choiceLift * u)
+        .accessibilityHidden(true)
+    }
+
+    private var waiting: some View {
+        VStack(spacing: 18 * u) {
+            ZStack {
+                Text(wake.line).id(wake.line).transition(.opacity)
+                    .font(Theme.ui(40 * u, weight: .semibold)).tracking(-0.8 * u).foregroundStyle(Theme.text1)
+                    .multilineTextAlignment(.center)
+            }
+            .animation(Theme.Motion.ease(Theme.Motion.lineFade), value: wake.line)
+            Text("\(wake.elapsedS) s").font(Theme.ui(28 * u)).monospacedDigit().foregroundStyle(Theme.text2)
+        }
+        .padding(.horizontal, 48 * u).padding(.vertical, 36 * u)
+        .frame(width: 1000 * u)
+        .benchCard(radius: 44 * u, fill: Theme.card)
+    }
+
+    private var failed: some View {
+        VStack(spacing: 40 * u) {
+            Text(wake.line).font(Theme.ui(40 * u, weight: .semibold)).tracking(-0.8 * u)
+                .foregroundStyle(Theme.text1).multilineTextAlignment(.center)
+            HStack(spacing: 36 * u) {
+                ForEach(Array(buttons.filter { $0.voiceOnly != true }.enumerated()), id: \.offset) { i, b in
+                    SayButton(button: b, kind: i == 0 ? .primary : .secondary, size: 34 * u, perform: perform)
+                        .frame(width: 360 * u)
+                }
+            }
+        }
+        .padding(48 * u)
+        .frame(width: 900 * u)
+        .benchCard(radius: 44 * u, fill: Theme.card)
     }
 }
 

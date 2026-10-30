@@ -232,22 +232,24 @@ struct ScanLine: View {
 /// HTML `sheen`: a white band (100°, .35 at the middle) crossing left to
 /// right every 1.4 s, ease-in-out. Reduce Motion: a soft pulse in place.
 struct Sheen: View {
+    var period = Theme.Motion.sheen
+    var peak = Theme.Motion.sheenPeak
     @Environment(\.accessibilityReduceMotion) private var reduce
     @State private var on = false
 
     var body: some View {
         GeometryReader { g in
             let band = LinearGradient(stops: [.init(color: .clear, location: 0.3),
-                                              .init(color: .white.opacity(Theme.Motion.sheenPeak), location: 0.5),
+                                              .init(color: .white.opacity(peak), location: 0.5),
                                               .init(color: .clear, location: 0.7)],
                                       startPoint: UnitPoint(x: 0, y: 0.41), endPoint: UnitPoint(x: 1, y: 0.59))
             if reduce {
-                Color.white.opacity(on ? Theme.Motion.sheenPeak : 0)
-                    .animation(Theme.Motion.ease(Theme.Motion.sheen).repeatForever(autoreverses: true), value: on)
+                Color.white.opacity(on ? peak : 0)
+                    .animation(Theme.Motion.ease(period).repeatForever(autoreverses: true), value: on)
             } else {
                 band.frame(width: g.size.width)
                     .offset(x: on ? g.size.width : -g.size.width)
-                    .animation(Theme.Motion.ease(Theme.Motion.sheen).repeatForever(autoreverses: false), value: on)
+                    .animation(Theme.Motion.ease(period).repeatForever(autoreverses: false), value: on)
             }
         }
         .onAppear { on = true }
