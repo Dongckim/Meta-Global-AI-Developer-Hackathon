@@ -73,6 +73,9 @@ enum SyncRows {
         }
     }
 
+    /// A row not shown yet: the spinner holds until its turn in the entrance.
+    static let checking = Row(state: .checking, value: "Checking…", hint: nil)
+
     /// DAT rows before Bluetooth is allowed (DAT is not configured yet).
     static let needsBluetooth = Row(state: .waiting, value: "Allow Bluetooth first", hint: nil)
 
@@ -272,6 +275,9 @@ struct GlassesSyncScreen: View {
     var refreshGen: Int = 0
     var onSkip: () -> Void
     var onComplete: () -> Void
+    /// Opened by the launch gate: moves on by itself once all rows are ok.
+    /// Opened by hand (Settings, voice): stays until Done, so its rows can be read.
+    var autoClose = true
     #if DEBUG
     /// Fixed rows for design captures (`-uiPreview connecting|ready`).
     var previewRows: [SyncRows.Row]?
@@ -288,14 +294,18 @@ struct GlassesSyncScreen: View {
     @State private var readyAt: Double?
     /// When some row last started pending (for the 10s Retry/Skip rule).
     @State private var pendingSince: Date?
+    /// Rows past their entrance: the rest spin, so "ready" (and the auto
+    /// close) waits until every row has shown its own check.
+    @State private var revealed = 0
 
     private var rows: [SyncRows.Row] {
         #if DEBUG
         if let previewRows { return previewRows }
         #endif
         _ = (scenePhase, permissionGen)
-        return SyncGate.rows(permission: { $0.state(serverAllowed: serverAllowed) },
-                             server: server, dat: dat, hfpName: hfpName)
+        let live = SyncGate.rows(permission: { $0.state(serverAllowed: serverAllowed) },
+                                 server: server, dat: dat, hfpName: hfpName)
+        return live.enumerated().map { $0.offset < revealed ? $0.element : SyncRows.checking }
     }
 
     private var allOk: Bool {
@@ -319,7 +329,7 @@ struct GlassesSyncScreen: View {
                 ZStack {
                     AuroraView(mode: readyAt.map { .syncReady(since: $0) } ?? .sync, t: t)
                     syncBlock(t)
-                    if SyncGate.showsActions(
+                    if !autoClose || SyncGate.showsActions(
                         rows: rows,
                         pendingFor: pendingSince.map { ctx.date.timeIntervalSince($0) }) {
                         footer
@@ -338,7 +348,6 @@ struct GlassesSyncScreen: View {
         .sheet(isPresented: $showDiagnostics) { DiagnosticsView(voice: voice, dat: dat) }
         #endif
         .onAppear {
-            if allOk { readyAt = 0 }
             refreshAudio()
             dat?.checkCameraPermission()
         }
@@ -351,8 +360,16 @@ struct GlassesSyncScreen: View {
         .onChange(of: rows.contains { $0.state == .checking }, initial: true) { _, pending in
             pendingSince = pending ? (pendingSince ?? Date()) : nil
         }
+        .task {
+            // each row's result shows once its entrance is done (text-in .6s)
+            for i in SyncItem.allCases.indices {
+                let wait = i == 0 ? Self.rowDelay(0) + 0.6 : Self.rowDelay(i) - Self.rowDelay(i - 1)
+                do { try await Task.sleep(for: .seconds(wait)) } catch { return }
+                revealed = i + 1
+            }
+        }
         .task(id: allOk) {
-            guard allOk else { return }
+            guard allOk, autoClose else { return }
             do {
                 // design runSync: records 1.5s after "Glasses ready"
                 try await Task.sleep(for: .seconds(1.5))
@@ -375,6 +392,12 @@ struct GlassesSyncScreen: View {
             Button("Cancel", role: .cancel) {}
         }
     }
+
+    /// Row i's entrance delay (design prepare(): 55ms apart from 70ms, three per row).
+    private static func rowDelay(_ i: Int) -> Double { 0.18 + 0.165 * Double(i) }
+    /// Until the last row has shown its result: heavy device work (the mic
+    /// engine holds the main thread ~0.6s) waits for this, or the list stutters.
+    static let entrance = rowDelay(SyncItem.allCases.count - 1) + 0.6
 
     /// `.sync`: 640 wide, gap 26; entrance delays follow the design's
     /// prepare(): 55ms apart from 70ms, three candidates per row.
@@ -402,7 +425,7 @@ struct GlassesSyncScreen: View {
                 .textIn(t, delay: 0.125)
             VStack(spacing: 0) {
                 ForEach(rows.indices, id: \.self) { i in
-                    row(i, t: t, delay: 0.18 + 0.165 * Double(i), pad: fit.row)
+                    row(i, t: t, delay: Self.rowDelay(i), pad: fit.row)
                     if i < rows.count - 1 {
                         Rectangle().fill(.white.opacity(0.1)).frame(height: 1)
                     }
@@ -617,7 +640,11 @@ struct GlassesSyncScreen: View {
     private var footer: some View {
         HStack(spacing: 48) {
             Button("Retry") { refreshAll() }
-            Button("Skip") { onSkip() }
+            if autoClose {
+                Button("Skip") { onSkip() }
+            } else {
+                Button("Done") { onComplete() }  // opened by hand: leave when done reading
+            }
         }
         .buttonStyle(.plain)
         .font(Theme.t24)
