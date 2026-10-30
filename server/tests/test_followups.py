@@ -114,4 +114,53 @@ with patch("httpx.AsyncClient", FakeClient):
     j = c.post("/input", json={"text": "what's step 3 about?", "session": "fu2"}).json()
 assert j["reply"] == "Step 3 adds Drug A.", j
 print("FU3 ok: drops are per turn")
+
+# FU4. web_search chosen in the lookup round (after a read) goes to the search path,
+# never the store ("unknown tool"); in a mode that asks first, it's the search card.
+searched = []
+
+
+async def fake_search(client, key, question, query, session):
+    searched.append(query)
+    return "Up to 0.5% DMSO is usually fine.", []
+
+api.store = st = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+st.start_demo_run()
+api._SESSIONS.clear()
+script[:] = [
+    {"id": "r1", "output": [fc("read_record", {"kind": "steps", "filter": "", "limit": 10}, "b1")]},
+    {"id": "r2", "output": [fc("perform", {"action": "web_search", "query": "max DMSO for HeLa"}, "b2")]},
+]
+with patch("httpx.AsyncClient", FakeClient), patch.object(api, "_run_search", fake_search):
+    j = c.post("/input", json={"text": "how much DMSO can HeLa take?", "session": "fu4"}).json()
+assert searched == ["max DMSO for HeLa"] and j["reply"] == "Up to 0.5% DMSO is usually fine.", (searched, j)
+script[:] = [
+    {"id": "r1", "output": [fc("read_record", {"kind": "steps", "filter": "", "limit": 10}, "c1")]},
+    {"id": "r2", "output": [fc("perform", {"action": "web_search", "query": "max DMSO for HeLa"}, "c2")]},
+]
+with patch("httpx.AsyncClient", FakeClient), patch.object(api, "_run_search", fake_search), \
+        patch.object(api, "_confirm_search", lambda: True):
+    j = c.post("/input", json={"text": "how much DMSO can HeLa take?", "session": "fu4b"}).json()
+assert [x["kind"] for x in j["cards"]] == ["confirm_search"] and len(searched) == 1, j
+print("FU4 ok: web_search from the lookup round takes the search path (a card when asked first)")
+
+# FU5. One list: every model action is the turn's (TURN_ACTIONS) or the store's; none is
+# "unknown" to the store.
+st = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+st.start_demo_run()
+for name in api.PERFORM_ACTIONS:
+    if name in api.TURN_ACTIONS:
+        continue
+    res = st.apply_calls([{"name": name, "args": {}}], "tap", "", "tap", {})
+    assert not any(d["reason"] == "unknown tool" for d in res["info"]["drop_reasons"]), name
+print("FU5 ok: every perform action has a handler")
+
+# FU6. "Search it" on a photo answer searches what the photo was read as.
+api.store = photo_store()
+api._SESSIONS.clear()
+searched.clear()
+with patch("httpx.AsyncClient", FakeClient), patch.object(api, "_run_search", fake_search):
+    j = c.post("/input", json={"text": "search it", "session": "fu6"}).json()
+assert searched == ["Corning 96-well plate, Non-Tissue Culture Treated Flat bottom, polystyrene, sterile."], searched
+print("FU6 ok: search it on a photo answer searches the label")
 print("ALL PASS")

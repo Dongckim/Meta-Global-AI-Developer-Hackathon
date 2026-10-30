@@ -183,6 +183,10 @@ PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "show_step", "open_source_page", "web_search", "open_source", "control", "pick",
                    "resume_run", "approve_handoff", "save_handoff", "next_change", "retry_handoff",
                    "export_handoff", "set_timing"]
+#: Model actions the turn runs itself, not the store: they leave the turn for
+#: their own path (web_search -> _web_search_turn, a card first in Private).
+#: Every other PERFORM_ACTIONS entry is the store's (pinned by test).
+TURN_ACTIONS = frozenset({"web_search"})
 #: Actions that aren't record writes; the coverage check counts only writes.
 VIEW_ACTIONS = frozenset(a for a in PERFORM_ACTIONS if a not in RecordStore.RUN_WRITES) \
     - {"edit_draft"} | {"read_record", "ask"}
@@ -783,6 +787,22 @@ async def _turn(client, key, text: str, session: dict, source: str) -> tuple:
     return out
 
 
+#: "Search it" and its kin, said on a photo answer.
+_SEARCH_IT = re.compile(r"(?:search|look up|google) (?:it|that|this|for it|for that)(?: up| online| on the web)?|"
+                        r"look (?:it|that|this) up|search the web|search online")
+
+
+def _photo_read_here() -> str:
+    """On a photo answer: what the photo was read as ("" elsewhere)."""
+    cur = store.r["view"]["current"]
+    if cur.get("screen") != "web_answer":
+        return ""
+    doc = next((d for d in store.searches() if d["id"] == cur.get("target")), None)
+    if not doc or doc.get("kind") != "photo" or doc.get("status") != "ok":
+        return ""
+    return " ".join(x for x in (doc.get("answer_short"), doc.get("detail")) if x).strip()
+
+
 async def _finish_search(client, key, out: tuple, session: dict) -> tuple:
     """A yes to the search card: run the search it asked about."""
     calls, messages, reply, ms, route, cards, info, sources = out
@@ -925,6 +945,9 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         return [], [], which, 0, "grammar", [], {"dropped": 0, "drop_reasons": [], "asked": asked}, []
     # grammar claims a whole turn or nothing: two requests go to the model
     g = ([b], "") if b else None if len(parts) > 1 else match_grammar(text, store.prompt_state(session))
+    if b is None and not which and (read := _photo_read_here()) and _SEARCH_IT.fullmatch(button_words(text)):
+        # "search it" on a photo answer: search what the photo said
+        return await _web_search_turn(client, key, read, read, session)
     if b is not None and b["name"] == "web_search":  # Try again, said
         out = await _web_search_turn(client, key, b["args"].get("query") or text,
                                      b["args"].get("query") or text, session)
@@ -949,7 +972,7 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     raw_count = len(calls)
     model_raw = [dict(c) for c in calls]
     calls = _expand_perform(calls)
-    ws = next((c for c in calls if c.get("name") == "web_search"), None)
+    ws = next((c for c in calls if c.get("name") in TURN_ACTIONS), None)
     if ws is not None:
         # outside knowledge: one separate search call (server/search.py), nothing else this turn
         return await _web_search_turn(client, key, text, (ws.get("args") or {}).get("query") or text,
@@ -1024,6 +1047,9 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         ms2, more = await _lookup_round(client, key, text, session, source, plan_allowed, reads_text,
                                         summary, r1raw)
         ms += ms2
+        if more is not None and more[0] == "turn":
+            return await _web_search_turn(client, key, text, (more[1].get("args") or {}).get("query") or text,
+                                          session, ms)
         if more is not None:
             rc, res2, question2, ordered2, outcomes2, gdrop2, t2 = more
             if question is None and question2 is None and pre_all_reads and not res2["cards"]:
@@ -1064,6 +1090,9 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         ms3, more = await _lookup_round(client, key, text, session, source, plan_allowed, "",
                                         summary, model_raw, nudge=FOLLOWUP_TEXT)
         ms += ms3
+        if more is not None and more[0] == "turn":
+            return await _web_search_turn(client, key, text, (more[1].get("args") or {}).get("query") or text,
+                                          session, ms)
         if more is not None:
             rc, res3, question3, ordered3, outcomes3, gdrop3, _ = more
             calls = calls + rc
@@ -1147,6 +1176,9 @@ async def _lookup_round(client, key, text, session, source, plan_numbers, reads_
     if cut:
         return ms, None
     rc = _expand_perform(rc)
+    turn_calls = [c for c in rc if c.get("name") in TURN_ACTIONS]
+    if turn_calls:  # e.g. web_search chosen after a read: the search path, never the store
+        return ms, ("turn", turn_calls[0])
     ordered2 = [c.get("call_id") for c in rc]
     rc, question2, outcomes2, gdrop2 = _validate(rc, text, 2, plan_numbers, reads_text, summary)
     res2: dict = {"messages": [], "cards": [], "outcomes": [], "ui": [],
