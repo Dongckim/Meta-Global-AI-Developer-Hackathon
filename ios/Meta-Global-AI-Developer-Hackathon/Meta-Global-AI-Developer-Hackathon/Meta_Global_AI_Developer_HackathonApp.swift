@@ -18,8 +18,10 @@ struct Meta_Global_AI_Developer_HackathonApp: App {
     @State private var dat: GlassesDAT?
 
     init() {
+        Boot.mark("app init")
         if CBManager.authorization == .allowedAlways {
-            _dat = State(initialValue: Self.makeDAT())
+            // before the first frame (the black launch screen), never during the splash
+            _dat = State(initialValue: Boot.time("configure DAT") { Self.makeDAT() })
         }
     }
 
@@ -51,7 +53,9 @@ struct Meta_Global_AI_Developer_HackathonApp: App {
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            return try Boot.time("model container") {
+                try ModelContainer(for: schema, configurations: [modelConfiguration])
+            }
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }

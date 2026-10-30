@@ -1,9 +1,12 @@
 import SwiftUI
 
 /// Launch splash (design `data-id="splash"`): dark canvas, blue aurora
-/// bloom, Glassistant brandmark. Self-dismisses after 2.6s (design
-/// `runSplash`); tap skips.
+/// bloom, Glassistant brandmark. Leaves once its brand is in
+/// (Theme.Motion.splashMin) and the app is ready, or at splashMax; while it
+/// waits the bloom keeps playing. Tap skips.
 struct SplashView: View {
+    /// Read each tick (not captured once): the first record is in, or there's no server to wait for.
+    var ready: () -> Bool = { true }
     var onDone: () -> Void
     @State private var clock = FrameClock()
 
@@ -31,11 +34,13 @@ struct SplashView: View {
         .contentShape(Rectangle())
         .onTapGesture { onDone() }
         .task {
+            Boot.mark("splash first frame")
             // on the screen clock, so a launch stall doesn't cut the bloom
-            while clock.t < 2.6 {
+            while clock.t < Theme.Motion.splashMin || (!ready() && clock.t < Theme.Motion.splashMax) {
                 try? await Task.sleep(for: .milliseconds(50))
                 if Task.isCancelled { return }
             }
+            Boot.mark("splash done ready=\(ready()) t=\(String(format: "%.2f", clock.t))s")
             onDone()
         }
     }

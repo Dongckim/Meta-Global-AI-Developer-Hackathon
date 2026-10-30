@@ -128,6 +128,7 @@ final class WakeListener {
         guard phraseModel == nil, !preparingModel else { return }
         preparingModel = true
         let phrase = Persona.current.wakePhrase
+        Boot.mark("wake phrase model prepare")
         Task {
             let dir = FileManager.default.temporaryDirectory
             let asset = dir.appending(path: "wake-lm.bin")
@@ -142,6 +143,7 @@ final class WakeListener {
                     for: asset, clientIdentifier: "wake.phrase", configuration: config)
                 phraseModel = config
                 Log.wake.info("[wake] custom language model ready for \"\(phrase, privacy: .public)\"")
+                Boot.mark("wake phrase model ready")
             } catch {
                 Log.wake.error("[wake] custom language model unavailable (matcher only): \(error.localizedDescription, privacy: .public)")
             }

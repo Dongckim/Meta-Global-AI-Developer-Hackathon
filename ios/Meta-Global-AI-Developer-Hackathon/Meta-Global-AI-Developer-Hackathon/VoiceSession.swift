@@ -801,6 +801,7 @@ final class VoiceSession {
             do {
                 try await wake.start()
                 Log.wake.info("[wake] started gen=\(g)/\(self.gen)")
+                Boot.mark("wake listener ready")
             } catch {
                 Log.wake.error("[wake] start failed: \(error.localizedDescription, privacy: .public)")
                 emit("Wake-word failed: \(error.localizedDescription)")

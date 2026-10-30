@@ -35,6 +35,17 @@ enum Theme {
     /// --blue in the polish layer (sync tick); `blue` keeps the base value
     /// the orb gradient was drawn with.
     static let polishBlue = Color(hex: 0x0071E3)
+    /// A paused run (its state line); going is polishBlue, finished text2.
+    static let paused = Color(hex: 0xFF9500)
+
+    /// A run's state color: going blue, paused orange, finished gray.
+    static func runState(_ status: String?) -> Color {
+        switch status {
+        case "active": polishBlue
+        case "paused": paused
+        default: text2
+        }
+    }
     /// --sub
     static let sub = Color(hex: 0xEDEDED)
     /// --track
@@ -190,6 +201,15 @@ enum Theme {
         static func spring(_ duration: Double) -> Animation { .timingCurve(0.34, 1.36, 0.64, 1, duration: duration) }
         static func easeCurve(_ x: Double) -> Double { Keyframes.bezier(x, 0.22, 1, 0.36, 1) }
         static func springCurve(_ x: Double) -> Double { Keyframes.bezier(x, 0.34, 1.36, 0.64, 1) }
+
+        /// Top screen switch (splash -> sync -> main): one crossfade with a
+        /// slight scale, design scrIn .6s.
+        static let screen = 0.6
+        static let screenScale: CGFloat = 0.98
+        /// The splash stays at least until its brand is in (brandIn: .25s
+        /// delay + 1.4s), and until the app is ready, at most `splashMax`.
+        static let splashMin = 1.65
+        static let splashMax = 6.0
 
         /// [data-a] entrances: rise .8s ease, delay 60ms + 70ms per item.
         static let enter = 0.8

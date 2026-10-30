@@ -1,3 +1,4 @@
+import os
 import SwiftUI
 
 /// Top-level screen switching (design `show()`): one front screen takes
@@ -27,104 +28,54 @@ struct ScreenStack<ID: Hashable>: Equatable {
     func isMounted(_ id: ID) -> Bool { id == front || id == leaving }
 }
 
-/// Renders a `ScreenStack`: incoming scrIn .6s over outgoing scrOut .5s
-/// (polish layer), floor in the outgoing screen's color. `prewarm` screens
-/// stay mounted (hidden) so they are built before their first switch.
+/// Renders a `ScreenStack` in one ZStack: the front screen comes in and the
+/// old one goes with one SwiftUI transition (opacity + a slight scale,
+/// Theme.Motion.screen). The transition runs on the render layer, so no
+/// screen body is rebuilt per frame, and one `show` is the only state change.
+/// Nothing is drawn until the size is known (the first measure can be zero);
+/// the floor is the front screen's color, edge to edge.
 struct ScreenTransition<ID: Hashable, Screen: View>: View {
     @Binding var stack: ScreenStack<ID>
-    /// Every screen, any order (z follows front/leaving).
-    var screens: [ID]
-    var prewarm: Set<ID> = []
     var floor: (ID) -> Color
     @ViewBuilder var screen: (ID) -> Screen
 
     var body: some View {
         GeometryReader { g in
-            let unit = g.size.width / Theme.canvasWidth
             ZStack {
-                floor(stack.leaving ?? stack.front).ignoresSafeArea()
-                ForEach(screens, id: \.self) { id in
-                    if stack.isMounted(id) || prewarm.contains(id) {
-                        ScreenLayer(role: role(id), unit: unit,
-                                    generation: stack.generation) { g in
-                            stack.finishLeave(generation: g)
-                        } content: {
-                            screen(id)
-                        }
-                        .zIndex(id == stack.front ? 2 : id == stack.leaving ? 1 : 0)
-                    }
+                floor(stack.front).ignoresSafeArea()
+                if g.size.width > 0, g.size.height > 0 {
+                    screen(stack.front)
+                        .id(stack.front)
+                        .transition(.opacity.combined(with: .scale(scale: Theme.Motion.screenScale)))
                 }
             }
+            .animation(Theme.Motion.ease(Theme.Motion.screen), value: stack.front)
+            .background { LayoutProbe(name: "root") }
         }
-    }
-
-    private func role(_ id: ID) -> ScreenLayerRole {
-        id == stack.front ? .front : id == stack.leaving ? .leaving : .hidden
     }
 }
 
-enum ScreenLayerRole: Equatable { case front, leaving, hidden }
-
-private struct ScreenLayer<Content: View>: View {
-    var role: ScreenLayerRole
-    /// Design px -> points (1376-wide canvas).
-    var unit: CGFloat
-    var generation: Int
-    var onLeft: (Int) -> Void
-    @ViewBuilder var content: Content
-    /// Same clamped clock rule as the screens inside, so scrIn and the
-    /// screen's own entrance start on the same frame and pause together.
-    @State private var clock = FrameClock()
-    /// Role whose animation is running and its clock start. A role change
-    /// renders at progress 0 until the task records the new start, so the
-    /// first frame never uses the previous role's timing.
-    @State private var phase: (role: ScreenLayerRole, start: Double)?
-    @State private var animating = true
-
-    private struct Key: Equatable {
-        var role: ScreenLayerRole
-        var generation: Int
-    }
-
-    private static var inDuration: Double { 0.6 }
-    private static var outDuration: Double { 0.5 }
+/// [layout] lines for the first settles of a screen's geometry: size, safe
+/// area insets and the 1376-wide canvas scale, each time one changes.
+struct LayoutProbe: View {
+    var name: String
+    /// Status bar hidden as the root sets it (logged beside the insets).
+    var statusBarHidden = true
+    @State private var seen = 0
 
     var body: some View {
-        TimelineView(.animation(paused: !animating)) { ctx in
-            let t = clock.tick(ctx.date)
-            let p = phase.map { $0.role == role ? t - $0.start : 0 } ?? 0
-            // scrIn: from opacity 0, translateY 26, scale 1.01
-            // scrOut: to opacity 0, translateY -14, scale .98
-            let inP = role == .front
-                ? Keyframes.tween(p, duration: Self.inDuration) : 1
-            let outP = role == .leaving
-                ? Keyframes.tween(p, duration: Self.outDuration) : 0
-            content
-                .scaleEffect(1.01 - 0.01 * inP - 0.02 * outP)
-                .offset(y: (26 * (1 - inP) - 14 * outP) * unit)
-                .opacity(role == .hidden ? 0 : inP * (1 - outP))
+        GeometryReader { g in
+            Color.clear
+                .onAppear { log(g) }
+                .onChange(of: g.size) { _, _ in log(g) }
+                .onChange(of: g.safeAreaInsets) { _, _ in log(g) }
         }
-        .allowsHitTesting(role == .front)
-        .accessibilityHidden(role != .front)
-        .task(id: Key(role: role, generation: generation)) {
-            guard role != .hidden else {
-                phase = nil
-                animating = false
-                return
-            }
-            animating = true
-            let start = clock.t
-            phase = (role, start)
-            // design: the old screen is dropped when scrIn (.6s) ends
-            while clock.t - start < Self.inDuration {
-                try? await Task.sleep(for: .milliseconds(16))
-                if Task.isCancelled { return }
-            }
-            if role == .leaving {
-                onLeft(generation)
-            } else {
-                animating = false
-            }
-        }
+    }
+
+    private func log(_ g: GeometryProxy) {
+        guard seen < 12 else { return }
+        seen += 1
+        let i = g.safeAreaInsets
+        Log.layout.info("[layout] \(Boot.ms)ms \(name, privacy: .public) #\(seen) size=\(Int(g.size.width))x\(Int(g.size.height)) safe(t\(Int(i.top)) b\(Int(i.bottom)) l\(Int(i.leading)) r\(Int(i.trailing))) scale=\(String(format: "%.3f", g.size.width / Theme.canvasWidth), privacy: .public) statusBarHidden=\(statusBarHidden)")
     }
 }

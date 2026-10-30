@@ -98,6 +98,11 @@ struct ContentView: View {
     /// Sync opened by the launch gate (Skip remembers) vs from settings/voice.
     @State private var syncFromGate = false
     @State private var syncRefreshGen = 0
+    /// Mic, wake word, audio route and the glasses camera check start once
+    /// the splash has gone (their main-thread work would stall its bloom).
+    @State private var devicesStarted = false
+    /// The splash can leave: the first record is in (or failed), or there's no server yet.
+    private var bootReady: Bool { !canReachServer || serverLink == .connected || serverLink == .failed }
     @AppStorage("pip.syncSkipped") private var syncSkipped = false
 
     /// Screen for hints: the server-owned view.
@@ -169,14 +174,17 @@ struct ContentView: View {
     /// missing or the glasses aren't ready (unless skipped), then main.
     private func dismissSplash() {
         guard top.front == .splash else { return }
-        let rows = SyncGate.rows(permission: { $0.state(serverAllowed: serverAllowed) },
-                                 server: serverLink, dat: dat,
-                                 hfpName: SyncGate.liveHFPName)
-        let glasses = SyncItem.allCases.filter { $0.permission == nil }.map { rows[$0.rawValue] }
-        if SyncGate.needed(
-            permissions: [AppPermission.bluetooth, .localNetwork, .microphone]
-                .map { $0.state(serverAllowed: serverAllowed) },
-            glasses: glasses, skipped: syncSkipped) {
+        let needed = Boot.time("permission check (sync gate)") {
+            let rows = SyncGate.rows(permission: { $0.state(serverAllowed: serverAllowed) },
+                                     server: serverLink, dat: dat,
+                                     hfpName: SyncGate.liveHFPName)
+            let glasses = SyncItem.allCases.filter { $0.permission == nil }.map { rows[$0.rawValue] }
+            return SyncGate.needed(
+                permissions: [AppPermission.bluetooth, .localNetwork, .microphone]
+                    .map { $0.state(serverAllowed: serverAllowed) },
+                glasses: glasses, skipped: syncSkipped)
+        }
+        if needed {
             syncFromGate = true
             top.show(.sync)
         } else {
@@ -233,12 +241,10 @@ struct ContentView: View {
     }
 
     var body: some View {
-        ScreenTransition(stack: $top, screens: [.splash, .sync, .main],
-                         prewarm: [.main],
-                         floor: { $0 == .main ? Theme.canvas : Theme.dark }) { id in
+        ScreenTransition(stack: $top, floor: { $0 == .main ? Theme.canvas : Theme.dark }) { id in
             switch id {
             case .splash:
-                SplashView { dismissSplash() }
+                SplashView(ready: { bootReady }) { dismissSplash() }
             case .sync:
                 GlassesSyncScreen(dat: dat, voice: voice,
                                   serverAllowed: serverAllowed, server: serverLink,
@@ -249,11 +255,16 @@ struct ContentView: View {
                                   onComplete: closeSync)
             case .main:
                 mainBody
+                    // the app floor under every part of Main, edge to edge: no black shows through
+                    .background(Theme.canvas.ignoresSafeArea())
+                    .background { LayoutProbe(name: "main") }
             }
         }
         // One voice edge above every screen (touches pass through).
         .overlay { EdgeGlow(voice: voice).ignoresSafeArea() }
-        .statusBarHidden(top.front != .main)
+        // hidden from the first frame on and never toggled: a status bar
+        // appearing with Main changed the safe area under it (the bands)
+        .statusBarHidden(true)
         .sheet(isPresented: robotSheet) { robotPanel }
         .sheet(isPresented: $showSettings) {
             VoiceSettingsView(onOpenSync: { showSettings = false; openSync() })
@@ -266,10 +277,12 @@ struct ContentView: View {
         }
 
         .onAppear {
+            Boot.mark("first frame (root appear) serverAllowed=\(canReachServer)")
             if canReachServer { connect(); loadLists() }
-            refreshRoute()
-            voice.activate()
-            dat?.checkCameraPermission()
+        }
+        .onChange(of: top.front) { old, new in
+            Boot.mark("screen \(String(describing: old)) -> \(String(describing: new))")
+            if old == .splash { startDevices() }
         }
         .onChange(of: canReachServer) { _, on in
             if on { connect(); loadLists() }
@@ -277,7 +290,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             Log.voice.info("[voice] scenePhase \(String(describing: phase), privacy: .public)")
             // inactive (Control Center, alerts) keeps a live session; background ends it
-            if phase == .active {
+            if phase == .active, devicesStarted {
                 voice.systemSheet(false)  // back from any iOS picker
                 voice.activate()
                 // a stream that slept in the background may be dead: open a fresh one
@@ -319,6 +332,20 @@ struct ContentView: View {
             refreshRoute()
         }
         .onOpenURL { url in dat?.handleCallback(url) }
+    }
+
+    /// After the splash's crossfade: the audio session, mic engine and wake
+    /// word come up on the main actor (MicEngine, WakeListener), so they wait
+    /// until no launch animation is running.
+    private func startDevices() {
+        guard !devicesStarted else { return }
+        devicesStarted = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Theme.Motion.screen))
+            Boot.time("audio route") { refreshRoute() }
+            Boot.time("voice activate (wake listener start is async)") { voice.activate() }
+            Boot.time("glasses camera permission check") { dat?.checkCameraPermission() }
+        }
     }
 
     private var mainBody: some View {
@@ -385,7 +412,16 @@ struct ContentView: View {
                 }
             } else if let d = lab.draft, StartScreen.ids.contains(lab.view.current.screen) {
                 // ⑤b-⑤f start review (Figma 37:13203-37:13351)
-                stage { u in startScreen(d, u) }
+                stage { u in
+                    if lab.cards.isEmpty {
+                        startScreen(d, u)
+                    } else {
+                        // "Methods already exists. New version, or separate?" (saving a revision)
+                        ConfirmScreen(lab: lab, buttons: registry.cards, u: u, onAnswer: answer(id:ok:),
+                                      onAnswerAll: answerAll, onChoice: choose(id:answer:))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
             } else if ["mode", "import_choice"].contains(lab.view.current.screen) {
                 // ⑤a / ⑤b start (Figma 37:13141, 37:13167)
                 stage { u in
@@ -405,7 +441,7 @@ struct ContentView: View {
                     } else {
                         // "Run 1 is finished. Start a new run?" (and finish-first) take the screen
                         ConfirmScreen(lab: lab, buttons: registry.cards, u: u,
-                                      onAnswer: answer(id:ok:), onAnswerAll: answerAll)
+                                      onAnswer: answer(id:ok:), onAnswerAll: answerAll, onChoice: choose(id:answer:))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
@@ -418,11 +454,12 @@ struct ContentView: View {
                                       buttons: buttons("protocol_detail"), u: u,
                                       onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
                                       onRun: { sendAction("open", ["target": "run:\($0)"]) },
-                                      perform: performButton, draftTitle: lab.draft?.plan.title ?? "")
+                                      perform: performButton, draftTitle: lab.draft?.plan.title ?? "",
+                                          rowButtons: registry.rows["protocol"] ?? [])
                     } else {
                         // "Run 3 of Drug A/B is going. Finish it and start MTT?"
                         ConfirmScreen(lab: lab, buttons: registry.cards, u: u,
-                                      onAnswer: answer(id:ok:), onAnswerAll: answerAll)
+                                      onAnswer: answer(id:ok:), onAnswerAll: answerAll, onChoice: choose(id:answer:))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
@@ -435,10 +472,11 @@ struct ContentView: View {
                                           activeRunId: lab.run?.runId, searchCount: answered.count, buttons: buttons("home"), u: u,
                                           onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
                                           onRun: { sendAction("open", ["target": "run:\($0)"]) },
-                                          perform: performButton, draftTitle: lab.draft?.plan.title ?? "")
+                                          perform: performButton, draftTitle: lab.draft?.plan.title ?? "",
+                                          rowButtons: registry.rows["protocol"] ?? [])
                         } else {
                             ConfirmScreen(lab: lab, buttons: registry.cards, u: u,
-                                          onAnswer: answer(id:ok:), onAnswerAll: answerAll)
+                                          onAnswer: answer(id:ok:), onAnswerAll: answerAll, onChoice: choose(id:answer:))
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                     }
@@ -512,12 +550,16 @@ struct ContentView: View {
     /// header, the design's side margins, the canvas glow behind.
     private func stage<V: View>(@ViewBuilder _ content: @escaping (CGFloat) -> V) -> some View {
         GeometryReader { g in
-            let u = min(g.size.width / 1376, g.size.height / 764)
-            content(u)
-                .padding(.horizontal, 64 * u).padding(.vertical, 32 * u)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            // the first measure can be zero: draw once the size is real (no scale from 0)
+            if g.size.width > 0, g.size.height > 0 {
+                let u = min(g.size.width / 1376, g.size.height / 764)
+                content(u)
+                    .padding(.horizontal, 64 * u).padding(.vertical, 32 * u)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
         }
         .background { BenchCanvas() }
+        .background { LayoutProbe(name: "stage") }
     }
 
     /// The run bench is on screen (no source, past run, protocol or home).
@@ -541,7 +583,7 @@ struct ContentView: View {
                 if !lab.cards.isEmpty {
                     // ③ a waiting card takes the bench (Figma 37:13714...)
                     ConfirmScreen(lab: lab, buttons: registry.cards, u: u,
-                                  onAnswer: answer(id:ok:), onAnswerAll: answerAll)
+                                  onAnswer: answer(id:ok:), onAnswerAll: answerAll, onChoice: choose(id:answer:))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if wide {
                     // the side column takes what the margins, plate and gap leave
@@ -687,14 +729,17 @@ struct ContentView: View {
     /// Initial `/record` fetch; its outcome is the Local network row.
     private func loadRecord() async {
         serverLink = .connecting
+        Boot.mark("record fetch")
         do {
             lab.sync(try await PipClient.record())
             renderView()
             syncError = nil
             serverLink = .connected
+            Boot.mark("first snapshot (record) v\(lab.version)")
         } catch {
             syncError = syncReason(error)
             serverLink = .failed
+            Boot.mark("record failed: \(syncReason(error))")
             say("Record unavailable: \(error.localizedDescription)")
         }
     }
@@ -702,6 +747,7 @@ struct ContentView: View {
     private func connect() {
         guard !connectStarted else { return }
         connectStarted = true
+        Boot.mark("connect")
         Task { @MainActor in
             await loadRecord()
             do {
@@ -726,6 +772,7 @@ struct ContentView: View {
         eventsTask = Task { @MainActor in
             while !Task.isCancelled {
                 Log.view.info("[view] events open (have v\(lab.version))")
+                Boot.mark("sse open")
                 do {
                     for try await ev in PipClient.events() {
                         serverLink = .connected
@@ -758,6 +805,7 @@ struct ContentView: View {
         switch ev {
         case .snapshot(let snap):
             Log.view.info("[view] snapshot v\(snap.version) cur=\(snap.view.current.screen, privacy: .public)")
+            if lab.version == 0 || top.front == .splash { Boot.mark("sse snapshot v\(snap.version)") }
             lab.sync(snap)
             renderView()
             syncError = nil
@@ -1027,6 +1075,10 @@ struct ContentView: View {
 
     private func answer(id: String, ok: Bool) {
         sendAction("answer_card", ["card_id": id, "ok": ok], quiet: false)
+    }
+
+    private func choose(id: String, answer: String) {
+        sendAction("answer_card", ["card_id": id, "ok": true, "answer": answer], quiet: false)
     }
 
     private func answerAll() {

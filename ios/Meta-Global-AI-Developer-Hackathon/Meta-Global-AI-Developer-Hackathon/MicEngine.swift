@@ -31,6 +31,7 @@ final class MicEngine {
         }
         preparing += 1
         defer { preparing -= 1 }
+        Boot.mark("mic engine start (main=\(Thread.isMainThread))")
         Log.audio.info("[audio] prepare begin inflight=\(self.preparing) stale=\(self.engine != nil) sinks=\(self.box.count) \(Log.route(), privacy: .public)")
         do {
             #if os(iOS)
@@ -66,6 +67,7 @@ final class MicEngine {
             self.engine = engine
             self.hwRate = hw.sampleRate
             Log.audio.info("[audio] engine started rate=\(hw.sampleRate)")
+            Boot.mark("mic engine started")
             return hw.sampleRate
         } catch {
             Log.audio.error("[audio] prepare failed: \(error.localizedDescription, privacy: .public)")
