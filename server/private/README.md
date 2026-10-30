@@ -51,11 +51,12 @@ little. "Per day" is the keep warm cost. Without keep warm you pay only while
 a container is up, plus 120 s of idle after the last request.
 
 Measured 2026-10-30 with DFlash: 5 voice turns twice, one model round, and one
-label read. Full table: `eval/results/private_glimmer.md` (not committed).
+label read. Only L40S was measured on Meta's weights; the others are the earlier
+unsloth build. Full table: `eval/results/private_glimmer.md` (not committed).
 
 | GLIMMER_GPU | per hour | per day | turn total (median) | label | cold start |
 |---|---|---|---|---|---|
-| L40S (default) | $1.95 | $46.80 | 1.7 s | 1.8 s | 19–70 s |
+| L40S (default) | $1.95 | $46.80 | 1.5 s | 1.9 s | 20–25 s |
 | A10 | $1.10 | $26.40 | 2.3 s | 3.2–3.5 s | 15–29 s |
 | H100 | $3.95 | $94.80 | 2.1 s | 12.8 s | 111–121 s |
 | A100_80 | $2.50 | $60.00 | 2.5 s | 15.8 s | 132–141 s |

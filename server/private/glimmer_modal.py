@@ -60,7 +60,7 @@ ALLOWED_KEYS = frozenset({
 
 app = modal.App("glassistant-glimmer")
 volume = modal.Volume.from_name("glimmer-weights", create_if_missing=True)
-# llama.cpp server-cuda, pinned: the tag moves with every build
+# llama.cpp server-cuda build 12004 (Glimmer needs b10353+), pinned: the tag moves with every build
 image = (
     modal.Image.from_registry(
         "ghcr.io/ggml-org/llama.cpp@sha256:"

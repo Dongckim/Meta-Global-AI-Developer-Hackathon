@@ -7,6 +7,7 @@ Run from repo root (needs PRIVATE_LLM_URL and MODEL_API_KEY in .env):
     .venv/bin/python eval/private_glimmer.py turns
     .venv/bin/python eval/private_glimmer.py effort none
     .venv/bin/python eval/private_glimmer.py rounds
+    .venv/bin/python eval/private_glimmer.py voice
     .venv/bin/python eval/private_glimmer.py label
     .venv/bin/python eval/private_glimmer.py guard
 Appends to eval/results/private_glimmer.md.
@@ -250,6 +251,45 @@ def rounds() -> None:
         log(f"\nmedian turn total {int(statistics.median(totals))} ms, {len(totals)}/{len(READS) * 2} answered")
 
 
+#: Said the way grammar won't catch, so the real turn reaches the model.
+VOICE = [
+    "tick off C2 and C3 for me please",
+    "jot down that C4 had a slight edge effect",
+    "put a five minute clock on C5 and also tick off C6",
+    "how many wells have I finished so far",
+    "what is the max DMSO concentration for HeLa cells",
+    "what does this tube label say",
+]
+
+
+def voice() -> None:
+    """The real turn on the real model: /input in Private, every Meta call counted."""
+    from fastapi.testclient import TestClient
+    log(f"\n## Private voice end to end ({time.strftime('%F %T')})\n")
+    log("| said | route | ms | calls | cards | Meta calls | reply |\n|---|---|---|---|---|---|---|")
+    bench_system()
+    api.tone.set_run_mode("private")
+    api.store.wake.begin()
+    api.store.wake.finish(True)
+    meta, real = [], api._post
+
+    async def counted(client, name, url, **k):
+        if not url.startswith(GLIMMER):
+            meta.append(url)
+        return await real(client, name, url, **k)
+
+    api._post = counted
+    c = TestClient(api.app)
+    for said in VOICE:
+        meta.clear()
+        t0 = time.perf_counter()
+        j = c.post("/input", json={"text": said, "session": "private-eval"}).json()
+        ms = int((time.perf_counter() - t0) * 1000)
+        log(f"| {said} | {j.get('route')} | {ms} | {[x['name'] for x in j.get('tool_calls') or []]} | "
+            f"{[x['kind'] for x in j.get('cards') or []]} | {len(meta)} | {j.get('reply', j)!r} |")
+    api.tone.set_run_mode(None)
+
+
 def cold(n: int) -> None:
     """Time from a sleeping container to the first byte, redirects not followed."""
     log(f"\n## Cold start ({time.strftime('%F %T')}), limit {WEB_LIMIT_S}s\n")
@@ -313,6 +353,6 @@ def guard() -> None:
 
 
 {"cold": lambda: cold(int(sys.argv[2]) if len(sys.argv) > 2 else 3),
- "rounds": rounds,
+ "rounds": rounds, "voice": voice,
  "turns": turns, "label": label, "guard": guard,
  "effort": lambda: effort(sys.argv[2])}[sys.argv[1]]()
