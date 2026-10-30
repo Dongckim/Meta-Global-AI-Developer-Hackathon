@@ -174,6 +174,43 @@ class MetaStream:
             await self.ws.close()
 
 
+class DeviceStream:
+    """Private: the iPad transcribes and sends the words. MetaStream's shape
+    and event names, so LiveConversation doesn't change. No speaker labels:
+    every turn is the owner's."""
+
+    session_id = "device"
+    error = None
+    close = (1000, "")
+
+    def __init__(self):
+        self.q: asyncio.Queue = asyncio.Queue()
+        self.turn = 0
+        self.speaking = False
+
+    async def open(self) -> bool:
+        return True
+
+    def heard(self, text: str, final: bool) -> None:
+        if not self.speaking:
+            self.turn += 1
+            self.speaking = True
+            self.q.put_nowait({"type": "speechStart", "turnId": self.turn})
+        kind = "speechComplete" if final else "transcript"
+        self.q.put_nowait({"type": kind, "turnId": self.turn, "transcript": text})
+        self.speaking = not final
+
+    async def end(self) -> None:
+        self.q.put_nowait(None)
+
+    async def events(self):
+        while (ev := await self.q.get()) is not None:
+            yield ev
+
+    async def aclose(self) -> None:
+        pass
+
+
 async def stream_pcm(key: str, pcm_frames: Iterable[bytes], *, mode: str = "DIARIZATION",
                      keywords: list[str] | None = None, language_bias: list[str] | None = None,
                      on_event: Callable[[dict, float], None] = lambda ev, t: None,

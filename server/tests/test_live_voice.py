@@ -317,6 +317,46 @@ import asyncio  # noqa: E402
 from server.live_session import LiveSender  # noqa: E402
 
 
+# Private: the iPad hears, no audio is read and Meta is never opened
+FakeMeta.last = None
+api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+api.store.start_demo_run()
+tone.set_run_mode("private")
+api.store.wake.begin()
+api.store.wake.finish(True)
+with c.websocket_connect("/voice/live") as ws:
+    ws.send_json({"type": "start", "session": "live-device"})
+    ready = check(ws.receive_json())
+    assert ready["transcribe"] == "device" and "H12" in ready["hints"], ready
+    ws.send_bytes(b"\x00" * 2560)
+    ws.send_json({"type": "heard", "text": "B2", "final": False})
+    ws.send_json({"type": "heard", "text": "Hey Milo, B2 done.", "final": True})
+    got = []
+    while not any(m["type"] == "turn" for m in got):
+        got.append(check(ws.receive_json()))
+    ws.send_json({"type": "end"})
+    while got[-1]["type"] != "closed":
+        got.append(check(ws.receive_json()))
+assert FakeMeta.last is None, "Private never opens Meta"
+assert "B2" in done_wells(api.store.r) and got[0] == {"type": "partial", "text": "B2"}, got
+print("LV-device ok: heard text runs the same turn, Meta never opened")
+
+# the mode changing mid-session closes it `mode`: no audio to Meta from that moment
+tone.set_run_mode(None)
+FakeMeta.script = []
+with c.websocket_connect("/voice/live") as ws:
+    ws.send_json({"type": "start", "session": "live-mode"})
+    assert check(ws.receive_json())["transcribe"] == "server"
+    tone.set_run_mode("private")
+    ws.send_bytes(b"\x00" * 2560)
+    got = [check(ws.receive_json())]
+    while got[-1]["type"] != "closed":
+        got.append(check(ws.receive_json()))
+assert got[-1]["why"] == "mode" and FakeMeta.last.sent == [], (got[-1], FakeMeta.last.sent)
+tone.set_run_mode(None)
+print("LV-mode ok: a mode change closes the session, nothing more goes to Meta")
+
+
 class ClosingWS:
     def __init__(self):
         self.sent, self.closed = [], False

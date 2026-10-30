@@ -44,6 +44,8 @@
         "line": {"type": "string"}
       }
     },
+    "transcribe": {"enum": ["device", "server"],
+      "description": "Served snapshots only: who turns speech into text. device (Private): the iPad, and audio stays on it."},
     "epoch": {"type": "string",
               "description": "Record lineage id: minted when record.json is created, carried across start/end, new only on data reset or server move. The app resets its stale guard on change."},
     "version": {"type": "integer"},

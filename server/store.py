@@ -1044,6 +1044,7 @@ class RecordStore:
         snap["handoff"] = self.handoff_view(self._handoff_here()) if self._handoff_here() else None
         snap["bench"] = self.bench_view(self.r)
         snap["private"] = self.wake.view()
+        snap["transcribe"] = "device" if run_mode() == "private" else "server"
         snap["header"] = {"mode": self.header_mode(cur.get("screen") or ("main" if snap.get("run") else "home"))}
         if snap.get("run"):  # what the app shows instead of the run id
             snap["run"]["label"] = self.run_label(self.active_run_doc() or snap["run"])["display"]

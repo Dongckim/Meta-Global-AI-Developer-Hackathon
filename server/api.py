@@ -75,7 +75,8 @@ from server.store import RecordStore, describe_well_row
 from server import live_asr
 from server import tone
 from server.grammar import match_session_end
-from server.live_session import LiveSender, LiveConversation, live_keywords
+from server.labels import protocol_short
+from server.live_session import LiveSender, LiveConversation, device_hints, live_keywords
 from server.live_session import settings as live_settings
 from server.tone import keys as tone_keys
 from server.private_wake import wake_up, weights_gb
@@ -91,7 +92,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 22
+API_VERSION = 23
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -1771,8 +1772,14 @@ async def orchestrate(body: OrchestrateIn):
 
 
 @app.post("/voice")
-async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session: str = Form("bench")):
+async def voice(audio: UploadFile | None = File(None), transcript: str = Form(""),
+                state: str = Form("{}"), session: str = Form("bench")):
     total0 = time.perf_counter()
+    if run_mode() == "private":  # heard on the iPad; audio sent anyway stops here
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            return await _voice_turn(client, _key(), transcript, get_session(session), 0, total0)
+    if audio is None:
+        raise HTTPException(400, "audio required")
     try:
         state_obj = json.loads(state)
     except json.JSONDecodeError:
@@ -1824,17 +1831,22 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session:
         asr_ms = int((time.perf_counter() - t0) * 1000)
         _check("asr", resp)
         transcript = resp.json().get("transcript", "")
-        norm = normalize_text(transcript)
-        print(f'voice dur={dur:.2f}s transcript="{transcript}" norm="{norm}"', flush=True)
-        if not norm.strip(" .?!"):
-            return {
-                "transcript": "",
-                "tool_calls": [],
-                "messages": [],
-                "reply": say("didnt_catch", sess),
-                "ms": {"asr": asr_ms, "spark": 0, "total": int((time.perf_counter() - total0) * 1000)},
-            }
-        out = await _turn(client, key, transcript, sess, "voice")
+        print(f'voice dur={dur:.2f}s transcript="{transcript}" norm="{normalize_text(transcript)}"', flush=True)
+        return await _voice_turn(client, key, transcript, sess, asr_ms, total0)
+
+
+async def _voice_turn(client: httpx.AsyncClient, key: str, transcript: str, sess: dict,
+                      asr_ms: int, total0: float) -> dict:
+    """One /voice turn from its transcript, wherever it was heard."""
+    if not normalize_text(transcript).strip(" .?!"):
+        return {
+            "transcript": "",
+            "tool_calls": [],
+            "messages": [],
+            "reply": say("didnt_catch", sess),
+            "ms": {"asr": asr_ms, "spark": 0, "total": int((time.perf_counter() - total0) * 1000)},
+        }
+    out = await _turn(client, key, transcript, sess, "voice")
     calls, messages, reply, spark_ms, route, cards, info, sources = out
     print(f"orch route={route} calls={_call_names(calls)} reply={reply[:80]!r}", flush=True)
     sess["last_asked_cards"] = [c["id"] for c in cards]
@@ -1847,18 +1859,32 @@ async def voice(audio: UploadFile = File(...), state: str = Form("{}"), session:
     )
 
 
+def _device_hints() -> list[str]:
+    """What the iPad's recognizer should expect to hear on this screen."""
+    v = store.r["view"]
+    shown = [x for x in ((v.get("sheet") or {}).get("name"), v["current"]["screen"]) if x]
+    slots = store.view_slots(v["current"]["screen"], v["current"].get("target") or "")
+    return device_hints([b["say"] for sid in shown for b in buttons_for(sid, slots)],
+                        [protocol_short(d) for d in lib.all_docs()])
+
+
 @app.websocket("/voice/live")
 async def voice_live(ws: WebSocket):
     """Live conversation relay (shared/schemas/live.schema.json): app PCM16
-    16 kHz frames -> Meta realtime (DIARIZATION); partials and ignored turns
-    go back as they come; owner turns run the one text path (_handle_text)
-    and the reply returns as a `turn` message (record changes ride SSE)."""
+    16 kHz frames -> Meta realtime (DIARIZATION), or in Private the words the
+    iPad heard (`heard`), no audio; partials and ignored turns go back as
+    they come; owner turns run the one text path (_handle_text) and the reply
+    returns as a `turn` message (record changes ride SSE). The mode changing
+    closes the session with why `mode`; the app reopens it the new way."""
     await ws.accept()
     sender = LiveSender(ws)
     start = await ws.receive_json()
     session = get_session((start or {}).get("session") or "bench")
-    meta = live_asr.MetaStream(_key(), mode="DIARIZATION", keywords=live_keywords(store.r),
-                               language_bias=["English"])
+    mode = run_mode()
+    device = mode == "private"
+    meta = live_asr.DeviceStream() if device else live_asr.MetaStream(
+        _key(), mode="DIARIZATION", keywords=live_keywords(store.r), language_bias=["English"])
+    hints = _device_hints() if device else []
     try:
         ok = await meta.open()
     except Exception as e:  # network, handshake timeout
@@ -1870,7 +1896,8 @@ async def voice_live(ws: WebSocket):
         await sender.close()
         return
     print(f"live open session={meta.session_id}", flush=True)
-    await sender.send({"type": "ready", "session_id": meta.session_id})
+    await sender.send({"type": "ready", "session_id": meta.session_id,
+                       "transcribe": "device" if device else "server", "hints": hints})
     conv = LiveConversation(opened_at=time.monotonic(),
                             window_s=float(live_settings().get("window_s") or 60),
                             max_s=float(live_settings().get("max_s") or 55 * 60),
@@ -1878,6 +1905,7 @@ async def voice_live(ws: WebSocket):
     owner_q: asyncio.Queue = asyncio.Queue()
     ended = False
     why = ""
+    busy = False  # an owner turn is running
     # this session's turn stages ride its socket (_stage)
     session["stage_sink"] = lambda m: asyncio.ensure_future(sender.send(m))
 
@@ -1895,11 +1923,13 @@ async def voice_live(ws: WebSocket):
             if msg.get("type") == "websocket.disconnect":
                 break
             if msg.get("bytes"):
-                if not ended:
+                if not ended and not device and run_mode() == mode:
                     await meta.send_audio(msg["bytes"])
                 continue
             body = json.loads(msg.get("text") or "{}")
-            if body.get("type") == "tts":
+            if body.get("type") == "heard" and device:
+                meta.heard(str(body.get("text") or ""), bool(body.get("final")))
+            elif body.get("type") == "tts":
                 conv.tts(bool(body.get("speaking")), time.monotonic())
             elif body.get("type") == "end":
                 break
@@ -1950,6 +1980,7 @@ async def voice_live(ws: WebSocket):
         return {**item, "text": f"{held} {item['text']}"}
 
     async def worker():
+        nonlocal busy
         held = ""
         while True:
             item = await next_owner_item(held)
@@ -1958,12 +1989,14 @@ async def voice_live(ws: WebSocket):
                 held = item["text"]  # "I want to see": wait for the rest
                 print(f'live hold: "{held}"', flush=True)
                 continue
+            busy = True
             try:
                 text, resp, end = await owner_turn(item)
             except Exception as e:  # any failure: the session stays, the turn says sorry
                 print(f"live turn failed: {type(e).__name__}: {e}", flush=True)
                 text, resp, end = item.get("text", ""), short(say("didnt_catch", session), "error"), None
             await sender.send({"type": "turn", "transcript": text, "end_session": end is not None, **resp})
+            busy = False
             conv.owner_replied(time.monotonic())
             if end is not None:
                 await end_stream("end_session")
@@ -1976,11 +2009,18 @@ async def voice_live(ws: WebSocket):
             await sender.send({"type": "ping"})
 
     async def watchdog():
+        nonlocal hints
         while not ended:
             await asyncio.sleep(1)
+            if owner_q.empty() and not busy and run_mode() != mode:
+                await end_stream("mode")
+                break
             reason = conv.should_close(time.monotonic()) if owner_q.empty() else None
             if reason:
                 await end_stream(reason)
+            elif device and (now := _device_hints()) != hints:
+                hints = now
+                await sender.send({"type": "hints", "hints": hints})
 
     tasks = [asyncio.create_task(c()) for c in (uplink, worker, watchdog, heartbeat)]
     try:

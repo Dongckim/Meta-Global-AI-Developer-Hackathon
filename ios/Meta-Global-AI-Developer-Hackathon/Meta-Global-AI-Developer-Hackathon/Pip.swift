@@ -753,6 +753,7 @@ struct RecordSnapshot: Decodable {
     var bench: Bench?
     /// The private model's wake-up (server `private`); nil until Private asks for it.
     var privateWake: PrivateWake?
+    var transcribe: String?
 
     struct PrivateWake: Decodable, Equatable {
         var state: String
@@ -783,6 +784,7 @@ struct RecordSnapshot: Decodable {
         case epoch, view, version, plan, stepIndex = "step_index", done, excluded, redo,
              notes, tips, timers, stamps, cards, draft, handoff, run, recent, header, bench
         case privateWake = "private"
+        case transcribe
     }
 
     init(from decoder: Decoder) throws {
@@ -810,6 +812,7 @@ struct RecordSnapshot: Decodable {
         recent = try c.decodeIfPresent([HistoryEntry].self, forKey: .recent) ?? []
         headerMode = try c.decodeIfPresent(Header.self, forKey: .header)?.mode
         privateWake = (try? c.decodeIfPresent(PrivateWake.self, forKey: .privateWake)) ?? nil  // auxiliary, like draft
+        transcribe = try? c.decodeIfPresent(String.self, forKey: .transcribe)
         bench = try c.decodeIfPresent(Bench.self, forKey: .bench)
     }
 }
@@ -969,6 +972,7 @@ final class LabState {
         timers = snap.timers
         headerMode = snap.headerMode
         privateWake = snap.privateWake
+        PipClient.transcribeOnDevice = snap.transcribe == "device"
         bench = snap.bench
         cards = snap.cards
         draft = snap.draft

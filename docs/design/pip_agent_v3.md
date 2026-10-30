@@ -342,6 +342,14 @@ the key stays on the server (handshake `authorization.accessToken`).
   barge-in; the mic button still interrupts). Silence is processed audio.
 - Max 60 min (docs): at 55 min close at the next turn boundary (no hand-off).
 - Partials go to the app as WS messages (not snapshots) -> top line.
+- Private: the iPad transcribes (SFSpeechRecognizer with
+  requiresOnDeviceRecognition; contextualStrings = wells A1–H12, this
+  screen's buttons, protocol short titles) and sends `heard` text. No audio
+  leaves, Meta realtime never opens, and there are no speaker labels: every
+  voice counts as the owner's, so nothing is ignored. A turn ends after
+  0.9 s without new words. The mic button transcribes its recording the
+  same way. Changing mode closes the session (`mode`) and the app reopens
+  it the new way; audio to Meta stops the moment the mode changes.
 - Edge "session idle": dim, slow while open and quiet; listening when the
   owner talks; gone when the session ends. Top line a quiet "Listening…".
 - Fallback: stream failure or drop -> per-utterance /voice, shown on screen.

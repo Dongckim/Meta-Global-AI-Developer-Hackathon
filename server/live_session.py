@@ -34,6 +34,12 @@ def strip_wake(text: str, phrase: str) -> str:
     return re.sub(pat, "", text or "", flags=re.IGNORECASE).strip()
 
 
+def device_hints(buttons: list[str], titles: list[str]) -> list[str]:
+    """contextualStrings for the iPad's recognizer: every well, then the rest."""
+    wells = [f"{r}{c}" for r in "ABCDEFGH" for c in range(1, 13)]
+    return list(dict.fromkeys(wells + buttons + titles))
+
+
 def live_keywords(record: dict, limit: int = 40) -> list[str]:
     """Bias words: wake phrase, agent name, this protocol's reagents and
     conditions, well spellings from the plan, and command words."""

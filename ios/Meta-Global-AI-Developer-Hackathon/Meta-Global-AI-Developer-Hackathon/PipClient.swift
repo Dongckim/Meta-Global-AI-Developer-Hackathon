@@ -184,7 +184,7 @@ enum PipError: Error, LocalizedError {
 
 enum PipClient {
     /// Must match server API_VERSION (test_snapshot_schema pins both sides).
-    static let EXPECTED_API_VERSION = 22
+    static let EXPECTED_API_VERSION = 23
     /// A server link silent this long is dead: three missed keepalives
     /// (server HEARTBEAT_S = 15) on /events and /voice/live.
     static let idleTimeout: TimeInterval = 45
@@ -214,10 +214,14 @@ enum PipClient {
         return try JSONDecoder().decode(OrchestrateResponse.self, from: data)
     }
 
+    /// Private: speech turns to text on the iPad (snapshot `transcribe`).
+    static var transcribeOnDevice = false
+
     static func voice(wav: Data) async throws -> VoiceResponse {
         if let dur = Recorder.duration(of: wav), dur < minVoiceDuration {
             throw VoiceError.tooShort(duration: dur)
         }
+        let heard = transcribeOnDevice ? try await DeviceEars.transcribe(wav: wav) : nil
         let boundary = "----pip\(UUID().uuidString)"
         var body = Data()
         func append(_ s: String) { body.append(Data(s.utf8)) }
@@ -226,11 +230,15 @@ enum PipClient {
             append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n")
             append("\(value)\r\n")
         }
-        append("--\(boundary)\r\n")
-        append("Content-Disposition: form-data; name=\"audio\"; filename=\"clip.wav\"\r\n")
-        append("Content-Type: audio/wav\r\n\r\n")
-        body.append(wav)
-        append("\r\n")
+        if let heard {
+            field("transcript", heard)
+        } else {
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"audio\"; filename=\"clip.wav\"\r\n")
+            append("Content-Type: audio/wav\r\n\r\n")
+            body.append(wav)
+            append("\r\n")
+        }
         append("--\(boundary)--\r\n")
 
         var req = URLRequest(url: Config.baseURL.appending(path: "voice"))

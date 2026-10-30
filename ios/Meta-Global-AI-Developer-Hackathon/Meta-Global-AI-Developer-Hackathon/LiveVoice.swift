@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import os
+import Speech
 
 /// What the live conversation link reports (shared/schemas/live.schema.json).
 enum LiveEvent {
@@ -154,6 +155,148 @@ final class LiveMic {
     }
 }
 
+/// Private: hears the owner on the iPad (requiresOnDeviceRecognition) and
+/// hands over words; no audio leaves. One more sink on the MicEngine tap. A
+/// turn ends after `quiet` seconds without new words, then a fresh task starts.
+@MainActor
+final class DeviceEars {
+    private static let quiet: Duration = .milliseconds(900)
+    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    private let live = RequestBox()
+    private var task: SFSpeechRecognitionTask?
+    private var sinkID: UUID?
+    private var generation = 0
+    private var text = ""
+    private var quietWatch: Task<Void, Never>?
+    private var restarts = RestartGate(limit: 5, window: 10)
+    private var heard: ((String, Bool) -> Void)?
+    private var failed: (() -> Void)?
+    private var muted: FlagBox?
+    /// What the recognizer should expect; the next task picks it up.
+    var hints: [String] = []
+
+    func start(muted: FlagBox, heard: @escaping (String, Bool) -> Void,
+               failed: @escaping () -> Void) async throws {
+        guard let recognizer, recognizer.supportsOnDeviceRecognition else { throw WakeError.noRecognizer }
+        self.muted = muted
+        self.heard = heard
+        self.failed = failed
+        try await attach()
+        beginTask()
+    }
+
+    func stop() {
+        generation += 1
+        quietWatch?.cancel()
+        task?.cancel()
+        task = nil
+        live.current?.endAudio()
+        live.current = nil
+        if let id = sinkID { MicEngine.shared.unsubscribe(id) }
+        sinkID = nil
+        heard = nil
+    }
+
+    /// Re-attach to a rebuilt engine; new sink first, as LiveMic.restart.
+    func restart() async {
+        guard heard != nil else { return }
+        let old = sinkID
+        do {
+            try await attach()
+        } catch {
+            Log.audio.error("[audio] ears re-attach failed: \(error.localizedDescription, privacy: .public)")
+        }
+        if let old { MicEngine.shared.unsubscribe(old) }
+    }
+
+    private func attach() async throws {
+        _ = try await MicEngine.shared.prepare()
+        let live = self.live
+        let muted = self.muted
+        sinkID = MicEngine.shared.subscribe { buffer in
+            guard muted?.value != true else { return }  // the agent is speaking
+            live.current?.append(buffer)
+        }
+    }
+
+    private func beginTask() {
+        guard let recognizer else { return }
+        generation += 1
+        let gen = generation
+        text = ""
+        let req = SFSpeechAudioBufferRecognitionRequest()
+        req.requiresOnDeviceRecognition = true
+        req.shouldReportPartialResults = true
+        req.contextualStrings = hints
+        live.current = req
+        task = recognizer.recognitionTask(with: req) { [weak self] result, error in
+            let words = result?.bestTranscription.formattedString
+            let done = result?.isFinal ?? false
+            let failure = error?.localizedDescription
+            Task { @MainActor in self?.handle(words, done: done, failure: failure, gen: gen) }
+        }
+    }
+
+    private func handle(_ words: String?, done: Bool, failure: String?, gen: Int) {
+        guard gen == generation else { return }
+        if let words, words != text {
+            text = words
+            heard?(text, false)
+            quietWatch?.cancel()
+            quietWatch = Task { [weak self] in
+                try? await Task.sleep(for: Self.quiet)
+                guard !Task.isCancelled else { return }
+                self?.finishTurn()
+            }
+        }
+        if done {
+            finishTurn()
+        } else if let failure {
+            // long silence ends a task with an error too: only a burst is a failure
+            Log.voice.info("[voice] ears task ended: \(failure, privacy: .public)")
+            if restarts.note(date: Date()) {
+                failed?()
+            } else {
+                finishTurn()
+            }
+        }
+    }
+
+    private func finishTurn() {
+        quietWatch?.cancel()
+        if !text.isEmpty { heard?(text, true) }
+        task?.cancel()
+        live.current?.endAudio()
+        beginTask()
+    }
+
+    /// One recorded turn (the held mic), heard on the iPad.
+    static func transcribe(wav: Data) async throws -> String {
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
+              recognizer.supportsOnDeviceRecognition else { throw WakeError.noRecognizer }
+        let url = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).wav")
+        try wav.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let req = SFSpeechURLRecognitionRequest(url: url)
+        req.requiresOnDeviceRecognition = true
+        req.shouldReportPartialResults = false
+        return try await withCheckedThrowingContinuation { k in
+            var done = false
+            let holder = Unchecked(value: recognizer)
+            _ = holder.value.recognitionTask(with: req) { result, error in
+                guard !done else { return }
+                if let result, result.isFinal {
+                    done = true
+                    k.resume(returning: result.bestTranscription.formattedString)
+                } else if let error {
+                    done = true
+                    k.resume(throwing: error)
+                }
+            }
+        }
+    }
+}
+
 enum LiveError: Error, LocalizedError {
     case refused(String)
     case timeout
@@ -171,6 +314,8 @@ final class LiveLink: LiveControlling {
     var onEvent: ((LiveEvent) -> Void)?
     private var task: URLSessionWebSocketTask?
     private let mic = LiveMic()
+    private let ears = DeviceEars()
+    private var session = ""
     private var finished = false
     /// Last message from the server (pings included).
     private var lastHeard = Date()
@@ -186,6 +331,29 @@ final class LiveLink: LiveControlling {
     }
 
     func start(session: String) async throws {
+        self.session = session
+        try await connect()
+        Task { await idleWatch() }
+    }
+
+    /// The server closed for a mode change: same session on the VoiceSession
+    /// side, a new link hearing the new way.
+    private func reconnect() {
+        mic.stop()
+        ears.stop()
+        task?.cancel(with: .normalClosure, reason: nil)
+        task = nil
+        Task {
+            do {
+                try await connect()
+            } catch {
+                Log.voice.error("[voice] live reconnect failed: \(error.localizedDescription, privacy: .public)")
+                finish("error")
+            }
+        }
+    }
+
+    private func connect() async throws {
         let t = URLSession.shared.webSocketTask(with: PipClient.liveURL)
         task = t
         t.resume()
@@ -204,14 +372,21 @@ final class LiveLink: LiveControlling {
         }
         Log.voice.info("[voice] live ready session=\(obj["session_id"] as? String ?? "-", privacy: .public)")
         do {
-            try await mic.start { [weak self] data in
-                t.send(.data(data)) { err in
-                    guard let err else { return }
-                    // a frame that can't go out means the socket is gone
-                    Task { @MainActor in
-                        guard let self, !self.finished else { return }
-                        Log.voice.error("[voice] live send failed: \(err.localizedDescription, privacy: .public)")
-                        self.finish("error")
+            if obj["transcribe"] as? String == "device" {
+                ears.hints = obj["hints"] as? [String] ?? []
+                try await ears.start(muted: mic.muted, heard: { text, final in
+                    Self.sendHeard(t, text, final: final)
+                }, failed: { [weak self] in self?.finish("error") })
+            } else {
+                try await mic.start { [weak self] data in
+                    t.send(.data(data)) { err in
+                        guard let err else { return }
+                        // a frame that can't go out means the socket is gone
+                        Task { @MainActor in
+                            guard let self, !self.finished, self.task === t else { return }
+                            Log.voice.error("[voice] live send failed: \(err.localizedDescription, privacy: .public)")
+                            self.finish("error")
+                        }
                     }
                 }
             }
@@ -221,7 +396,12 @@ final class LiveLink: LiveControlling {
         }
         lastHeard = Date()
         Task { await receiveLoop(t) }
-        Task { await idleWatch() }
+    }
+
+    private static func sendHeard(_ t: URLSessionWebSocketTask, _ text: String, final: Bool) {
+        let msg: [String: Any] = ["type": "heard", "text": text, "final": final]
+        guard let d = try? JSONSerialization.data(withJSONObject: msg) else { return }
+        t.send(.string(String(decoding: d, as: UTF8.self))) { _ in }
     }
 
     /// A session silent past the idle timeout (no ping either) is a dead
@@ -244,15 +424,17 @@ final class LiveLink: LiveControlling {
     func restartAudio() async {
         guard !finished else { return }
         await mic.restart()
+        await ears.restart()
     }
 
     private func receiveLoop(_ t: URLSessionWebSocketTask) async {
-        while !finished {
+        while !finished, task === t {
             do {
                 let m = try await t.receive()
                 lastHeard = Date()
                 handle(m)
             } catch {
+                guard task === t else { return }  // a reconnect closed it
                 Log.voice.error("[voice] live socket: \(error.localizedDescription, privacy: .public)")
                 finish("error")
             }
@@ -266,6 +448,8 @@ final class LiveLink: LiveControlling {
             break  // keepalive: only refreshes lastHeard
         case "partial":
             onEvent?(.partial(obj["text"] as? String ?? ""))
+        case "hints":
+            ears.hints = obj["hints"] as? [String] ?? []
         case "ignored":
             Log.voice.info("[voice] ignored speaker=\(obj["speaker"] as? String ?? "?", privacy: .public) text=\"\(obj["text"] as? String ?? "", privacy: .public)\"")
             onEvent?(.ignored(line: obj["line"] as? String ?? ""))
@@ -285,7 +469,11 @@ final class LiveLink: LiveControlling {
             finish("error")
         case "closed":
             Log.voice.info("[voice] live closed code=\(obj["code"].map { "\($0)" } ?? "-", privacy: .public) why=\(obj["why"] as? String ?? "?", privacy: .public)")
-            finish(obj["why"] as? String ?? "server")
+            if obj["why"] as? String == "mode" {
+                reconnect()
+            } else {
+                finish(obj["why"] as? String ?? "server")
+            }
         default:
             break
         }
@@ -295,6 +483,7 @@ final class LiveLink: LiveControlling {
         guard !finished else { return }
         finished = true
         mic.stop()
+        ears.stop()
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
         Log.voice.info("[voice] live finished: \(why, privacy: .public)")
