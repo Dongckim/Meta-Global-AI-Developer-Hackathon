@@ -180,6 +180,7 @@
     "end_run": {"title": "Finish this run?", "detail": ""},
     "new_run": {"title": "{run} is finished", "detail": "Start a new run of {name}?"},
     "confirm_search": {"title": "Search the web?", "detail": "“{query}”"},
+    "confirm_photo": {"title": "Send a photo?", "detail": "Only the part you ask about leaves the iPad"},
     "unmarked": {"title": "{wells} not marked", "detail": "Mark all {n} done and go to step {step}?"},
     "import_known": {"title": "Already saved as {name}", "detail": "Open it or review again?"},
     "save_as": {"title": "{name} already exists", "detail": "Save as version {version}, or keep it separate?"},
@@ -202,7 +203,7 @@
     "draft_page": ["Page {page}. Step {step} is highlighted.", "Step {step} is highlighted."],
     "plan_check": ["Draft ready. {conditions}, {steps}."],
     "web_searches": ["{searches}. Which one?", "No web searches yet."],
-    "web_answer": ["{answer}. Source: {domain}, searched {searched}.", "{answer_pages}. Based on pages from {domain}, searched {searched}.", "Searching “{query}”."]
+    "web_answer": ["{answer}. Source: {domain}, searched {searched}.", "{answer_pages}. Based on pages from {domain}, searched {searched}.", "{answer_photo}. Read from photo.", "{looking}", "Searching “{query}”."]
   },
   "run_started": [
     "{run} started. Step 1: {step}."
@@ -228,6 +229,14 @@
   "new_run": [
     "{run} is finished. Start a new run of {name}?"
   ],
+  "look_show": ["Show me."],
+  "look_none": ["I can't find a {target}. Try again closer."],
+  "look_unread": ["I couldn't read it. Try again closer."],
+  "look_hint": ["Look at it and say take it"],
+  "look_no_photo": ["I couldn't get the photo from the glasses. Try again."],
+  "look_no_glasses": ["Connect your glasses first."],
+  "look_send_failed": ["I couldn't check the photo. Try again."],
+  "confirm_photo": ["Send a photo to answer that?"],
   "looking_up": ["Looking it up."],
   "still_looking": ["Still looking…"],
   "search_stopped": ["Okay, I stopped looking."],
@@ -244,8 +253,8 @@
   ],
   "modes": {
     "_note": "Run modes: header label and the line under each choice on the Mode screen.",
-    "full": {"label": "Full", "line": "Cloud model · fastest answers", "confirm_search": false},
-    "private": {"label": "Private", "line": "Private model · asks before anything leaves", "confirm_search": true}
+    "full": {"label": "Full", "line": "Cloud model · fastest answers", "confirm_search": false, "confirm_photo": false},
+    "private": {"label": "Private", "line": "Private model · asks before anything leaves", "confirm_search": true, "confirm_photo": true}
   },
   "also_ask": [
     "Should I also {what}?",

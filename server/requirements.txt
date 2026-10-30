@@ -6,3 +6,5 @@ python-multipart
 pypdf
 jsonschema
 websockets>=15
+Pillow
+meta-sam-parser==0.1.0

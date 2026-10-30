@@ -35,6 +35,8 @@ from server import library as lib
 from server import protocol as proto
 from server import labels
 from server import runs as runlog
+from server import look as lookmod
+from server import search as searchmod
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 RECORD_PATH = DATA_DIR / "record.json"
@@ -425,9 +427,18 @@ class RecordStore:
             lab = labels.search_label(doc)
             st = doc.get("status")
             out = {"when": lab["day"], "time": lab["time"], "query": doc.get("query") or "",
-                   "status": "ok" if st == "ok" else "pending" if st == "pending" else "failed",
-                   "sources": len(doc.get("sources") or [])}
-            if st == "ok":
+                   "status": "ok" if st == "ok" else "pending" if st in ("pending", "looking", "reading") else "failed",
+                   "sources": len(doc.get("sources") or []), "kind": doc.get("kind") or "web"}
+            if st == "looking":  # a photo question waits for its photo: Take it
+                out["looking"] = say("look_show", None)
+                out["camera"] = "on"
+            if doc.get("kind") == "photo" and st in ("reading", "ok"):
+                out["retake"] = "on"  # a photo is in: Retake, while it's read and after
+            if st == "ok" and doc.get("basis") != "photo":
+                out["source"] = "web"  # a searched answer: Open source; a photo-only one has none
+            if st == "ok" and doc.get("basis") == "photo":
+                out["answer_photo"] = (doc.get("answer_short") or "").rstrip(" .")  # read, no search
+            elif st == "ok":
                 # answer, then where from, then when; cited and pages-searched never sound alike
                 srcs = doc.get("sources") or []
                 out["answer" if doc.get("basis", "cited") == "cited" else "answer_pages"] = \
@@ -1317,6 +1328,8 @@ class RecordStore:
                 # the search is a network call: the api layer runs it after this turn
                 res["info"]["search"] = {"question": p.get("question", ""), "query": p.get("query", "")}
                 return
+            if ok and p.get("search_id") and p.get("op") == "look":
+                res["info"]["look"] = {"search_id": p["search_id"]}
             res["messages"].append(message)
             res["cards"] += fresh
             return
@@ -1700,6 +1713,10 @@ class RecordStore:
             self._control(args, res)
         elif name == "pick":
             self._pick(args, res)
+        elif name == "look":
+            self._start_look(str(args.get("question") or origin or "").strip(), res, session)
+        elif name == "retake_look":
+            self._retake_look(res, session)
         elif name == "resume_run":
             self._resume_locked(str(args.get("target") or ""), session, res)
         elif name in self.DRAFT_ACTIONS:
@@ -1723,8 +1740,66 @@ class RecordStore:
 
     def add_search(self, rec: dict) -> None:
         with self._lock:
-            docs = self.searches() + [rec]
+            self._add_search_locked(rec)
+
+    def _add_search_locked(self, rec: dict) -> None:
+        docs = self.searches() + [rec]
+        (self.root / "searches.json").write_text(json.dumps(docs, ensure_ascii=False))
+
+    # --- a question that needs a photo (server/look.py) ---
+
+    def _start_look(self, question: str, res: dict, session: dict | None, confirmed: bool = False) -> None:
+        """The photo question begins: a mode that asks first shows its card
+        (pip_voice `modes.<mode>.confirm_photo`); else the record opens ⑧ in
+        `looking` and the app shows its camera ("Show me.")."""
+        if not confirmed and (section("modes").get(run_mode()) or {}).get("confirm_photo"):
+            self._card(res, "confirm_photo", say("confirm_photo", session), None,
+                       {"op": "look", "question": question})
+            return
+        rec = searchmod.record(question, "", None, "looking", (self.r.get("run") or {}).get("run_id"), 0)
+        rec.update({"kind": "photo", "target": lookmod.target_of(question), "attempt": 1})
+        self._add_search_locked(rec)
+        self._push_view("web_answer", rec["id"])
+        res["ui"].append({"action": "camera", "search_id": rec["id"], "id": uuid.uuid4().hex[:8]})
+        res["info"]["look"] = {"search_id": rec["id"]}
+        res["messages"].append(say("look_show", session, target=rec["target"]))
+
+    def update_look(self, search_id: str, attempt: int | None = None, **fields) -> dict | None:
+        """A photo question's record moves on (reading, its crop, its answer).
+        With `attempt`: only if that photo is still the current one (a Retake
+        since then makes it stale: None, nothing written)."""
+        with self._lock:
+            docs = self.searches()
+            rec = next(d for d in docs if d["id"] == search_id)
+            if attempt is not None and rec.get("attempt", 1) != attempt:
+                return None
+            rec.update(fields)
             (self.root / "searches.json").write_text(json.dumps(docs, ensure_ascii=False))
+            self._commit()  # the open ⑧ redraws
+            return rec
+
+    def _retake_look(self, res: dict, session: dict | None) -> None:
+        """Retake: the photo question on screen goes back to "Show me."; the
+        photo being read (or its answer) is dropped and a later reply for it
+        is ignored (the attempt moves on)."""
+        v = self.r["view"]["current"]
+        docs = self.searches()
+        rec = next((d for d in docs if d["id"] == v.get("target") and d.get("kind") == "photo"), None)
+        if v.get("screen") != "web_answer" or rec is None:
+            res["messages"].append("There's no photo to retake.")
+            return
+        rec.update({"status": "looking", "attempt": rec.get("attempt", 1) + 1, "answer_short": "", "detail": "",
+                    "read": "", "sources": [], "basis": "", "outline": [], "query": ""})
+        (self.root / "searches.json").write_text(json.dumps(docs, ensure_ascii=False))
+        self.look_crop_path(rec["id"]).unlink(missing_ok=True)
+        res["ui"].append({"action": "camera", "search_id": rec["id"], "attempt": rec["attempt"],
+                          "id": uuid.uuid4().hex[:8]})
+        res["info"]["look"] = {"search_id": rec["id"]}
+        res["messages"].append(say("look_show", session, target=rec.get("target") or "label"))
+
+    def look_crop_path(self, search_id: str):
+        """Where a photo question's crop is kept (only the crop, never the photo)."""
+        return self.root / "looks" / f"{re.sub(r'[^0-9a-f]', '', search_id)}.jpg"
 
     def finish_search(self, search_id: str, result: dict | None, status: str, ms: int, line: str = "") -> dict:
         """A pending search's outcome lands on its record (⑧ fills in)."""
@@ -2127,6 +2202,9 @@ class RecordStore:
                     self._saved(self._save_draft_locked(), session, res)
         elif op == "web_search":
             res["messages"].append(say("looking_up", session))
+        elif op == "look":
+            self._start_look(p.get("question") or "", res, session, confirmed=True)
+            p["search_id"] = (res["info"].get("look") or {}).get("search_id")
         elif op == "end_run":
             if not self.r.get("run"):
                 res["messages"].append("No active run.")
@@ -2137,6 +2215,8 @@ class RecordStore:
         else:
             res["messages"].append("That card is gone.")
         self._commit()
+        for a in res["ui"]:
+            self._broadcast({"kind": "ui", **a})  # a card's yes can open the camera (photo question)
         message = " ".join(res["messages"]) or "Done."
         self._refresh_card_output(card, ok, message, session)
         return message, res["cards"], card

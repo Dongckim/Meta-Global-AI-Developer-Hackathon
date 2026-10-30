@@ -255,6 +255,10 @@ def button_match(text: str, screen_ids: list[str], slots: dict | None = None) ->
     for b in shown:
         if _said(b["say"]) == said:
             return {"name": b["action"], "args": dict(b.get("args") or {})}, None
+    # a bare button also answers to its action's verbs said whole ("take it again" = Retake)
+    alias = [b for b in shown if not b.get("args") and said in {_said(v) for v in verbs(b["action"])}]
+    if len(alias) == 1:
+        return {"name": alias[0]["action"], "args": {}}, None
     words = said.split()
     if set(words) & _NOT or set(words) & _ASKING or (text or "").strip().endswith("?"):
         return None, None
@@ -312,6 +316,27 @@ def control_call(text: str, screen_id: str, items: list[dict] | None = None) -> 
         if len(hits) == 1:
             return {"name": "pick", "args": {"name": hits[0]["name"]}}
     return None
+
+
+def look_call(text: str) -> dict | None:
+    """A question about what's in front of the camera, no model: "look at
+    this", "what does this say", "is this tube the right one?", "what's on
+    this label". `this` alone counts only in a question (not "mark this done")."""
+    import re
+    from server.look import TARGETS
+    said = " ".join(re.sub(r"[^a-z0-9'? ]+", " ", (text or "").lower()).split())
+    things = "|".join(TARGETS)
+    if re.search(r"\blook at (?:this|that|these)\b", said) \
+            or re.search(r"\bwhat (?:does|do) (?:this|that|these)(?: \w+)? say\b", said) \
+            or re.search(rf"\b(?:this|that) (?:{things})s?\b", said) and _asks(said) \
+            or re.search(r"\b(?:this|these)\b", said) and _asks(said) and re.match(r"(?:what|which|is|are|does|do|can|how)\b", said):
+        return {"name": "look", "args": {"question": (text or "").strip()}}
+    return None
+
+
+def _asks(said: str) -> bool:
+    import re
+    return said.endswith("?") or bool(re.match(r"(?:what|what's|whats|which|is|are|does|do|can|how|tell me)\b", said))
 
 
 def start_call(text: str) -> dict | None:

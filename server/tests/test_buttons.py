@@ -70,6 +70,18 @@ def fresh(sid: str, b: dict | None = None) -> RecordStore:
     target = TARGET.get(sid, "")
     if sid == "web_answer" and ((b or {}).get("when") or {}).get("status") == "failed":
         target = "s2"
+    if sid == "web_answer" and ((b or {}).get("when") or {}).get("camera") == "on":
+        # a photo question waiting for its photo (the camera is up)
+        st.add_search({"id": "s3", "ts": 3, "question": "what does this say?", "query": "", "kind": "photo",
+                       "target": "label", "answer_short": "", "detail": "", "status": "looking", "run_id": None,
+                       "ms": 0, "sources": []})
+        target = "s3"
+    if sid == "web_answer" and ((b or {}).get("when") or {}).get("retake") == "on":
+        # a photo question with its photo in (read, answered)
+        st.add_search({"id": "s4", "ts": 4, "question": "what does this say?", "query": "", "kind": "photo",
+                       "target": "label", "answer_short": "DMSO", "detail": "", "status": "ok", "basis": "photo",
+                       "attempt": 1, "run_id": None, "ms": 0, "sources": []})
+        target = "s4"
     if sid == "protocol_detail":
         target = st.r["run"]["protocol_id"]  # the protocol of the run going (Continue shows there)
     if sid == "run_view":

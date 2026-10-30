@@ -60,7 +60,8 @@ from server.grammar import (
 from server.memory import Memory, SparkChainMemory, SummaryMemory
 from server.screens import IDS as SCREEN_IDS
 from server.screens import (PLAIN_ANSWERS, ask_choice, button_match, button_words, buttons_for, card_choices,
-                            control_call, planned_screen, start_call)
+                            control_call, look_call, planned_screen, start_call)
+from server import look as lookmod
 from server.screens import guide as _screen_guide
 from server.screens import READS as SCREEN_READS
 from server import library as lib
@@ -86,7 +87,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 18
+API_VERSION = 19
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -174,7 +175,7 @@ PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "edit_note", "save_tip", "set_timer", "cancel_timer",
                    "extend_timer", "next_step", "end_run", "show", "navigate",
                    "open", "back", "make_robot", "edit_draft", "retry_sync",
-                   "skip_sync", "review_draft", "save_draft", "start_run", "discard_draft",
+                   "skip_sync", "review_draft", "save_draft", "start_run", "discard_draft", "look", "retake_look",
                    "show_step", "open_source_page", "web_search", "open_source", "control", "pick",
                    "resume_run"]
 #: Actions that aren't record writes; the coverage check counts only writes.
@@ -203,6 +204,8 @@ TOOLS = [
         "edit_draft{path,value} (draft_open only); review_draft; save_draft (later); "
         "start_run{target?} (the open draft, else the protocol on screen or named); discard_draft; "
         "show_step{step} / open_source_page{step?} (a draft's pipetting step, 1-based); "
+        "look{question?} (question = what was asked; default: the words said) when answering needs seeing something in front of the person (a tube, "
+        "label, bottle, screen: \"what does it say\", \"is this the right one\"); the app takes a photo; "
         "web_search{query} ONLY for outside knowledge the record and protocol can't hold (reagent "
         "limits, stability, general method facts); query = the general question, never wells, run "
         "names or notes; record facts -> read_record instead; open{target: \"search <as said>\"} "
@@ -725,6 +728,9 @@ async def _turn(client, key, text: str, session: dict, source: str) -> tuple:
     except Exception as e:
         _stage(session, "failed", reason=type(e).__name__)
         raise
+    if out[6].get("look"):  # a photo question: the turn waits for the photo (POST /look)
+        _stage(session, "looking", search_id=out[6]["look"]["search_id"], say=out[2])
+        return out
     _stage(session, "done", reply=out[2])
     return out
 
@@ -856,7 +862,8 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     vslots = store.view_slots(v["current"]["screen"], v["current"].get("target") or "")
     b, which = button_match(text, shown, vslots)
     b = b or (None if which else control_call(text, v["current"]["screen"],
-                                              store.screen_items.get(v["current"]["screen"])) or start_call(text))
+                                              store.screen_items.get(v["current"]["screen"])) or start_call(text)
+                             or look_call(text))
     if b is None and not which and v["current"]["screen"] in ("home", "protocol_detail") \
             and (pid := store.protocol_by_title(button_words(text))):
         b = {"name": "open", "args": {"target": f"protocol:{pid}"}}  # a row's title said: it opens (done: refused)
@@ -1768,6 +1775,105 @@ async def _spark_json(client, name: str, body: dict) -> dict:
 #: Extractions in flight by content hash: a second request for the same
 #: content joins the first instead of extracting again.
 _IMPORTS: dict[str, asyncio.Future] = {}
+
+
+#: A photo for a photo question, at most (the iPad camera's full JPEG fits).
+LOOK_MAX_BYTES = 15 * 1024 * 1024
+
+
+@app.post("/look")
+async def look_photo(file: UploadFile = File(...), search_id: str = Form(...), session: str = Form("bench"),
+                     attempt: int = Form(0)):
+    """The photo for a photo question (server/look.py): SAM 3.1 finds the
+    thing asked about, only its crop is kept and goes to Spark, which reads
+    it and answers; if the answer needs outside facts, the web search path
+    runs on what was read. Not found: the camera stays ("Try again closer").
+    `attempt` is the photo's turn (Retake moves it on): a reply for an
+    attempt that's no longer current changes nothing (stale: true)."""
+    sess = get_session(session)
+    rec = store.search_item(search_id)
+    if rec is None or rec.get("kind") != "photo":
+        raise HTTPException(404, "unknown photo question")
+    a = attempt or rec.get("attempt", 1)
+    if a != rec.get("attempt", 1):
+        return _look_stale()
+    if rec.get("status") != "looking":
+        raise HTTPException(409, f"photo question is {rec.get('status')}")
+    raw = await file.read()
+    if not raw or len(raw) > LOOK_MAX_BYTES:
+        raise HTTPException(413 if raw else 400, "need one photo (15MB max)")
+    target, question = rec.get("target") or lookmod.DEFAULT_TARGET, rec.get("question") or ""
+    store.update_look(search_id, a, status="reading")
+    _stage(sess, "reading", search_id=search_id)
+    t0 = time.perf_counter()
+    key = _key()
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await _post(client, "sam", f"{BASE_URL}/responses", headers={**headers, "Accept": "text/event-stream"},
+                           json=lookmod.build_sam_body(target, lookmod.data_url(raw, file.content_type or "image/jpeg")))
+        _check("sam", resp)
+        found = lookmod.matches(lookmod.sse_text(resp.text))
+        if not found:
+            line = say("look_none", sess, target=target)
+            if store.update_look(search_id, a, status="looking") is None:
+                return _look_stale()
+            _stage(sess, "looking", search_id=search_id, say=line)
+            return {"ok": False, "reply": line, "speak": speak_text(line), "record_version": store.r["version"]}
+        m = found[0]
+        cut, area = lookmod.crop(raw, m["box"], (m["w"], m["h"]))
+        ax1, ay1, ax2, ay2 = area
+        shape = [[round((x - ax1) / max(1, ax2 - ax1), 4), round((y - ay1) / max(1, ay2 - ay1), 4)]
+                 for x, y in lookmod.outline(m)]  # 0-1 on the crop, for drawing over its thumbnail
+        if store.update_look(search_id, a, outline=shape) is None:
+            return _look_stale()
+        path = store.look_crop_path(search_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(cut)
+        read = await _post(client, "look read", f"{BASE_URL}/responses", headers=headers,
+                           json=lookmod.build_read_body(question, target, lookmod.data_url(cut), SPARK_MODEL))
+        _check("look read", read)
+        got = search.output_json(read.json()) or {}
+        if not (got.get("answer_short") or "").strip():
+            line = say("look_unread", sess)
+            if store.update_look(search_id, a, status="looking", outline=[]) is None:
+                return _look_stale()
+            _stage(sess, "looking", search_id=search_id, say=line)
+            return {"ok": False, "reply": line, "speak": speak_text(line), "record_version": store.r["version"]}
+        result, basis = {"answer_short": got["answer_short"], "detail": got.get("detail") or "", "sources": []}, "photo"
+        q = search.clean_query(got.get("query") or "", store.private_texts()) if got.get("needs_search") else ""
+        if q and not _confirm_search():  # outside facts: the web search path, on what was read
+            _stage(sess, "searching", query=q, search_id=search_id, say=say("looking_up", sess))
+            try:
+                web, status = await _search_calls(client, key, f"{question} (it reads: {got.get('read', '')})", q, sess)
+            except (asyncio.TimeoutError, HTTPException):
+                web, status = None, "timeout"
+            if status == "ok" and web:
+                result, basis = web, web.get("basis") or "pages"
+    ms = int((time.perf_counter() - t0) * 1000)
+    if store.update_look(search_id, a, status="ok", query=q, read=got.get("read") or "", basis=basis, ms=ms,
+                         answer_short=result.get("answer_short", ""), detail=result.get("detail", ""),
+                         sources=result.get("sources", [])) is None:
+        return _look_stale()
+    print(f"look target={target} basis={basis} ms={ms} q={question[:60]!r}", flush=True)
+    line = store.screen_line("web_answer", search_id)
+    _stage(sess, "done", reply=line)
+    log_turn(sess, f"look {target}", [], [line])
+    return {"ok": True, "reply": line, "speak": speak_text(line), "record_version": store.r["version"]}
+
+
+def _look_stale() -> dict:
+    """A reply for a photo Retake replaced: nothing shown, nothing said."""
+    return {"ok": False, "stale": True, "reply": "", "record_version": store.r["version"]}
+
+
+@app.get("/looks/{search_id}/crop")
+async def look_crop(search_id: str):
+    """The kept crop of a photo question (the ⑧ thumbnail)."""
+    from fastapi.responses import FileResponse
+    path = store.look_crop_path(search_id)
+    if not path.exists():
+        raise HTTPException(404, "no crop")
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @app.post("/protocols/import")

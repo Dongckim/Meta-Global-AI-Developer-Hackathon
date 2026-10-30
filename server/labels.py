@@ -281,7 +281,9 @@ def search_label(doc: dict, now: _dt.datetime | None = None) -> dict:
     q = " ".join((doc.get("question") or doc.get("query") or "").split()[:6]).rstrip("?")
     # spoken: 12-hour clock, "today at 6:27 PM" / "on Oct 27 at 4:05 PM"
     said = "" if d is None else (f"today at {_clock(d)}" if day == "Today" else f"on {day} at {_clock(d)}")
-    return {"day": day, "time": time_, "display": " · ".join(x for x in (day, time_) if x), "searched": said,
+    # clock: the answer card's time, as Milo says it ("12:08 AM")
+    return {"day": day, "time": time_, "clock": _clock(d) if d else "",
+            "display": " · ".join(x for x in (day, time_) if x), "searched": said,
             "spoken": " ".join(f"the {'' if day == 'Today' else day} {time_} search about {q}".split())}
 
 
