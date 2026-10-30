@@ -83,6 +83,29 @@ struct SayButton: View {
     }
 }
 
+/// A screen's own controls (registry `control` buttons: Next page, Zoom in…)
+/// as small "Say …" chips; a tap and the words do the same.
+struct ControlChips: View {
+    var buttons: [ScreenButton]
+    var u: CGFloat
+    var perform: (ScreenButton) -> Void
+
+    var body: some View {
+        HStack(spacing: 12 * u) {
+            ForEach(Array(buttons.enumerated()), id: \.offset) { _, b in
+                Button { perform(b) } label: {
+                    (Text("Say ").foregroundStyle(Theme.polishBlue) + Text(b.say).foregroundStyle(Theme.text1))
+                        .font(.system(size: 20 * u, weight: .medium)).lineLimit(1)
+                        .padding(.horizontal, 18 * u).frame(height: 44 * u)
+                        .background(Capsule().fill(Theme.chip))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(b.say)
+            }
+        }
+    }
+}
+
 /// Header chip: the soonest timer's wells, minutes left, and how many more
 /// ("B2–B8 6 min +1"). Hidden with no running timer.
 struct TimerChip: View {

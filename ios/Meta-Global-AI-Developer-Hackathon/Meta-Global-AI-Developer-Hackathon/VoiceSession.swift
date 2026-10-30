@@ -256,7 +256,20 @@ final class VoiceSession {
         resumeWake()
     }
 
+    /// An iOS system sheet (file picker, photo picker) is up: the app goes
+    /// inactive, maybe background, but the user is still here. A live
+    /// session stays open until it closes.
+    private(set) var systemSheetUp = false
+    func systemSheet(_ up: Bool) {
+        systemSheetUp = up
+        Log.voice.info("[voice] system sheet \(up ? "up" : "down", privacy: .public) inSession=\(self.inSession)")
+    }
+
     func deactivate() {
+        if systemSheetUp, live != nil {
+            Log.voice.info("[voice] deactivate skipped: a system sheet is up, the session stays")
+            return
+        }
         Log.voice.info("[voice] deactivate state=\(self.state.rawValue, privacy: .public)")
         activated = false
         if live != nil { endLive("app background") }
@@ -450,9 +463,10 @@ final class VoiceSession {
             guard let self else { return }
             Log.voice.info("[voice] tts done gen=\(g)/\(self.gen) state=\(self.state.rawValue, privacy: .public)")
             let reopen: @MainActor () -> Void = { [weak self] in
-                guard let self else { return }
+                // only the latest utterance reopens the mic: an earlier one cut
+                // off by a newer speak() must not unmute it mid-sentence
+                guard let self, g == self.gen, self.state == .speaking else { return }
                 self.live?.muted = false
-                guard g == self.gen, self.state == .speaking else { return }
                 self.state = self.restState
                 self.resumeWake()
             }
@@ -488,7 +502,7 @@ final class VoiceSession {
     /// app never guesses). A stage's `say` line is spoken once.
     func applyStage(_ s: TurnStage) {
         switch s.stage {
-        case "heard", "thinking":
+        case "heard", "thinking", "reading":
             stage = s
             serverBusy = .thinking
             partialText = nil

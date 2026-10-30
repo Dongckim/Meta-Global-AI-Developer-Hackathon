@@ -71,7 +71,10 @@ func loosePhrase(_ s: String) -> String {
 struct PDFDocView: UIViewRepresentable {
     var url: URL
     var page: Int?
+    /// Highlight this text (show the quote); nil while paging by hand.
     var phrase: String?
+    /// 1 = fit the page; zoom in / out multiply it.
+    var zoom: CGFloat = 1
 
     func makeUIView(context: Context) -> PDFView {
         let v = PDFView()
@@ -81,6 +84,11 @@ struct PDFDocView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: PDFView, context: Context) {
+        if context.coordinator.lastZoom != zoom {
+            context.coordinator.lastZoom = zoom
+            view.autoScales = zoom == 1
+            if zoom != 1 { view.scaleFactor = view.scaleFactorForSizeToFit * zoom }
+        }
         let key = "\(url.path)#\(page ?? 0)#\(phrase ?? "")"
         guard context.coordinator.lastKey != key else { return }
         context.coordinator.lastKey = key
@@ -108,6 +116,31 @@ struct PDFDocView: UIViewRepresentable {
 
     final class Coord {
         var lastKey = ""
+        var lastZoom: CGFloat = 1
+    }
+}
+
+/// Paging, zoom and "show the quote" for an original (⑤e and the in-run
+/// original), driven by the screen's registry buttons (control commands).
+struct OriginalPaging: Equatable {
+    var page: Int
+    var zoom: CGFloat = 1
+    /// true: the quote's page with it highlighted; false: paged by hand.
+    var onQuote = true
+
+    /// Applies one control command; `count` pages exist. False when it isn't one.
+    mutating func apply(_ cmd: String, n: Int?, quotePage: Int, count: Int) -> Bool {
+        let last = max(count, 1)
+        switch cmd {
+        case "next_page": page = min(page + 1, last); onQuote = false
+        case "previous_page": page = max(page - 1, 1); onQuote = false
+        case "page": page = min(max(n ?? page, 1), last); onQuote = false
+        case "quote": page = quotePage; onQuote = true; zoom = 1
+        case "zoom_in": zoom = min(zoom * 1.5, 4)
+        case "zoom_out": zoom = max(zoom / 1.5, 1)
+        default: return false
+        }
+        return true
     }
 }
 
@@ -116,18 +149,32 @@ struct SourceView: View {
     var page: Int?
     var phrase: String?
     var title: String
+    /// The screen's control commands (next page, zoom, show the quote).
+    var commands: ScreenCommands? = nil
+    @State private var paging = OriginalPaging(page: 1)
 
     var body: some View {
         Group {
             if let parsed = parseSourceTarget(target),
                FileManager.default.fileExists(atPath: OriginalStore.url(protocolId: parsed.protocolId).path) {
-                PDFDocView(url: OriginalStore.url(protocolId: parsed.protocolId),
-                           page: page, phrase: phrase ?? textPhrase(fragment: parsed.fragment))
+                let url = OriginalStore.url(protocolId: parsed.protocolId)
+                PDFDocView(url: url, page: paging.page,
+                           phrase: paging.onQuote ? (phrase ?? textPhrase(fragment: parsed.fragment)) : nil,
+                           zoom: paging.zoom)
+                    .onChange(of: commands?.gen) { _, _ in
+                        guard let c = commands?.last else { return }
+                        _ = paging.apply(c.cmd, n: c.n, quotePage: page ?? 1,
+                                         count: PDFDocument(url: url)?.pageCount ?? 1)
+                    }
             } else if let parsed = parseSourceTarget(target),
                       case let photos = OriginalStore.photos(parsed.protocolId), !photos.isEmpty,
-                      let img = UIImage(contentsOfFile: photos[min(max((page ?? 1) - 1, 0), photos.count - 1)].path) {
+                      let img = UIImage(contentsOfFile: photos[min(max(paging.page - 1, 0), photos.count - 1)].path) {
                 // a photo import: the page photo is the original
-                Image(uiImage: img).resizable().scaledToFit().padding()
+                Image(uiImage: img).resizable().scaledToFit().scaleEffect(paging.zoom).padding()
+                    .onChange(of: commands?.gen) { _, _ in
+                        guard let c = commands?.last else { return }
+                        _ = paging.apply(c.cmd, n: c.n, quotePage: page ?? 1, count: photos.count)
+                    }
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: "doc.questionmark").font(.largeTitle)
@@ -140,6 +187,7 @@ struct SourceView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .onAppear { paging = OriginalPaging(page: page ?? 1) }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
     }

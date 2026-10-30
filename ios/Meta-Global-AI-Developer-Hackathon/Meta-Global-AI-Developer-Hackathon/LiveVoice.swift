@@ -179,6 +179,7 @@ final class LiveLink: LiveControlling {
         get { mic.muted.value }
         set {
             guard newValue != mic.muted.value else { return }
+            Log.voice.info("[voice] live mic \(newValue ? "muted (silence sent)" : "open", privacy: .public)")
             mic.setMuted(newValue)
             task?.send(.string(#"{"type":"tts","speaking":\#(newValue)}"#)) { _ in }
         }
@@ -236,6 +237,7 @@ final class LiveLink: LiveControlling {
     }
 
     func end() {
+        Log.voice.info("[voice] live link end sent")
         task?.send(.string(#"{"type":"end"}"#)) { _ in }
     }
 

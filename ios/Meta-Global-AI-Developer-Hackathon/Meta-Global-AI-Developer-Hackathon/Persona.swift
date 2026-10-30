@@ -39,6 +39,15 @@ struct Persona: Decodable, Equatable {
         return file.live
     }()
 
+    /// The app's name as people see it (pip_voice.json persona.app_name).
+    static let appName: String = {
+        guard let url = Bundle.main.url(forResource: "pip_voice", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let p = raw["persona"] as? [String: Any], let n = p["app_name"] as? String else { return "" }
+        return n
+    }()
+
     /// A run mode's header label and Mode-screen line (pip_voice.json `modes`).
     struct Mode: Decodable, Equatable {
         var label: String

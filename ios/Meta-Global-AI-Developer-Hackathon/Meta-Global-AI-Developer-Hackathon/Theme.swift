@@ -461,6 +461,7 @@ enum Theme {
             }
             return PipLine(text: "Listening", dots: true, status: true)
         case .thinking:
+            if stage?.stage == "reading" { return PipLine(text: "Reading the protocol", dots: true, status: true) }
             return PipLine(text: "Thinking", dots: true, status: true)
         case .speaking:
             if !speakText.isEmpty {

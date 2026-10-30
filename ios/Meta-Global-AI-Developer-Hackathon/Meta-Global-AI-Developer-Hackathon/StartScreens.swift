@@ -229,6 +229,9 @@ struct DraftPageScreen: View {
     var buttons: [ScreenButton]
     var u: CGFloat
     var perform: (ScreenButton) -> Void
+    /// Next page, page 2, zoom, show the quote (registry control buttons).
+    var commands: ScreenCommands
+    @State private var paging = OriginalPaging(page: 1)
 
     private var row: DraftRow? { draft.summary?.rows.first { $0.n == step } }
     private var oid: String { draft.meta.originalId ?? "" }
@@ -249,8 +252,8 @@ struct DraftPageScreen: View {
 
     var body: some View {
         let origin = DraftOrigin(draft.meta)
-        let page = row?.page ?? 1
-        VStack(spacing: 32 * u) {
+        let page = paging.page
+        VStack(spacing: 24 * u) {
             VStack(spacing: 0) {
                 HStack(spacing: 12 * u) {
                     Image(systemName: origin.icon).foregroundStyle(Theme.polishBlue)
@@ -264,26 +267,32 @@ struct DraftPageScreen: View {
                 content(page: page)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(width: 1060 * u, height: 600 * u)
+            .frame(width: 1060 * u, height: 540 * u)
             .clipShape(RoundedRectangle(cornerRadius: 44 * u, style: .continuous))
             .benchCard(radius: 44 * u)
             .enter(.rise, 0, u: u)
-            SayRow(buttons: buttons, u: u, perform: perform).frame(width: 620 * u)
+            ControlChips(buttons: buttons.filter { $0.action == "control" }, u: u, perform: perform)
+            SayRow(buttons: buttons.filter { $0.action != "control" }, u: u, perform: perform).frame(width: 620 * u)
         }
         .frame(maxHeight: .infinity)
+        .onAppear { paging = OriginalPaging(page: row?.page ?? 1) }
+        .onChange(of: commands.gen) { _, _ in
+            guard let c = commands.last else { return }
+            _ = paging.apply(c.cmd, n: c.n, quotePage: row?.page ?? 1, count: max(pageCount, 1))
+        }
     }
 
     @ViewBuilder private func content(page: Int) -> some View {
         if let pdfURL {
-            PDFDocView(url: pdfURL, page: page, phrase: row?.quote)
+            PDFDocView(url: pdfURL, page: page, phrase: paging.onQuote ? row?.quote : nil, zoom: paging.zoom)
         } else if photos.indices.contains(page - 1), let img = UIImage(contentsOfFile: photos[page - 1].path) {
             // the photo is the original; the quote was checked against its transcript
-            Image(uiImage: img).resizable().scaledToFit().padding(24 * u)
+            Image(uiImage: img).resizable().scaledToFit().scaleEffect(paging.zoom).padding(24 * u)
         } else {
             // pasted text, or a PDF that isn't on this iPad: the text it was read from
             Text(highlighted(pages.indices.contains(page - 1) ? pages[page - 1] : pages.joined(separator: "\n")))
                 .font(.system(size: 22 * u)).foregroundStyle(Theme.text1)
-                .lineLimit(nil).minimumScaleFactor(0.5)
+                .lineLimit(nil).minimumScaleFactor(0.5).scaleEffect(paging.zoom, anchor: .topLeading)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(.horizontal, 84 * u).padding(.vertical, 40 * u)
         }
@@ -311,7 +320,7 @@ struct PlanCheckScreen: View {
     var body: some View {
         let s = draft.summary
         HStack(alignment: .top, spacing: 36 * u) {
-            PlateView(lab: plan, selected: $selected)
+            PlateView(lab: plan, selected: $selected, showPlanned: true)
                 .padding(28 * u)
                 .frame(width: 800 * u, height: 566 * u)
                 .benchCard(radius: 44 * u)

@@ -31,6 +31,10 @@ struct UIAction: Decodable {
     let sheet: String?
     let wells: [String]?
     let seconds: Double?
+    /// control: a page number ("page 2").
+    let n: Int?
+    /// Delivery id: the reply and /events carry the same one; run it once.
+    let id: String?
 }
 
 struct OrchestrateResponse: Decodable {
@@ -81,19 +85,12 @@ struct EditNoteResponse: Decodable {
 }
 
 struct ImportResponse: Decodable {
-    let draft: ProtocolDraft
+    /// nil when the original is already a protocol (the server opens it instead).
+    let draft: ProtocolDraft?
     let review: [DraftIssue]
     let errors: [DraftIssue]
     let reply: String
     let speak: String?
-}
-
-struct PatchResponse: Decodable {
-    let ok: Bool
-    let draft: ProtocolDraft?
-    let review: [DraftIssue]?
-    let errors: [DraftIssue]?
-    let reason: String?
 }
 
 struct RunEndResponse: Decodable {
@@ -169,7 +166,7 @@ enum PipError: Error, LocalizedError {
 
 enum PipClient {
     /// Must match server API_VERSION (test_snapshot_schema pins both sides).
-    static let EXPECTED_API_VERSION = 13
+    static let EXPECTED_API_VERSION = 14
     /// A server link silent this long is dead: three missed keepalives
     /// (server HEARTBEAT_S = 15) on /events and /voice/live.
     static let idleTimeout: TimeInterval = 45
@@ -272,16 +269,6 @@ enum PipClient {
         return try JSONDecoder().decode(ImportResponse.self, from: respData)
     }
 
-    static func patchDraft(path: String, value: Any) async throws -> PatchResponse {
-        var req = URLRequest(url: Config.baseURL.appending(path: "protocols/draft"))
-        req.httpMethod = "PATCH"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["path": path, "value": value])
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        try check(resp, data)
-        return try JSONDecoder().decode(PatchResponse.self, from: data)
-    }
-
     static func protocols() async throws -> [ProtocolSummary] {
         let r: ProtocolListResponse = try await get("protocols")
         return r.protocols
@@ -299,6 +286,12 @@ enum PipClient {
         let (data, resp) = try await URLSession.shared.data(from: url)
         try check(resp, data)
         return try JSONDecoder().decode(RunListResponse.self, from: data).runs
+    }
+
+    /// What a list screen shows now, so "number 2" and a name pick from it.
+    static func reportItems(screen: String, items: [(id: String, name: String)]) async throws {
+        let _: [String: JSON] = try await post("screen/items", [
+            "screen": screen, "items": items.map { ["id": $0.id, "name": $0.name] }])
     }
 
     static func searches() async throws -> SearchListResponse {

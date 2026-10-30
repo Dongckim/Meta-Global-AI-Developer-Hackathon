@@ -27,32 +27,6 @@ enum RobotState {
     case done(RobotResponse)
 }
 
-/// A web page to show in the in-app browser.
-struct WebLink: Identifiable {
-    let url: URL
-    var id: String { url.absoluteString }
-}
-
-enum DraftState {
-    case idle
-    case importing
-    case reviewing
-}
-
-/// Server-driven text field: edits commit one draft path on submit.
-private struct DraftField: View {
-    let initial: String
-    let onCommit: (String) -> Void
-    @State private var text = ""
-    var body: some View {
-        TextField("", text: $text)
-            .textFieldStyle(.roundedBorder)
-            .onAppear { text = initial }
-            .onChange(of: initial) { _, v in text = v }
-            .onSubmit { onCommit(text) }
-    }
-}
-
 struct ViewingSource: Equatable {
     var target: String
     var page: Int?
@@ -78,11 +52,16 @@ struct ContentView: View {
     /// App launch opens Home; the first snapshot moves the saved view there once.
     @State private var launchHomeSent = false
     @State private var robotState = RobotState.idle
-    @State private var draftState = DraftState.idle
-    @State private var reviewTab = 0
+    /// An import is being read (the server says "Reading the protocol…");
+    /// a second start is ignored and the import screens are disabled.
+    @State private var importing = false
     @State private var showImporter = false
     @State private var showTextImport = false
-    @State private var showPhotoImport = false
+    /// Control commands for the screen on top (next page, take it, scroll down…).
+    @State private var commands = ScreenCommands()
+    /// The camera for photo import (made when that screen first opens).
+    @State private var camera: DeviceCamera?
+    @State private var files: [LocalFile] = []
     /// The last view change came from a tap (its screen line is spoken only
     /// in a live session; a voice reply already says it).
     @State private var navByTap = false
@@ -98,9 +77,6 @@ struct ContentView: View {
     @State private var searches: [WebSearch] = []
     /// Searches that answered (⓪c, counts); ⑧ also shows pending and failed ones.
     private var answered: [WebSearch] { searches.filter { $0.status == "ok" } }
-    /// A cited page open in the in-app browser (Open source).
-    @State private var webSource: WebLink?
-    @State private var reviewError = ""
     @State private var syncError: String?
     @State private var apiMismatch: String?
     private let registry = loadScreens()
@@ -179,7 +155,8 @@ struct ContentView: View {
            lastViewScreen != cur {
             openSync()
         }
-        if let i = ["liquids", "steps", "layout"].firstIndex(of: v.tab) { reviewTab = i }
+        if cur != lastViewScreen, cur == "import_file" { refreshFiles() }
+        if cur == "import_photo", camera == nil { camera = DeviceCamera() }
         if cur != lastViewScreen, ["home", "protocol_detail", "web_searches", "web_answer", "run_view"].contains(cur) {
             loadLists()
         } else if cur == "web_answer", !searches.contains(where: { $0.id == tgt }) {
@@ -278,20 +255,16 @@ struct ContentView: View {
         .overlay { EdgeGlow(voice: voice).ignoresSafeArea() }
         .statusBarHidden(top.front != .main)
         .sheet(isPresented: robotSheet) { robotPanel }
-        .sheet(isPresented: draftSheet) { draftPanel }
         .sheet(isPresented: $showSettings) {
             VoiceSettingsView(onOpenSync: { showSettings = false; openSync() })
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .plainText]) { res in
             importPicked(res)
         }
-        .sheet(item: $webSource) { SafariSheet(url: $0.url).ignoresSafeArea() }
         .sheet(isPresented: $showTextImport) {
             TextImportSheet { text, name in upload(text: text, filename: name) }
         }
-        .sheet(isPresented: $showPhotoImport) {
-            PhotoImportSheet { pages in importPhotos(pages) }
-        }
+
         .onAppear {
             if canReachServer { connect(); loadLists() }
             refreshRoute()
@@ -305,6 +278,7 @@ struct ContentView: View {
             Log.voice.info("[voice] scenePhase \(String(describing: phase), privacy: .public)")
             // inactive (Control Center, alerts) keeps a live session; background ends it
             if phase == .active {
+                voice.systemSheet(false)  // back from any iOS picker
                 voice.activate()
                 // a stream that slept in the background may be dead: open a fresh one
                 if connectStarted { openEvents() }
@@ -366,9 +340,34 @@ struct ContentView: View {
                     }
                     .padding(.horizontal)
                     SourceView(target: src.target, page: src.page, phrase: src.phrase,
-                               title: "Original")
+                               title: "Original", commands: commands)
+                    ControlChips(buttons: buttons("protocol_source").filter { $0.action == "control" },
+                                 u: 0.8, perform: performButton)
                     hintsBar.padding(.horizontal)
                     inputBar.padding(.horizontal).padding(.bottom)
+                }
+            } else if lab.view.current.screen == "import_file" {
+                // our file list (voice can't drive the iOS picker)
+                stage { u in
+                    FileListScreen(files: files, buttons: buttons("import_file"), u: u,
+                                   onPick: { sendAction("pick", ["n": $0]) }, perform: performButton)
+                        .disabled(importing).opacity(importing ? 0.5 : 1)
+                }
+            } else if lab.view.current.screen == "import_photo", let cam = camera {
+                // our camera: "take it", "one more", "done"
+                stage { u in
+                    CameraScreen(source: cam, commands: commands, buttons: buttons("import_photo"), u: u,
+                                 perform: performButton,
+                                 onPages: { n in report("import_photo", (0..<n).map { ("p\($0 + 1)", "page \($0 + 1)") }) },
+                                 onDone: importPhotos, onSystemSheet: { voice.systemSheet($0) })
+                        .disabled(importing).opacity(importing ? 0.5 : 1)
+                }
+            } else if lab.view.current.screen == "web_source",
+                      let url = URL(string: lab.view.slots["url"] ?? "") {
+                // a source page inside the app: our header, registry buttons
+                stage { u in
+                    WebSourceScreen(url: url, title: lab.view.slots["title"] ?? "", domain: lab.view.slots["domain"] ?? "",
+                                    commands: commands, buttons: buttons("web_source"), u: u, perform: performButton)
                 }
             } else if lab.view.current.screen == "web_answer" {
                 // ⑧ web search answer (Figma 37:14048)
@@ -413,11 +412,19 @@ struct ContentView: View {
             } else if let pid = selectedProtocol {
                 // ⓪ a protocol picked on Home: its detail and runs on the right
                 stage { u in
-                    ProtocolsHome(protocols: protocols, runs: runs, selectedId: pid,
-                                  activeRunId: lab.run?.runId, searchCount: answered.count, buttons: buttons("protocol_detail"), u: u,
-                                  onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
-                                  onRun: { sendAction("open", ["target": "run:\($0)"]) },
-                                  perform: performButton)
+                    if lab.cards.isEmpty {
+                        ProtocolsHome(protocols: protocols, runs: runs, selectedId: pid,
+                                      activeRunId: lab.run?.runId, searchCount: answered.count,
+                                      buttons: buttons("protocol_detail"), u: u,
+                                      onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
+                                      onRun: { sendAction("open", ["target": "run:\($0)"]) },
+                                      perform: performButton, draftTitle: lab.draft?.plan.title ?? "")
+                    } else {
+                        // "Run 3 of Drug A/B is going. Finish it and start MTT?"
+                        ConfirmScreen(lab: lab, buttons: registry.cards, u: u,
+                                      onAnswer: answer(id:ok:), onAnswerAll: answerAll)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             } else if showHome || lab.run == nil {
                 // ⓪ protocols (Figma 37:12877); a waiting card takes it like the bench
@@ -428,7 +435,7 @@ struct ContentView: View {
                                           activeRunId: lab.run?.runId, searchCount: answered.count, buttons: buttons("home"), u: u,
                                           onProtocol: { sendAction("open", ["target": "protocol:\($0)"]) },
                                           onRun: { sendAction("open", ["target": "run:\($0)"]) },
-                                          perform: performButton)
+                                          perform: performButton, draftTitle: lab.draft?.plan.title ?? "")
                         } else {
                             ConfirmScreen(lab: lab, buttons: registry.cards, u: u,
                                           onAnswer: answer(id:ok:), onAnswerAll: answerAll)
@@ -491,7 +498,8 @@ struct ContentView: View {
         case "draft_step":
             DraftStepScreen(draft: d, step: step, buttons: buttons(cur.screen), u: u, perform: performButton)
         case "draft_page":
-            DraftPageScreen(draft: d, step: step, buttons: buttons(cur.screen), u: u, perform: performButton)
+            DraftPageScreen(draft: d, step: step, buttons: buttons(cur.screen), u: u, perform: performButton,
+                            commands: commands)
         case "plan_check":
             PlanCheckScreen(draft: d, buttons: buttons(cur.screen), u: u, perform: performButton)
         default:
@@ -617,13 +625,6 @@ struct ContentView: View {
         )
     }
 
-    private var draftSheet: Binding<Bool> {
-        Binding(
-            get: { if case .idle = draftState { false } else { true } },
-            set: { if !$0 { draftState = .idle } }  // the editor closes; the screen stays
-        )
-    }
-
     // MARK: - Subviews
 
     private var robotPanel: some View {
@@ -654,261 +655,6 @@ struct ContentView: View {
             Spacer()
         }
         .padding()
-    }
-
-    private var draftPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(draftState == .importing ? "Reading protocol" : "Edit draft").font(.title2.bold())
-                Spacer()
-                Button("Discard") {
-                    draftState = .idle
-                    sendAction("discard_draft")
-                }
-                    .buttonStyle(.bordered).controlSize(.small)
-                Button("Done") { draftState = .idle }
-                    .buttonStyle(.bordered).controlSize(.small)
-            }
-            switch draftState {
-            case .idle: EmptyView()
-            case .importing:
-                HStack {
-                    ProgressView()
-                    Text("Reading protocol…").foregroundStyle(.secondary)
-                }
-            case .reviewing:
-                if !lab.cards.isEmpty {
-                    CardPanel(cards: lab.cards, onAnswer: answer(id:ok:), onAnswerAll: answerAll)
-                }
-                if !reviewError.isEmpty {
-                    Text(reviewError).font(.callout).foregroundStyle(.red)
-                }
-                if let d = lab.draft {
-                    if let title = d.plan.title, !title.isEmpty {
-                        Text(title).font(.headline)
-                    }
-                    Text(reviewSummary(d)).font(.callout).foregroundStyle(.secondary)
-                    TabView(selection: Binding(
-                        get: { reviewTab },
-                        set: { reviewTab = $0
-                            sendAction("set_tab", ["tab": ["liquids", "steps", "layout"][$0]])
-                        }
-                    )) {
-                        reviewLiquids(d).tabItem { Text("Liquids") }.tag(0)
-                        reviewSteps(d).tabItem { Text("Steps") }.tag(1)
-                        reviewLayout(d).tabItem { Text("Layout") }.tag(2)
-                    }
-                    let rest = unmatchedIssues(d)
-                    if !rest.isEmpty {
-                        ForEach(rest) { r in issueRow(r, .yellow) }
-                    }
-                } else {
-                    Text("No draft.").foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-        }
-        .padding()
-    }
-
-    private func reviewLiquids(_ d: ProtocolDraft) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(d.plan.liquids.keys.sorted(), id: \.self) { k in
-                    let l = d.plan.liquids[k]!
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            DraftField(initial: l.name) {
-                                patch(path: "liquids.\(k)", text: $0)
-                            }
-                            if let c = l.concentration, !c.isEmpty {
-                                Text(c).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        if let prep = l.prep, !prep.isEmpty {
-                            Text(prep).font(.caption).foregroundStyle(.secondary)
-                        }
-                        quoteLine(l.quote, source: l.quoteSource) {
-                            openDraftQuote(page: l.quotePage, phrase: l.quote)
-                        }
-                        itemIssues(d, prefix: "liquids.\(k)")
-                    }
-                }
-            }
-        }
-    }
-
-    private func reviewSteps(_ d: ProtocolDraft) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(Array(d.plan.steps.enumerated()), id: \.offset) { i, s in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("[\(i)] \(s.text)").bold()
-                            .foregroundStyle(s.pipette == nil ? .secondary : .primary)
-                        HStack {
-                            Text(s.kind).font(.caption)
-                            DraftField(initial: s.minutes.map { fmtNum($0) } ?? "") {
-                                patch(path: "steps.\(i).minutes", num: $0)
-                            }.frame(width: 56)
-                            Text("min").font(.caption)
-                            DraftField(initial: s.tempC.map { fmtNum($0) } ?? "") {
-                                patch(path: "steps.\(i).temp_c", num: $0)
-                            }.frame(width: 56)
-                            Text("°C").font(.caption)
-                        }
-                        if let p = s.pipette {
-                            HStack {
-                                DraftField(initial: p.volume.map { fmtNum($0) } ?? "") {
-                                    patch(path: "steps.\(i).pipette.volume", num: $0)
-                                }.frame(width: 56)
-                                Text("\(p.unit ?? "") \(p.liquid)").font(.caption)
-                                DraftField(initial: targetText(p.target)) {
-                                    patch(path: "steps.\(i).pipette.target", text: $0)
-                                }.frame(width: 130)
-                            }
-                            if let r = p.repeatCount, r > 1 {
-                                Text("×\(r)").font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        HStack {
-                            Text("⚠️").font(.caption)
-                            DraftField(initial: s.caution ?? "") {
-                                patch(path: "steps.\(i).caution", text: $0)
-                            }
-                        }
-                        quoteLine(s.quote, source: s.quoteSource) {
-                            openDraftQuote(page: s.quotePage, phrase: s.quote)
-                        }
-                        itemIssues(d, prefix: "steps.\(i)")
-                    }
-                }
-            }
-        }
-    }
-
-    private func targetText(_ t: DraftTarget) -> String {
-        switch t.type {
-        case "wells": "wells:\(t.value ?? "")"
-        case "condition": "condition:\(t.value ?? "")"
-        case "all_used": "all"
-        default: "other"
-        }
-    }
-
-    private func reviewSummary(_ d: ProtocolDraft) -> String {
-        var parts: [String] = []
-        if !d.errors.isEmpty { parts.append("\(d.errors.count) to fix") }
-        if !d.review.isEmpty { parts.append("\(d.review.count) to review") }
-        return parts.isEmpty ? "Ready to start." : parts.joined(separator: " · ")
-    }
-
-    private func issueRow(_ issue: DraftIssue, _ color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(issue.reason).font(.callout).foregroundStyle(color)
-            if let q = issue.quote, !q.isEmpty {
-                Text("“\(q)”").font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func itemIssues(_ d: ProtocolDraft, prefix: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(d.errors.filter { $0.path == prefix || $0.path.hasPrefix(prefix + ".") }) {
-                issueRow($0, .red)
-            }
-            ForEach(d.review.filter { $0.path == prefix || $0.path.hasPrefix(prefix + ".") }) {
-                issueRow($0, .yellow)
-            }
-        }
-    }
-
-    private func unmatchedIssues(_ d: ProtocolDraft) -> [DraftIssue] {
-        (d.errors + d.review).filter { i in
-            !(i.path.hasPrefix("liquids.") || i.path.hasPrefix("conditions.")
-                || i.path.hasPrefix("steps."))
-        }
-    }
-
-    private func quoteLine(_ quote: String, source: String?, open: (() -> Void)? = nil) -> some View {
-        Group {
-            if let open {
-                Button(action: open) {
-                    HStack(spacing: 4) {
-                        Text("“\(quote)”").font(.caption).foregroundStyle(.secondary)
-                        if source == "code" {
-                            Text("found by code").font(.caption2).foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-            } else {
-                HStack(spacing: 4) {
-                    Text("“\(quote)”").font(.caption).foregroundStyle(.secondary)
-                    if source == "code" {
-                        Text("found by code").font(.caption2).foregroundStyle(.tertiary)
-                    }
-                }
-            }
-        }
-    }
-
-    /// Draft quotes open the import's original (kept under its original id).
-    private func openDraftQuote(page: Int?, phrase: String) {
-        draftState = .idle
-        openSource("protocol:\(lab.draft?.meta.originalId ?? "")", page, phrase)
-    }
-
-    private func reviewLayout(_ d: ProtocolDraft) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                reviewMiniPlate(d)
-                ForEach(d.plan.conditions.keys.sorted(), id: \.self) { k in
-                    let c = d.plan.conditions[k]!
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(c.label).bold()
-                            if d.meta.layout[k] == "auto" {
-                                Text("auto").font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text("n").font(.caption)
-                            DraftField(initial: "\(c.replicates)") {
-                                patch(path: "conditions.\(k).replicates", int: $0)
-                            }.frame(width: 50)
-                        }
-                        if !c.treatments.isEmpty {
-                            Text(c.treatments.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary)
-                        }
-                        DraftField(initial: c.wells.joined(separator: ",")) {
-                            patch(path: "conditions.\(k).wells", text: $0)
-                        }
-                        quoteLine(c.quote, source: c.quoteSource) {
-                            openDraftQuote(page: c.quotePage, phrase: c.quote)
-                        }
-                        itemIssues(d, prefix: "conditions.\(k)")
-                    }
-                }
-            }
-        }
-    }
-
-    private func reviewMiniPlate(_ d: ProtocolDraft) -> some View {
-        let owners: [String: String] = Dictionary(
-            uniqueKeysWithValues: d.plan.conditions.flatMap { k, c in c.wells.map { ($0, k) } })
-        return VStack(spacing: 1) {
-            ForEach(plateRows, id: \.self) { r in
-                HStack(spacing: 1) {
-                    ForEach(1...12, id: \.self) { c in
-                        let w = "\(r)\(c)"
-                        Circle()
-                            .fill(owners[w].map { conditionColor($0) } ?? .secondary.opacity(0.15))
-                            .frame(width: 9, height: 9)
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 4)
     }
 
     private var hintsBar: some View {
@@ -979,11 +725,13 @@ struct ContentView: View {
         eventsTask?.cancel()
         eventsTask = Task { @MainActor in
             while !Task.isCancelled {
+                Log.view.info("[view] events open (have v\(lab.version))")
                 do {
                     for try await ev in PipClient.events() {
                         serverLink = .connected
                         handleEvent(ev)
                     }
+                    Log.view.info("[view] events stream ended by the server")
                 } catch {
                     Log.view.info("[view] events stream: \(error.localizedDescription, privacy: .public)")
                 }
@@ -992,9 +740,24 @@ struct ContentView: View {
         }
     }
 
+    /// Every reply says which record version it made; the event stream must
+    /// bring that snapshot. If it hasn't shortly after, the stream is dead
+    /// though its socket looks open (iPad: taps sent, no render): fetch the
+    /// record now and reopen the stream.
+    private func expectSnapshot(_ version: Int) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard lab.version < version else { return }
+            Log.view.error("[view] events stale: reply v\(version), have v\(lab.version) -> reload record, reopen events")
+            await loadRecord()
+            openEvents()
+        }
+    }
+
     private func handleEvent(_ ev: SSEvent) {
         switch ev {
         case .snapshot(let snap):
+            Log.view.info("[view] snapshot v\(snap.version) cur=\(snap.view.current.screen, privacy: .public)")
             lab.sync(snap)
             renderView()
             syncError = nil
@@ -1036,29 +799,33 @@ struct ContentView: View {
 
     /// Applies one server ui action. False when the app could not do it: says
     /// so on the spot, in the log, the Pip slot, and aloud.
+    /// ui ids already run: the reply and /events deliver each action once each.
+    @State private var ranUI: [String] = []
+
     @discardableResult
     private func applyUI(_ a: UIAction) -> Bool {
+        if let id = a.id {
+            guard !ranUI.contains(id) else { return true }
+            ranUI = Array((ranUI + [id]).suffix(50))
+        }
         switch a.action {
         case "navigate", "open", "back":
             // The server drives these through view now; a ui copy is stale.
             return uiFail("I couldn't do that.")
         case "import":
-            showImporter = true
+            openImporter()
             return true
         case "import_text":
             showTextImport = true
             return true
-        case "import_photo":
-            showPhotoImport = true
+        case "control":
+            // the screen's own buttons, said or tapped (registry control actions)
+            guard let cmd = a.target else { return uiFail("I couldn't do that.") }
+            if cmd == "browse" { openImporter() } else { commands.send(cmd, n: a.n) }
             return true
-        case "web_source":
-            guard let t = a.target, let url = URL(string: t) else { return uiFail("I couldn't open that source.") }
-            webSource = WebLink(url: url)
-            return true
-        case "draft_edit":
-            // value edits are taps for now (Start ⑤d "Fix it")
-            guard lab.draft != nil else { return uiFail("No draft open.") }
-            draftState = .reviewing
+        case "pick":
+            guard let f = files.first(where: { $0.id == a.target }) else { return uiFail("I couldn't open that file.") }
+            importLocal(f)
             return true
         case "flash":
             lab.flash(Set(a.wells ?? []))
@@ -1090,7 +857,16 @@ struct ContentView: View {
         return false
     }
 
+    /// The iOS file picker. A live session is held from here until the picker
+    /// answers or the app is active again: its binding flips back to false
+    /// while the picker is still up (iPad log), so it can't be the signal.
+    private func openImporter() {
+        voice.systemSheet(true)
+        showImporter = true
+    }
+
     private func importPicked(_ res: Result<URL, Error>) {
+        voice.systemSheet(false)
         switch res {
         case .failure(let e):
             say("Pick failed: \(e.localizedDescription)")
@@ -1112,6 +888,27 @@ struct ContentView: View {
         }
     }
 
+    /// The app's files, newest first, told to the server ("number 2", a name).
+    private func refreshFiles() {
+        files = LocalFile.all()
+        report("import_file", files.map { ($0.id, $0.name) })
+    }
+
+    private func report(_ screen: String, _ items: [(String, String)]) {
+        Task { try? await PipClient.reportItems(screen: screen, items: items.map { (id: $0.0, name: $0.1) }) }
+    }
+
+    /// A file from the app's folder: the same import as a picked one.
+    private func importLocal(_ f: LocalFile) {
+        guard let data = try? Data(contentsOf: f.url) else {
+            say("Can't read that file")
+            return
+        }
+        let oid = UUID().uuidString
+        if f.kind == "PDF" { OriginalStore.save(data, protocolId: oid) }
+        upload(files: [(f.url.lastPathComponent, data)], oid: oid)
+    }
+
     /// Page photos stay on this iPad under the import's original id.
     private func importPhotos(_ pages: [Data]) {
         let oid = UUID().uuidString
@@ -1125,7 +922,8 @@ struct ContentView: View {
     /// Draft ready when it's done.
     private func upload(files: [(String, Data)] = [], text: String = "", filename: String = "",
                         oid: String = UUID().uuidString) {
-        draftState = .importing
+        guard !importing else { return }  // one import at a time; the server joins repeats too
+        importing = true
         navByTap = true  // Draft ready's line is said in a live session, like a tap
         Task { @MainActor in
             do {
@@ -1133,45 +931,13 @@ struct ContentView: View {
                     files: files.map { (name: $0.0, data: $0.1) }, text: text,
                     filename: filename, originalId: oid)
                 lab.draft = r.draft
-                reviewError = ""
                 say(r.reply)
-                draftState = .idle
+                importing = false
             } catch {
                 say("Import failed: \(error.localizedDescription)")
-                draftState = .idle
+                importing = false
             }
         }
-    }
-
-    private func patch(path: String, value: Any) {
-        Task { @MainActor in
-            do {
-                let r = try await PipClient.patchDraft(path: path, value: value)
-                if !r.ok { say(r.reason ?? "Edit failed") }
-            } catch {
-                say("Error: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    private func patch(path: String, int raw: String) {
-        guard let v = Int(raw.trimmingCharacters(in: .whitespaces)) else {
-            say("Not a number: \(raw)")
-            return
-        }
-        patch(path: path, value: v)
-    }
-
-    private func patch(path: String, num raw: String) {
-        guard let v = Double(raw.trimmingCharacters(in: .whitespaces)) else {
-            say("Not a number: \(raw)")
-            return
-        }
-        patch(path: path, value: v)
-    }
-
-    private func patch(path: String, text raw: String) {
-        patch(path: path, value: raw)
     }
 
     private func endRun() {
@@ -1241,6 +1007,7 @@ struct ContentView: View {
         Task { @MainActor in
             do {
                 let r = try await PipClient.inputAction(id: id, args: args)
+                expectSnapshot(r.record_version)
                 if !quiet {
                     for msg in r.messages { say(msg) }
                     if !r.reply.isEmpty {
@@ -1320,6 +1087,7 @@ struct ContentView: View {
     /// One path for a spoken turn's result: /voice replies and live turns.
     private func applyVoice(_ r: VoiceResponse) {
         guard r.ignored != true else { voice.didFail(); return }
+        expectSnapshot(r.record_version)
         if r.setup_done == true { dismissSyncOrSetup() }
         if r.sync_retry == true { retrySync() }
         say("🎙 \(r.transcript)")

@@ -368,7 +368,8 @@ struct DiagnosticsView: View {
                 let r = try await PipClient.voice(wav: data)
                 guard r.ignored != true else { return }
                 heard = r.transcript.isEmpty ? "(nothing heard)" : r.transcript
-                SpeechBus.shared.speak(r.speak ?? r.reply)
+                // the one speaking path (speaking state, live mic muted)
+                if let voice { voice.speak(r.speak ?? r.reply) } else { SpeechBus.shared.speak(r.speak ?? r.reply) }
             } catch is PipClient.VoiceError {
                 heard = "Too short — press and hold to speak"
             } catch {

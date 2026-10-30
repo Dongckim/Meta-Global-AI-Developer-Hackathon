@@ -1,15 +1,5 @@
 import SwiftUI
 
-func conditionColor(_ name: String?) -> Color {
-    switch name {
-    case "ctrl": .gray
-    case "drug_A": .blue
-    case "drug_B": .orange
-    case .none: .secondary
-    default: [.green, .purple, .pink, .teal, .mint][abs(name!.hashValue) % 5]
-    }
-}
-
 struct WellSelect: Identifiable {
     let id: String
 }
@@ -25,6 +15,9 @@ struct PlateView: View {
     @Binding var selected: WellSelect?
     /// The well whose card is open: a blue focus ring.
     var focus: String? = nil
+    /// Before a run (⑤f Plan check): every condition's wells as a ring in
+    /// its group tone with its letters, as the design draws the plan.
+    var showPlanned = false
     @State private var start = Date()
     @State private var introDone = false
     @Environment(\.accessibilityReduceMotion) private var reduce
@@ -52,7 +45,7 @@ struct PlateView: View {
                                 .frame(width: cell * 0.8, height: cell)
                             ForEach(1...12, id: \.self) { c in
                                 WellDot(well: "\(r)\(c)", lab: lab, d: d, focused: focus == "\(r)\(c)",
-                                        intro: intro(t, row: ri, col: c - 1)) {
+                                        showPlanned: showPlanned, intro: intro(t, row: ri, col: c - 1)) {
                                     selected = WellSelect(id: "\(r)\(c)")
                                 }
                                 .frame(width: cell, height: cell)
@@ -109,6 +102,7 @@ struct WellDot: View {
     @Bindable var lab: LabState
     let d: CGFloat
     var focused = false
+    var showPlanned = false
     /// wellIn progress from the plate's clock (1 = settled).
     var intro: Double = 1
     let onTap: () -> Void
@@ -128,15 +122,18 @@ struct WellDot: View {
     /// done wells dimmed, excluded wells empty with a cross.
     private var filled: Bool { !excluded && (done || (!current && doneEarlier)) }
     private var now: Bool { current && !done && !excluded }
+    /// A condition's well not yet done or due (plan check): a group-tone ring.
+    private var planned: Bool { showPlanned && !filled && !now && !excluded && lab.conditionOf(well) != nil }
 
     private var fill: Color {
         if filled { return done ? tone : tone.opacity(0.45) }
-        return now ? Theme.card : Theme.wellEmpty
+        return now || planned ? Theme.card : Theme.wellEmpty
     }
 
     private var edge: (Color, CGFloat) {
         if lit { return (Theme.text1, d * 3 / 48) }
         if now { return (Theme.polishBlue, d * 3 / 48) }
+        if planned { return (tone, d * 2 / 48) }
         return (.clear, 0)
     }
 
@@ -144,7 +141,7 @@ struct WellDot: View {
         let M = Theme.Motion.self
         Button(action: onTap) {
             Circle()
-                .fill(fill.shadow(.inner(color: .black.opacity(filled || now ? 0 : 0.07), radius: 1, y: 1)))
+                .fill(fill.shadow(.inner(color: .black.opacity(filled || now || planned ? 0 : 0.07), radius: 1, y: 1)))
                 .frame(width: d, height: d)
                 .overlay(Circle().strokeBorder(edge.0, lineWidth: edge.1))
                 .overlay {
@@ -154,10 +151,11 @@ struct WellDot: View {
                     } else if redo {
                         Text("↻").font(.system(size: d * 0.4, weight: .semibold))
                             .foregroundStyle(filled ? .white : Theme.text1)
-                    } else if filled || now, let abbr = lab.abbrOf(well) {
-                        // group letters: white on a filled well, blue on a remaining target
+                    } else if filled || now || planned, let abbr = lab.abbrOf(well) {
+                        // group letters: white on a filled well, blue on a remaining
+                        // target, the group tone on a planned one
                         Text(abbr).font(.system(size: d * 17 / 48, weight: .semibold))
-                            .foregroundStyle(now ? Theme.polishBlue : .white)
+                            .foregroundStyle(now ? Theme.polishBlue : planned ? tone : .white)
                             .lineLimit(1).minimumScaleFactor(0.5)
                     }
                 }

@@ -1,4 +1,3 @@
-import SafariServices
 import SwiftUI
 
 // Web search, ver 2: ⑧ Web search answer (Figma 37:14048) and ⓪c Home ·
@@ -202,11 +201,4 @@ struct WebSearchesScreen: View {
         }
         .buttonStyle(.plain)
     }
-}
-
-/// A cited page, inside the app (Open source).
-struct SafariSheet: UIViewControllerRepresentable {
-    var url: URL
-    func makeUIViewController(context: Context) -> SFSafariViewController { SFSafariViewController(url: url) }
-    func updateUIViewController(_ c: SFSafariViewController, context: Context) {}
 }

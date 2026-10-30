@@ -54,6 +54,8 @@ struct ProtocolsHome: View {
     var onProtocol: (String) -> Void
     var onRun: (String) -> Void
     var perform: (ScreenButton) -> Void
+    /// The open draft's title (shown with Review while it waits).
+    var draftTitle = ""
 
     private var selected: ProtocolSummary? {
         protocols.first { $0.id == selectedId }
@@ -73,12 +75,13 @@ struct ProtocolsHome: View {
         return protocols[(p * perPage)..<min(protocols.count, (p + 1) * perPage)]
     }
 
-    /// The Searches pill's button (it opens web_searches); the row takes the rest.
+    /// The Searches pill's button (it opens web_searches).
     private var searches: ScreenButton? { buttons.first { $0.args?["screen"] == "web_searches" } }
-    /// Continue (back to the bench) only while a run is going.
-    private var row: [ScreenButton] {
-        buttons.filter { $0 != searches && ($0.args?["screen"] != "main" || activeRunId != nil) }
-    }
+    /// A draft waiting (registry Review, shown while one is open): its card on top of the list.
+    private var review: ScreenButton? { buttons.first { $0.action == "review_draft" } }
+    /// The bottom row: the rest, as the server's state allows (Continue only
+    /// while a run goes, Start run on a picked protocol).
+    private var row: [ScreenButton] { buttons.filter { $0 != searches && $0 != review } }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -98,6 +101,23 @@ struct ProtocolsHome: View {
 
     private var left: some View {
         VStack(spacing: 18 * u) {
+            if let review {
+                // not saved yet: why it isn't a protocol here, and the way on
+                Button { perform(review) } label: {
+                    VStack(alignment: .leading, spacing: 4 * u) {
+                        Text(draftTitle).font(.system(size: 34 * u, weight: .semibold)).foregroundStyle(Theme.text1)
+                        (Text(review.line ?? "").foregroundStyle(Theme.text2) + Text("  ·  Say ").foregroundStyle(Theme.text2)
+                         + Text(review.say).fontWeight(.semibold).foregroundStyle(Theme.polishBlue))
+                            .font(.system(size: 22 * u))
+                    }
+                    .lineLimit(1).minimumScaleFactor(0.6)
+                    .padding(.horizontal, 32 * u).padding(.vertical, 26 * u)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 32 * u, style: .continuous)
+                        .strokeBorder(Theme.polishBlue.opacity(0.5), style: StrokeStyle(lineWidth: 2 * u, dash: [8 * u, 6 * u])))
+                }
+                .buttonStyle(.plain)
+            }
             ForEach(Array(shown.enumerated()), id: \.element.id) { i, p in
                 let n = p.runs ?? runsOf(p.id, in: runs).count
                 let live = p.inProgress ?? 0

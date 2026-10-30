@@ -649,7 +649,11 @@ struct RecordSnapshot: Decodable {
 
 /// One-line reason for the out-of-sync banner: "plan.steps[2].wells missing".
 func syncReason(_ error: Error) -> String {
-    guard let de = error as? DecodingError else { return "unreadable snapshot" }
+    // not a decode problem: say what it was (iPad: "unreadable snapshot" was a
+    // GET /record that never reached the server)
+    if let e = error as? PipError, case .server(let code, _) = e { return "server error \(code)" }
+    if let e = error as? URLError { return "server unreachable (\(e.code.rawValue)): \(e.localizedDescription)".prefixed(80) }
+    guard let de = error as? DecodingError else { return String(error.localizedDescription.prefix(80)) }
     let path: String
     let what: String
     switch de {
@@ -670,6 +674,10 @@ func syncReason(_ error: Error) -> String {
     }
     let reason = path.isEmpty ? what : "\(path) \(what)"
     return String(reason.prefix(80))
+}
+
+private extension String {
+    func prefixed(_ n: Int) -> String { String(prefix(n)) }
 }
 
 let plateRows = ["A", "B", "C", "D", "E", "F", "G", "H"]
@@ -920,6 +928,8 @@ struct ScreenButton: Decodable, Equatable {
     var args: [String: String]?
     /// Small line under a choice card ("PDF · Word"); plain buttons have none.
     var line: String?
+    /// An iOS picker we can't drive by voice ("Browse files…"): tap only.
+    var tapOnly: Bool?
     /// Shown only in this state of the screen's slots ({"status": "finished"}).
     var when: [String: String]?
     /// "disabled": drawn greyed (a tap or the words still run the action,
@@ -928,6 +938,10 @@ struct ScreenButton: Decodable, Equatable {
     var note: String?
 
     var greyed: Bool { look == "disabled" }
+
+    enum CodingKeys: String, CodingKey {
+        case say, action, args, line, when, look, note, tapOnly = "tap_only"
+    }
 
     /// A templated button ("Step {step}") filled from the screen's slots;
     /// nil while a slot it needs has no value (the server hides it too).
@@ -946,7 +960,8 @@ struct ScreenButton: Decodable, Equatable {
             a = [:]
             for (k, v) in args { guard let f = fill(v) else { return nil }; a?[k] = f }
         }
-        return ScreenButton(say: say, action: action, args: a, line: line, when: when, look: look, note: note)
+        return ScreenButton(say: say, action: action, args: a, line: line, tapOnly: tapOnly, when: when, look: look,
+                            note: note)
     }
 }
 
