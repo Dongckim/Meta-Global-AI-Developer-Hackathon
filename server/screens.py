@@ -77,10 +77,15 @@ ANSWERS: dict[str, list[str]] = dict(REGISTRY.get("answers", {}))
 PLAIN_ANSWERS = ("all", "yes", "no", "cancel")
 
 
-def card_choices(kind: str) -> list[str]:
-    """A choice card's answers (registry `cards.<kind>`), [] for yes/no cards."""
+def card_answers(kind: str) -> list[str]:
+    """Every answer a card kind's registry buttons give (`cards.<kind>`)."""
     out = [(b.get("args") or {}).get("answer") for b in (REGISTRY.get("cards") or {}).get(kind) or []]
-    return [a for a in out if a and a not in PLAIN_ANSWERS]
+    return [a for a in out if a]
+
+
+def card_choices(kind: str) -> list[str]:
+    """A choice card's own answers ("review", "skip"), [] for yes/no cards."""
+    return [a for a in card_answers(kind) if a not in PLAIN_ANSWERS]
 
 
 #: List rows by kind (`items`): when a row is off, and the buttons it keeps.

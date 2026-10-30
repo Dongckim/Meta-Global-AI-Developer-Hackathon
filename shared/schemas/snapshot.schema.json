@@ -6,6 +6,24 @@
   "required": ["epoch", "version", "view", "plan", "step_index", "done", "excluded", "redo",
                "notes", "tips", "timers", "stamps", "cards", "recent"],
   "properties": {
+    "bench": {
+      "type": "object",
+      "required": ["wells", "legend", "rows"],
+      "description": "Served snapshots and run details only: what the bench draws from the run so far. wells: well -> done (filled in its group) / now (a target of this step not done in it) / skipped (passed over unmarked, never done since) / excluded; others are untouched. legend: wells per condition. rows: the last steps passed (Done).",
+      "properties": {
+        "wells": {"type": "object", "additionalProperties": {"enum": ["done", "now", "skipped", "excluded"]}},
+        "legend": {"type": "array", "items": {"type": "object", "required": ["key", "label", "n"],
+                   "properties": {"key": {"type": "string"}, "label": {"type": "string"}, "n": {"type": "integer"}}}},
+        "rows": {"type": "array", "items": {"type": "object", "required": ["wells", "name", "state"],
+                 "properties": {"wells": {"type": "string"}, "name": {"type": "string"}, "state": {"enum": ["done"]}}}}
+      }
+    },
+    "skipped": {
+      "type": "array",
+      "description": "Wells a step was left without (the person chose Skip them): one entry per well and step.",
+      "items": {"type": "object", "required": ["step", "well"],
+                "properties": {"step": {"type": "integer"}, "well": {"type": "string"}, "ts": {"type": "number"}}}
+    },
     "header": {
       "type": "object",
       "required": ["mode"],

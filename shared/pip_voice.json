@@ -180,6 +180,7 @@
     "end_run": {"title": "Finish this run?", "detail": ""},
     "new_run": {"title": "{run} is finished", "detail": "Start a new run of {name}?"},
     "confirm_search": {"title": "Search the web?", "detail": "“{query}”"},
+    "unmarked": {"title": "{wells} not marked", "detail": "Mark all {n} done and go to step {step}?"},
     "import_known": {"title": "Already saved as {name}", "detail": "Open it or review again?"},
     "save_as": {"title": "{name} already exists", "detail": "Save as version {version}, or keep it separate?"},
     "default": {"title": "{question}", "detail": "{detail}"}
@@ -214,6 +215,9 @@
   ],
   "run_resumed": [
     "{run} picks up at step {step}."
+  ],
+  "unmarked_step": [
+    "{wells} not marked. Mark all {n} done and go to step {step}?"
   ],
   "step_done": [
     "Step {done} done. Move to step {step}?"

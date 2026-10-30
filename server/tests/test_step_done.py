@@ -99,4 +99,49 @@ for screen, shown in (("main", True), ("well_card", True), ("import_choice", Tru
     m = api.store.snapshot()["header"]["mode"]
     assert (m == {"id": "full", "label": "Full"}) if shown else m is None, (screen, m)
 print("SD6 ok: header mode by screen from the registry")
+
+# SD7. The bench keeps what was done: after steps 1-3 the plate has steps 1
+# and 2's wells filled, step 4's targets as now, the legend counts each
+# condition's wells (n 7), and the last two steps passed are Done rows.
+from collections import Counter  # noqa: E402
+
+fresh()
+for wells in ("B2 to B8, C2 to C8, D2 to D8", "B2 to B8", "C2 to C8"):
+    for part in wells.split(", "):
+        said(f"{part} done")
+    api.store.r["cards"] = {}
+    api.store.r["step_index"] += 1
+b = api.store.snapshot()["bench"]
+assert Counter(b["wells"].values()) == {"done": 14, "now": 7}, b["wells"]
+assert b["wells"]["B2"] == b["wells"]["C8"] == "done" and b["wells"]["D2"] == "now"
+assert [x["n"] for x in b["legend"]] == [7, 7, 7], b["legend"]
+assert [(r["wells"], r["state"]) for r in b["rows"]] == [("B2–B8", "done"), ("C2–C8", "done")], b["rows"]
+api.store.r["excluded"]["D3"] = "bubble"
+assert api.store.snapshot()["bench"]["wells"]["D3"] == "excluded"
+print("SD7 ok: the plate keeps earlier steps, legend n per condition")
+
+# SD8. "Next step" with targets left unmarked asks, never marks them
+# quietly: yes / "mark them" records them done and moves on; "skip them"
+# moves on and leaves them skipped (plate and record); "not yet" stays.
+def unmarked_card():
+    return [x for x in api.store.r["cards"].values() if x["kind"] == "unmarked"]
+
+
+for answer, expect in (("yes", "done"), ("mark them", "done"), ("skip them", "skipped"), ("not yet", None)):
+    fresh()
+    said("B2 to B8 done")
+    j = said("next step")
+    assert j["reply"] == "C2–C8, D2–D8 not marked. Mark all 14 done and go to step 2?", j["reply"]
+    said("next step")  # the same question again: one card, not two
+    assert len(unmarked_card()) == 1 and api.store.r["step_index"] == 0
+    said(answer)
+    if expect is None:
+        assert api.store.r["step_index"] == 0 and not api.store.r["cards"], answer
+        continue
+    assert api.store.r["step_index"] == 1, (answer, api.store.r["step_index"])
+    wells = api.store.snapshot()["bench"]["wells"]
+    assert wells["C2"] == wells["D8"] == expect and wells["B2"] in ("done", "now"), (answer, wells)
+    skipped = {m["well"] for m in api.store.r.get("skipped") or []}
+    assert (len(skipped) == 14) == (expect == "skipped"), (answer, skipped)
+print("SD8 ok: unmarked wells ask: mark, skip, or stay")
 print("ALL PASS")

@@ -29,7 +29,7 @@ from server.grammar import (
     where_am_i_reply,
 )
 from server.screens import READ_KINDS as SCREEN_READ_KINDS
-from server.screens import FLOWS, PLANNED, SCREENS, canonical, card_choices, item_off, ITEMS, parent_of, result_of, title_of, ui_of
+from server.screens import FLOWS, PLANNED, SCREENS, canonical, card_answers, card_choices, item_off, ITEMS, parent_of, result_of, title_of, ui_of
 from server.tone import run_mode, say, section
 from server import library as lib
 from server import protocol as proto
@@ -899,10 +899,39 @@ class RecordStore:
             i = t.get("step_index")
             t["chip"] = labels.step_short_title(steps[i]) if isinstance(i, int) and 0 <= i < len(steps) \
                 else labels.shorten_title(t.get("step") or t.get("label") or "")
+        snap["bench"] = self.bench_view(self.r)
         snap["header"] = {"mode": self.header_mode(cur.get("screen") or ("main" if snap.get("run") else "home"))}
         if snap.get("run"):  # what the app shows instead of the run id
             snap["run"]["label"] = self.run_label(self.active_run_doc() or snap["run"])["display"]
         return snap
+
+    #: Done rows kept above the current one on the bench's right column.
+    BENCH_DONE_ROWS = 2
+
+    def bench_view(self, rec: dict) -> dict:
+        """What the bench draws, from the run record so far (the app draws it
+        as is): each well's state on the plate (done: filled in its group;
+        now: a target of this step not done in it; excluded), the legend
+        (wells per condition), and the last steps passed as Done rows."""
+        plan = rec.get("plan") or {}
+        steps = plan.get("steps") or []
+        idx = rec.get("step_index") or 0
+        targets = self.current_planned(rec) if steps and idx < len(steps) else set()
+        done_now, done_any = runlog.done_wells(rec, idx + 1), runlog.done_wells(rec)
+        wells = {}
+        for w in sorted(targets | done_any):
+            wells[w] = "now" if w in targets and w not in done_now else "done"
+        for m in rec.get("skipped") or []:
+            if m.get("well") not in wells:
+                wells[m["well"]] = "skipped"  # passed over unmarked, never done since
+        for w in (rec.get("excluded") or {}):
+            wells[w] = "excluded"
+        legend = [{"key": k, "label": c.get("label") or k, "n": len(c.get("wells") or [])}
+                  for k, c in sorted((plan.get("conditions") or {}).items())]
+        rows = [{"wells": wells_label(s.get("wells") or []), "name": (s.get("pipette") or {}).get("liquid") or "",
+                 "state": "done"}
+                for s in steps[:idx] if s.get("kind") == "pipette" and s.get("wells")]
+        return {"wells": wells, "legend": legend, "rows": rows[-self.BENCH_DONE_ROWS:]}
 
     def header_mode(self, screen: str) -> dict | None:
         """The header's mode label, on screens after the mode was chosen
@@ -1536,6 +1565,13 @@ class RecordStore:
             steps = self.steps()
             if self.r["step_index"] >= len(steps) - 1:
                 res["messages"].append("Already at the last step")
+            elif not force and (left := sort_wells(self._left_now() or [])):
+                # targets still unmarked: ask, never mark (or drop) them quietly
+                nxt = self.r["step_index"] + 1
+                rng = join_wells_ranges(left)
+                self._card(res, "unmarked", say("unmarked_step", session, wells=rng, n=len(left), step=nxt + 1),
+                           None, {"op": "next_step", "target": nxt + 1, "unmarked": left},
+                           {"wells": rng, "n": len(left), "step": nxt + 1})
             elif not force:
                 nxt = self.r["step_index"] + 1
                 self._card(res, "next_step", say("step_move", session, step=nxt + 1),
@@ -2016,7 +2052,7 @@ class RecordStore:
         if card is None:
             return "That card is gone.", [], None
         choices = card_choices(card["kind"])
-        if ok and choices and answer not in choices:
+        if ok and choices and (answer or "yes") not in card_answers(card["kind"]):
             return card["question"], [card], None  # "yes" to "open it or review again?": ask again
         self.r["cards"].pop(card_id)
         if not ok:
@@ -2051,6 +2087,14 @@ class RecordStore:
             self._purge(time.time())
             self._extend(res, p.get("label"), p.get("minutes"), source, time.time())
         elif op == "next_step":
+            left = [w for w in p.get("unmarked") or [] if w not in runlog.done_wells(self.r, self.r["step_index"] + 1)]
+            if left and answer == "skip":
+                # skipped, on the record: the plate and the run record show them so
+                self.r.setdefault("skipped", []).extend(
+                    {"step": self.r["step_index"] + 1, "well": w, "ts": time.time()} for w in left)
+            elif left:
+                self._apply_call({"name": "mark_done", "args": {"wells": left}}, source, origin, "card",
+                                 session, res, force=True)
             self._apply_call({"name": "next_step", "args": {}}, source, origin, "card", session, res, force=True)
         elif op == "start_run":
             doc = lib.get(p.get("protocol_id"), self.root)

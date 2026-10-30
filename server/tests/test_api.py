@@ -285,8 +285,9 @@ with patch("httpx.AsyncClient", FakeClient):
     assert r.json()["reply"] == "Note updated (C3).", r.json()
     r = c.post("/orchestrate", json={"text": "next", "session": "s10"})
     j = r.json()
-    assert len(j["cards"]) == 1 and j["cards"][0]["kind"] == "next_step", j
-    assert j["reply"]== "Ready for step 4?", j
+    # step 3's targets C2, C7, C8 aren't marked: it asks before moving on
+    assert len(j["cards"]) == 1 and j["cards"][0]["kind"] == "unmarked", j
+    assert j["reply"] == "C2, C7–C8 not marked. Mark all 3 done and go to step 4?", j
     assert all(not u.endswith("/responses") for u, _ in calls[n_before:]), calls[n_before:]
     print("10 ok: grammar applies, cards, no spark")
 

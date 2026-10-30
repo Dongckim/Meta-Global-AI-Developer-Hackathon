@@ -86,7 +86,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 16
+API_VERSION = 18
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -2040,6 +2040,8 @@ async def run_get(run_id: str):
     if doc is None:
         raise HTTPException(404, "unknown run")
     lab = store.run_label(doc)
+    # the record's bench as the app draws it (same rule as the live snapshot)
+    doc = {**doc, "record": {**(doc.get("record") or {}), "bench": store.bench_view(doc.get("record") or {})}}
     return {"run": doc, "label": lab["display"], "spoken": lab["spoken"]}
 
 

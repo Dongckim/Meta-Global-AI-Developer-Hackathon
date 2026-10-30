@@ -229,7 +229,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(r["cards"]), 1)
         self.assertTrue(r["cards"][0]["question"], "Ready for step 4?")
         msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
-        self.assertTrue(msg.startswith("Next: "))
+        self.assertIn("Next: ", msg)  # unmarked targets are marked first, then the step moves
         self.s.r["step_index"] = 4
         r = self.apply([T("next_step")])
         self.assertEqual(r["messages"], ["Already at the last step"])
@@ -486,7 +486,7 @@ class StoreTest(unittest.TestCase):
         self.s.check_timers(time.time())
         r = self.apply([T("next_step")])
         msg, _, _ = self.s.confirm(r["cards"][0]["id"], True, "card", self.sess)
-        self.assertTrue(msg.startswith("Next: "))
+        self.assertIn("Next: ", msg)
         kinds = [c["kind"] for c in self.s.r["cards"].values()]
         self.assertNotIn("suggest_next", kinds)
         self.assertNotIn("next_step", kinds)
