@@ -64,8 +64,7 @@ def ran(mode: str = "full") -> RecordStore:
 
 def approved_for(rec, timing=None, title="Hand test", n=1, date="2026-10-30"):
     """What approve_handoff stores: steps, liquids, the setup head, the verifier's seconds."""
-    steps = hand.as_run(rec, timing)
-    liqs = hand.liquids(rec, steps)
+    steps, liqs = hand.place(rec, hand.as_run(rec, timing))
     return {"steps": steps, "liquids": liqs, "setup": hand.setup_code(steps, liqs, title, n, date),
             "seconds": hand.expected_seconds(rec, steps, timing)}
 
@@ -80,11 +79,14 @@ def events_for(steps, wrong=None):
             continue
         size = hand.DECK["pipettes"][s["pipette"]]["max_ul"]
         rack = hand.DECK["pipettes"][s["pipette"]]["tips"]["load_name"]
-        for w in s["wells"]:
-            ev.append({"op": "pick_up_tip", "labware": rack, "pipette": size})
-            ev.append({"op": "aspirate", "volume": s["volume_ul"], "well": s["source"], "labware": hand.RESERVOIR,
-                       "pipette": size})
-            ev.append({"op": "dispense", "volume": s["volume_ul"], "well": w, "labware": hand.PLATE, "pipette": size})
+        loads = {c["var"]: c["load_name"] for c in hand.CONTAINERS.values()}
+        for src in s["sources"]:
+            for w in src["wells"]:
+                ev.append({"op": "pick_up_tip", "labware": rack, "pipette": size})
+                ev.append({"op": "aspirate", "volume": s["volume_ul"], "well": src["well"],
+                           "labware": loads[src["labware"]], "pipette": size})
+                ev.append({"op": "dispense", "volume": s["volume_ul"], "well": w, "labware": hand.PLATE,
+                           "pipette": size})
     return wrong(ev) if wrong else ev
 
 
@@ -96,8 +98,9 @@ def code_for(approved) -> str:
         if s["kind"] == "delay":
             lines.append(f"    protocol.delay(seconds={s['seconds']}, msg={json.dumps(s['msg'], ensure_ascii=False)})")
         else:
-            lines.append(f"    {s['pipette']}.transfer({s['volume_ul']}, res[\"{s['source']}\"], "
-                         f"[plate[w] for w in {s['wells']}], new_tip=\"always\")")
+            for src in s["sources"]:
+                lines.append(f"    {s['pipette']}.transfer({s['volume_ul']}, {src['labware']}[\"{src['well']}\"], "
+                             f"[plate[w] for w in {src['wells']}], new_tip=\"always\")")
     return approved["setup"] + "\n".join(lines) + "\n"
 
 
@@ -121,12 +124,12 @@ assert [(c["kind"], c["from"], c["to"], c["text"]) for c in r4["changes"]] == [
 assert (r4["plan"], r4["run"]) == ("30 min", "35 min"), r4
 approved = approved_for(rec)
 steps = approved["steps"]
-assert [(s["kind"], s.get("source"), s.get("volume_ul"), s.get("wells"), s.get("pipette"), s.get("seconds"))
-        for s in steps] == [
-    ("transfer", "A1", 100, ["B2", "B3", "B4", "C2", "C4"], "p1000", None),
-    ("transfer", "A2", 10, ["B2", "B4"], "p50", None),
-    ("transfer", "A3", 10.0, ["C2", "C9"], "p50", None),  # 0.01 mL in µL; ≤ 50 µL: the 50
-    ("delay", None, None, None, None, 2100.0)], steps
+assert [(s["kind"], [(x["labware"], x["well"]) for x in s.get("sources") or []], s.get("volume_ul"), s.get("wells"),
+         s.get("pipette"), s.get("seconds")) for s in steps] == [
+    ("transfer", [("tubes", "A1")], 100, ["B2", "B3", "B4", "C2", "C4"], "p1000", None),
+    ("transfer", [("tubes", "B1")], 10, ["B2", "B4"], "p50", None),
+    ("transfer", [("tubes", "C1")], 10.0, ["C2", "C9"], "p50", None),  # 0.01 mL in µL; ≤ 50 µL: the 50
+    ("delay", [], None, None, None, 2100.0)], steps
 assert steps[0]["comment"] == "Step 1: Add medium · 100 µL" and steps[3]["comment"] == "Step 4: Incubate · as run 35 min (plan 30 min)"
 assert steps[3]["msg"] == "Incubate (as run: 35 min; plan: 30 min)", steps[3]
 assert hand.blockers(steps, approved["liquids"]) == []
@@ -134,19 +137,32 @@ print("HO1 ok: changes with their events; as-run steps with pipettes and seconds
 
 # HO1c. Liquids: reservoir well in plan order, what's drawn + 10 %, condition tone (medium neutral);
 # the head is code-made (metadata, both pipettes, define_liquid / load_liquid, empty plate wells).
-assert [(lq["name"], lq["well"], lq["volume_ul"], lq["color"]) for lq in approved["liquids"]] == [
-    ("Medium", "A1", 550.0, hand.NEUTRAL_COLOR),  # 5 wells x 100 µL x 1.1
-    ("PBS", "A2", 22.0, hand.LIQUID_COLORS[0]),     # ctrl (sorted first) wells
-    ("Drug A", "A3", 22.0, hand.NEUTRAL_COLOR)], approved["liquids"]  # C9 is outside Drug A's wells
+# small amounts sit in 1.5 mL tubes: drawn x 1.1 + the tube's dead volume
+assert [(lq["name"], lq["labware"], lq["well"], lq["volume_ul"], lq["color"]) for lq in approved["liquids"]] == [
+    ("Medium", "tubes", "A1", 600.0, hand.NEUTRAL_COLOR),  # 5 wells x 100 µL x 1.1 + 50
+    ("PBS", "tubes", "B1", 72.0, hand.LIQUID_COLORS[0]),     # ctrl (sorted first) wells
+    ("Drug A", "tubes", "C1", 72.0, hand.NEUTRAL_COLOR)], approved["liquids"]  # C9 is outside Drug A's wells
 head = approved["setup"]
 assert '"protocolName": "Hand test — Run 1 (as-run)"' in head and '"author": "Glassistant (Milo)"' in head
 assert "2026-10-30. Generated from the recorded run; simulated with opentrons_simulate." in head
 assert '"apiLevel": "2.22"' in head and 'load_instrument("flex_1channel_50", "left"' in head
 assert 'load_instrument("flex_1channel_1000", "right"' in head
-assert 'res.load_liquid(["A1"], 550, liquid_1)' in head and f'display_color="{hand.NEUTRAL_COLOR}"' in head
+assert 'tubes = protocol.load_labware("opentrons_24_tuberack_nest_1.5ml_snapcap", "B1")' in head
+assert "res = protocol" not in head  # no reservoir when nothing needs one
+assert 'tubes.load_liquid(["A1"], 600, liquid_1)' in head and f'display_color="{hand.NEUTRAL_COLOR}"' in head
+assert "500 µL drawn by the run + 10 % + 50 µL dead volume per tube" in head
 assert 'plate.load_empty(["B2", "B3", "B4", "C2", "C4", "C9"])' in head
-big = hand.liquids(rec, [{**steps[0], "volume_ul": 3000.0}])
-assert hand.blockers(steps, big) == ["Medium needs 16500 µL, more than a reservoir well holds (15000 µL)."]
+# more than a tube: reservoir wells (dead volume 1800 µL each), split when one would overflow
+mid_steps, mid = hand.place(rec, [{**steps[0], "volume_ul": 300.0}])  # 5 x 300 = 1500 µL drawn
+assert [(lq["labware"], lq["well"], lq["volume_ul"]) for lq in mid] == [("reservoir", "A1", 3450.0)], mid
+big_steps, big = hand.place(rec, [{**steps[0], "volume_ul": 3000.0}])  # 15000 µL drawn
+assert [(lq["labware"], lq["well"], lq["drawn_ul"], lq["volume_ul"]) for lq in big] == [
+    ("reservoir", "A1", 12000.0, 15000.0), ("reservoir", "A2", 3000.0, 5100.0)], big
+assert [(x["well"], x["wells"]) for x in big_steps[0]["sources"]] == [("A1", ["B2", "B3", "B4", "C2"]), ("A2", ["C4"])], big_steps[0]["sources"]
+assert all(lq["volume_ul"] <= hand.CONTAINERS["reservoir"]["max_ul"] for lq in big) and hand.blockers(big_steps, big) == []
+bh = hand.setup_code(big_steps, big, "Hand test", 1, "2026-10-30")
+assert 'res.load_liquid(["A1"], 15000, liquid_1)' in bh and 'res.load_liquid(["A2"], 5100, liquid_1)' in bh
+assert "(2 reservoir wells)" in bh
 print("HO1c ok: liquids, colors and the code-made head")
 
 # HO1b. Timers keep their actual time in seconds when they leave: done (extended) and cancelled.
@@ -198,7 +214,7 @@ S = approved["seconds"]
 assert hand.check(events_for(steps), steps, S)["ok"]
 bad_well = events_for(steps, lambda ev: ev[:1] + [
     {"op": "pick_up_tip", "labware": "x", "pipette": 1000},
-    {"op": "aspirate", "volume": 100, "well": "A1", "labware": hand.RESERVOIR, "pipette": 1000},
+    {"op": "aspirate", "volume": 100, "well": "A1", "labware": hand.TUBES, "pipette": 1000},
     {"op": "dispense", "volume": 100, "well": "C3", "labware": hand.PLATE, "pipette": 1000}] + ev[1:])  # C3 excluded
 chk = hand.check(bad_well, steps, S)
 assert not chk["ok"] and "extra C3" in chk["steps"][0]["why"], chk
@@ -217,7 +233,17 @@ one_tip = events_for(steps, lambda ev: [e for k, e in enumerate(ev)
                                         if not (e["op"] == "pick_up_tip" and k > 1 and ev[k - 1]["op"] == "dispense")])
 chk = hand.check(one_tip, steps, S)
 assert not chk["ok"] and "tips for" in chk["steps"][0]["why"], chk
-print("HO6 ok: run-log match catches excluded wells, volumes, order, waits, pipettes, tips")
+L = approved["liquids"]
+assert hand.check(events_for(steps), steps, S, L)["ok"]
+wrong_src = events_for(steps, lambda ev: [{**e, "well": "D1"} if e["op"] == "aspirate" and e["volume"] == 10 else e
+                                          for e in ev])
+chk = hand.check(wrong_src, steps, S, L)
+assert not chk["ok"] and chk["steps"][1]["why"].startswith("B2 gets liquid from D1"), chk
+greedy = events_for(steps, lambda ev: [{**e, "volume": 40} if e["op"] == "aspirate" and e["well"] == "B1" else e
+                                       for e in ev])  # 80 µL from a tube that holds 22 above its dead volume
+chk = hand.check(greedy, steps, S, L)
+assert not chk["ok"] and any("PBS: 80 µL drawn from Tube B1" in p for p in chk["problems"]), chk
+print("HO6 ok: run-log match catches excluded wells, volumes, order, waits, pipettes, tips, containers and amounts")
 
 
 # HO3-5, HO7. The loop: Spark is scripted, the simulator faked.
@@ -262,7 +288,7 @@ assert first["steps"] == steps and first["setup_code"] == approved["setup"]  # r
 print("HO3 ok: passes first try")
 
 # The head is the record's: code that changes it never reaches the simulator.
-call, sent = script([fc("generate_protocol", {"code": GOOD.replace("550", "500")})], [fc("simulate")])
+call, sent = script([fc("generate_protocol", {"code": GOOD.replace("], 600,", "], 500,")})], [fc("simulate")])
 out, stages = loop(call, [OK])
 assert out["stage"] == "needs_you" and "setup_code was changed" in out["error"], out
 print("HO3b ok: an edited setup head fails before simulating")
@@ -332,6 +358,10 @@ doc = runlog.get(run_id, st.root)
 assert hand.record_hash(doc["record"]) == before
 csv = doc["handoff"]["csv"].splitlines()
 assert csv[:2] == ["# protocol: Hand test", "# run: Run 1"] and csv[2].startswith("# date: 20"), csv[:3]
+assert csv[3:6] == ["# reagent: Medium · Tube A1 · 600 µL (500 drawn + 10 % + 50 dead)",
+                    "# reagent: PBS · Tube B1 · 72 µL (20 drawn + 10 % + 50 dead)",
+                    "# reagent: Drug A · Tube C1 · 72 µL (20 drawn + 10 % + 50 dead)"], csv[3:6]
+csv = csv[3:]
 assert csv[3] == "well,group,contents,total_uL,status,excluded_reason,logged_by,note", csv[3]
 assert csv[4] == 'B2,"Control","Medium 100 µL; PBS 10 µL",110,done,"",voice,""', csv[4]
 assert 'C3,"Drug A","Medium 100 µL",100,excluded,"bubbles",voice,""' in csv, csv
@@ -401,6 +431,8 @@ assert [s.get("pipette") for s in seed_steps] == ["p1000", "p50", "p50", "p50", 
 assert (seed_steps[4]["comment"], seed_steps[4]["msg"]) == (
     "Step 5: Incubate · 30 min", "Incubate at 37 °C (as run: 30 min; plan: 30 min)"), seed_steps[4]
 assert [lq["color"] for lq in seed_a["liquids"]] == [hand.NEUTRAL_COLOR, *hand.LIQUID_COLORS[:3]]
+assert [(lq["labware"], lq["well"], lq["volume_ul"]) for lq in seed_a["liquids"]] == [
+    ("reservoir", "A1", 4110.0), ("tubes", "A1", 127.0), ("tubes", "B1", 127.0), ("tubes", "C1", 127.0)]
 print("HO-seed ok: the demo protocol has every volume")
 
 # HO10. Private runs have no hand off.
@@ -435,10 +467,10 @@ print("HO4c ok: Keep as run / Use plan on the step")
 if hand.SIM_PYTHON.exists():
     res = hand.simulate(code_for(approved))
     assert res["ok"], res
-    chk = hand.check(res["events"], steps, approved["seconds"])
+    chk = hand.check(res["events"], steps, approved["seconds"], approved["liquids"])
     assert chk["ok"], chk
     res = hand.simulate(code_for(seed_a))
-    assert res["ok"] and hand.check(res["events"], seed_steps, seed_a["seconds"])["ok"], res
+    assert res["ok"] and hand.check(res["events"], seed_steps, seed_a["seconds"], seed_a["liquids"])["ok"], res
     assert hand.tips_used(res["events"]) == {"opentrons_flex_96_tiprack_1000ul": 21,
                                               "opentrons_flex_96_tiprack_50ul": 21}, hand.tips_used(res["events"])
     short = waited(0.3)

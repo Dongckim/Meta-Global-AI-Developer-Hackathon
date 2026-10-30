@@ -2091,8 +2091,7 @@ class RecordStore:
         timing = h.get("timing") or {}
         if name == "approve_handoff":
             rec = doc["record"]
-            steps = hand.as_run(rec, timing)
-            liqs = hand.liquids(rec, steps)
+            steps, liqs = hand.place(rec, hand.as_run(rec, timing))
             why = hand.blockers(steps, liqs) or ([] if steps else ["No robot steps were done in this run."])
             if why:
                 res["messages"].append(why[0])
@@ -2200,7 +2199,7 @@ class RecordStore:
             h.update({"stage": stage,
                       **{k: v for k, v in state.items() if k in ("code", "check", "error", "attempt", "tips")}})
             if stage == "passed":
-                h["csv"] = hand.plate_csv(doc["record"], *self._handoff_names(doc))
+                h["csv"] = hand.plate_csv(doc["record"], *self._handoff_names(doc), h["approved"].get("liquids"))
             runlog.write_run(doc, self.root)
             self._commit()
 

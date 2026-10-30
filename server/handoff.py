@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -31,6 +32,22 @@ MAX_ROUNDS = 12
 
 PLATE = "corning_96_wellplate_360ul_flat"
 RESERVOIR = "nest_12_reservoir_15ml"
+TUBES = "opentrons_24_tuberack_nest_1.5ml_snapcap"
+#: Where liquids sit (code picks): a liquid that fits one 1.5 mL tube with its
+#: dead volume goes in a tube, else in 12-well reservoir wells (split over
+#: wells when one can't hold it). max_ul: the labware definition's
+#: totalLiquidVolume (opentrons_shared_data labware v2: nest_12_reservoir_15ml/3,
+#: opentrons_24_tuberack_nest_1.5ml_snapcap/2). dead_ul: neither Opentrons nor
+#: NEST publish one; estimated (추정) as the liquid left at a 4 mm liquid height,
+#: the tip's default 1 mm aspirate clearance (opentrons instrument_context
+#: _DEFAULT_ASPIRATE_CLEARANCE) plus 3 mm to stay submerged, from each well's
+#: innerLabwareGeometry: 1782 µL (reservoir well), 43 µL (tube), rounded up.
+CONTAINERS = {
+    "reservoir": {"load_name": RESERVOIR, "slot": "D1", "var": "res", "max_ul": 15000, "dead_ul": 1800,
+                  "wells": [f"A{c}" for c in range(1, 13)], "say": "Res"},
+    "tubes": {"load_name": TUBES, "slot": "B1", "var": "tubes", "max_ul": 1500, "dead_ul": 50,
+              "wells": [f"{r}{c}" for c in range(1, 7) for r in "ABCD"], "say": "Tube"},
+}
 #: The lowest apiLevel with what the file uses (Labware.load_liquid and
 #: load_empty need 2.22): the reader's Opentrons App and robot aren't ours to pick.
 API_LEVEL = "2.22"
@@ -41,7 +58,6 @@ DECK = {"robot": "Flex", "api_level": API_LEVEL,
                              "tips": {"load_name": "opentrons_flex_96_tiprack_50ul", "slot": "C2"}},
                      "p1000": {"name": "flex_1channel_1000", "mount": "right", "max_ul": 1000,
                                "tips": {"load_name": "opentrons_flex_96_tiprack_1000ul", "slot": "C1"}}},
-        "reservoir": {"load_name": RESERVOIR, "slot": "D1", "well_max_ul": 15000},
         "plate": {"load_name": PLATE, "slot": "D2"},
         "trash": "A3"}
 #: Liquid colors in the Opentrons App (the one place they're set): a liquid
@@ -83,14 +99,10 @@ def _fmt(n) -> str:
     return f"{n:g}"
 
 
-def _liquids(plan: dict) -> dict[str, str]:
-    """Each liquid's reservoir well, in plan order (A1, A2, ...)."""
-    out: dict[str, str] = {}
-    for st in plan.get("steps") or []:
-        liq = ((st or {}).get("pipette") or {}).get("liquid")
-        if liq and liq not in out and len(out) < 12:
-            out[liq] = f"A{len(out) + 1}"
-    return out
+def _liquids(plan: dict) -> list[str]:
+    """The plan's liquids in the order its steps first use them."""
+    return list(dict.fromkeys(liq for st in plan.get("steps") or []
+                              if (liq := ((st or {}).get("pipette") or {}).get("liquid"))))
 
 
 def _timer(record: dict, i: int) -> dict | None:
@@ -214,7 +226,6 @@ def as_run(record: dict, timing: dict | None = None) -> list[dict]:
     pipette the code picks (≤ 50 µL: p50), each wait its seconds."""
     plan = record.get("plan") or {}
     steps = plan.get("steps") or []
-    liquids = _liquids(plan)
     out = []
     for r in changes(record, timing)["rows"]:
         st = steps[r["index"]]
@@ -227,8 +238,7 @@ def as_run(record: dict, timing: dict | None = None) -> list[dict]:
             ul = vol * _UL[str(p.get("unit") or "ul").lower()] if isinstance(vol, (int, float)) \
                 and str(p.get("unit") or "ul").lower() in _UL else None
             out.append({"n": 0, "index": r["index"], "title": r["title"], "kind": "transfer",
-                        "liquid": p.get("liquid") or "", "source": liquids.get(p.get("liquid") or "", ""),
-                        "volume_ul": ul, "wells": wells,
+                        "liquid": p.get("liquid") or "", "volume_ul": ul, "wells": wells,
                         "pipette": "p50" if ul is not None and ul <= P50_MAX_UL else "p1000"})
         else:
             temp = st.get("temp_c")
@@ -258,32 +268,62 @@ def _timer_s(record: dict, i: int) -> float | None:
     return _run_s(t) if t else None
 
 
-def liquids(record: dict, steps: list[dict]) -> list[dict]:
-    """Each liquid's reservoir well (A1 on, in plan order), how much to put
-    there (what the steps draw + 10 %) and its color: the tone of the
-    condition it treats, neutral when it goes to several (medium)."""
+def place(record: dict, steps: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Where each liquid sits and how much goes there (CONTAINERS): one
+    1.5 mL tube when what the steps draw + 10 % + its dead volume fits, else
+    reservoir wells, a new well when one would overflow. Each container holds
+    drawn × 1.1 + dead volume. Steps get `sources` (container well → plate
+    wells); every liquid gets a color the Opentrons App tells apart: its
+    condition's, neutral when it goes to several (medium).
+    Returns (steps, containers); a container with no well left has well ""."""
     plan = record.get("plan") or {}
     conds = plan.get("conditions") or {}
     keys = sorted(conds)
-    need: dict[str, float] = defaultdict(float)
-    wells_of: dict[str, set] = defaultdict(set)
+    steps = json.loads(json.dumps(steps))
     for s in steps:
-        if s["kind"] == "transfer" and s.get("volume_ul") is not None:
-            need[s["liquid"]] += len(s["wells"]) * s["volume_ul"]
-            wells_of[s["liquid"]] |= set(s["wells"])
-    out = []
-    for liq, well in _liquids(plan).items():
-        if liq not in need:
+        s.pop("sources", None)  # placed fresh every time
+    free = {k: list(c["wells"]) for k, c in CONTAINERS.items()}
+    out: list[dict] = []
+    for liq in _liquids(plan):
+        draws = [(s, w) for s in steps if s["kind"] == "transfer" and s["liquid"] == liq
+                 and s.get("volume_ul") is not None for w in s["wells"]]
+        if not draws:
             continue
         low = liq.lower()
+        mine = {w for _, w in draws}
         k = next((k for k in keys if low in {str(t).lower() for t in (conds[k] or {}).get("treatments") or []}), None)
         if k is None:
-            k = next((k for k in keys if wells_of[liq] <= set((conds[k] or {}).get("wells") or [])), None)
-        out.append({"name": liq[:1].upper() + liq[1:], "liquid": liq, "well": well,
-                    "volume_ul": float(-(-need[liq] * OVERAGE // 1)),
-                    "color": LIQUID_COLORS[keys.index(k) % len(LIQUID_COLORS)] if k else NEUTRAL_COLOR,
-                    "description": f"{_fmt(need[liq])} µL drawn by the run + 10 %"})
-    return out
+            k = next((k for k in keys if mine <= set((conds[k] or {}).get("wells") or [])), None)
+        color = LIQUID_COLORS[keys.index(k) % len(LIQUID_COLORS)] if k else NEUTRAL_COLOR
+        total = sum(s["volume_ul"] for s, _ in draws)
+        tube = CONTAINERS["tubes"]
+        kind = "tubes" if total * OVERAGE + tube["dead_ul"] <= tube["max_ul"] else "reservoir"
+        c = CONTAINERS[kind]
+        room = (c["max_ul"] - c["dead_ul"]) / OVERAGE  # what one container can give
+        groups: list[list] = [[]]
+        for s, w in draws:
+            if groups[-1] and sum(x["volume_ul"] for x, _ in groups[-1]) + s["volume_ul"] > room + 1e-9:
+                groups.append([])
+            groups[-1].append((s, w))
+        for g in groups:
+            well = free[kind].pop(0) if free[kind] else ""
+            drawn = sum(x["volume_ul"] for x, _ in g)
+            out.append({"name": liq[:1].upper() + liq[1:], "liquid": liq, "labware": kind, "well": well,
+                        "drawn_ul": drawn, "dead_ul": c["dead_ul"],
+                        "volume_ul": float(math.ceil(round(drawn * OVERAGE + c["dead_ul"], 6))), "color": color})
+            for s, w in g:
+                src = s.setdefault("sources", [])
+                if not src or src[-1]["labware"] != c["var"] or src[-1]["well"] != well:
+                    src.append({"labware": c["var"], "well": well, "wells": []})
+                src[-1]["wells"].append(w)
+    return steps, out
+
+
+def _description(cs: list[dict]) -> str:
+    drawn = sum(c["drawn_ul"] for c in cs)
+    where = "tube" if cs[0]["labware"] == "tubes" else "reservoir well"
+    return (f"{_fmt(drawn)} µL drawn by the run + 10 % + {_fmt(cs[0]['dead_ul'])} µL dead volume per {where}"
+            + (f" ({len(cs)} {where}s)" if len(cs) > 1 else ""))
 
 
 def setup_code(steps: list[dict], liqs: list[dict], title: str, run_n: int, date: str) -> str:
@@ -304,16 +344,22 @@ def setup_code(steps: list[dict], liqs: list[dict], title: str, run_n: int, date
         "    # --- setup: from the approved run record (do not edit) ---",
         f"    tips50 = protocol.load_labware(\"{p['p50']['tips']['load_name']}\", \"{p['p50']['tips']['slot']}\")",
         f"    tips1000 = protocol.load_labware(\"{p['p1000']['tips']['load_name']}\", \"{p['p1000']['tips']['slot']}\")",
-        f"    res = protocol.load_labware(\"{d['reservoir']['load_name']}\", \"{d['reservoir']['slot']}\")",
         f"    plate = protocol.load_labware(\"{d['plate']['load_name']}\", \"{d['plate']['slot']}\")",
         f"    protocol.load_trash_bin(\"{d['trash']}\")",
         f"    p50 = protocol.load_instrument(\"{p['p50']['name']}\", \"{p['p50']['mount']}\", tip_racks=[tips50])",
         f"    p1000 = protocol.load_instrument(\"{p['p1000']['name']}\", \"{p['p1000']['mount']}\", tip_racks=[tips1000])",
     ]
-    for k, lq in enumerate(liqs):
-        lines.append(f"    liquid_{k + 1} = protocol.define_liquid({json.dumps(lq['name'], ensure_ascii=False)}, "
-                     f"description={json.dumps(lq['description'], ensure_ascii=False)}, display_color=\"{lq['color']}\")")
-        lines.append(f"    res.load_liquid([\"{lq['well']}\"], {lq['volume_ul']:.0f}, liquid_{k + 1})")
+    for kind, c in CONTAINERS.items():
+        if any(lq["labware"] == kind for lq in liqs):
+            lines.append(f"    {c['var']} = protocol.load_labware(\"{c['load_name']}\", \"{c['slot']}\")")
+    names = list(dict.fromkeys(lq["liquid"] for lq in liqs))
+    for k, liq in enumerate(names):
+        cs = [lq for lq in liqs if lq["liquid"] == liq]
+        lines.append(f"    liquid_{k + 1} = protocol.define_liquid({json.dumps(cs[0]['name'], ensure_ascii=False)}, "
+                     f"description={json.dumps(_description(cs), ensure_ascii=False)}, display_color=\"{cs[0]['color']}\")")
+        for lq in cs:
+            lines.append(f"    {CONTAINERS[lq['labware']]['var']}.load_liquid([\"{lq['well']}\"], "
+                         f"{lq['volume_ul']:.0f}, liquid_{k + 1})")
     if used:
         lines.append(f"    plate.load_empty({json.dumps(used)})")
     lines.append("    # --- steps ---")
@@ -342,11 +388,11 @@ def expected_seconds(record: dict, steps: list[dict], timing: dict | None = None
 
 def blockers(steps: list[dict], liqs: list[dict] | None = None) -> list[str]:
     """Why an as-run protocol can't go to the robot (said, never guessed)."""
-    cap = DECK["reservoir"]["well_max_ul"]
     return [f"Step {s['n']} ({s['title']}) has no volume in µL." for s in steps
             if s["kind"] == "transfer" and s.get("volume_ul") is None] + \
-        [f"{lq['name']} needs {lq['volume_ul']:.0f} µL, more than a reservoir well holds ({cap} µL)."
-         for lq in liqs or [] if lq["volume_ul"] > cap]
+        [f"No {lq['labware']} well left for {lq['name']}." for lq in liqs or [] if not lq["well"]] + \
+        [f"{lq['name']} needs a single {lq['volume_ul']:.0f} µL draw, more than its container holds."
+         for lq in liqs or [] if lq["well"] and lq["volume_ul"] > CONTAINERS[lq["labware"]]["max_ul"]]
 
 
 def record_hash(record: dict) -> str:
@@ -357,7 +403,8 @@ def record_hash(record: dict) -> str:
 
 # --- the match: simulator run log vs the approved protocol ---
 
-def check(events: list[dict], steps: list[dict], seconds: dict[str, float] | None = None) -> dict:
+def check(events: list[dict], steps: list[dict], seconds: dict[str, float] | None = None,
+          liquids: list[dict] | None = None) -> dict:
     """Pass = every step, in order, under its `Step N` comment: a transfer
     dispenses exactly its wells into the plate at its volume from its
     reservoir well, with its pipette and a new tip per well; a wait waits
@@ -389,6 +436,17 @@ def check(events: list[dict], steps: list[dict], seconds: dict[str, float] | Non
     extra = sorted(set(segs) - set(want))
     if extra:
         problems.append(f"Unknown steps {extra}.")
+    # every container gives no more than what sits above its dead volume
+    drawn: dict[tuple, float] = defaultdict(float)
+    for e in events or []:
+        if e.get("op") == "aspirate":
+            drawn[(e.get("labware"), e.get("well"))] += e.get("volume") or 0
+    for lq in liquids or []:
+        c = CONTAINERS[lq["labware"]]
+        got = drawn.get((c["load_name"], lq["well"]), 0)
+        if got > lq["volume_ul"] - lq["dead_ul"] + 0.01:
+            problems.append(f"{lq['name']}: {_fmt(round(got, 1))} µL drawn from {c['say']} {lq['well']}, "
+                            f"more than its {_fmt(lq['volume_ul'] - lq['dead_ul'])} µL above the dead volume.")
     return {"ok": not problems and all(p["ok"] for p in per), "steps": per, "problems": problems}
 
 
@@ -402,11 +460,17 @@ def _check_step(s: dict, seg: list[dict], want_s: float | None) -> str:
         want = s["seconds"] if want_s is None else want_s
         return "" if abs(got - want) < 0.06 else f"waits {_fmt(round(got, 1))} s, not {_fmt(round(want, 1))} s"
     vols: dict[str, float] = defaultdict(float)
+    loads = {c["var"]: c["load_name"] for c in CONTAINERS.values()}
+    want = {w: (loads[src["labware"]], src["well"]) for src in s.get("sources") or [] for w in src["wells"]}
+    last = None
     for e in seg:
-        if e["op"] == "dispense" and e.get("labware") == PLATE:
+        if e["op"] == "aspirate":
+            last = (e.get("labware"), e.get("well"))
+        elif e["op"] == "dispense" and e.get("labware") == PLATE:
+            if e["well"] in want and last != want[e["well"]]:
+                return f"{e['well']} gets liquid from {last[1] if last else '?'} of {last[0] if last else '?'}, " \
+                       f"not {want[e['well']][1]} of {want[e['well']][0]}"
             vols[e["well"]] += e.get("volume") or 0
-        elif e["op"] == "aspirate" and not (e.get("labware") == RESERVOIR and e.get("well") == s["source"]):
-            return f"draws from {e.get('well')} of {e.get('labware')}, not {s['source']} of the reservoir"
         elif e["op"] == "delay":
             return "waits inside a transfer"
     if set(vols) != set(s["wells"]):
@@ -495,7 +559,8 @@ def tips_used(events: list[dict]) -> dict[str, int]:
 
 # --- files ---
 
-def plate_csv(record: dict, title: str = "", run_n: int = 0, date: str = "") -> str:
+def plate_csv(record: dict, title: str = "", run_n: int = 0, date: str = "",
+              liquids: list[dict] | None = None) -> str:
     """plate_map.csv: a commented head (protocol, run, date), then one row per
     well the run touched: what went in by hand (each done step's liquid and
     volume), the total, status, why excluded, who logged it, notes."""
@@ -514,8 +579,10 @@ def plate_csv(record: dict, title: str = "", run_n: int = 0, date: str = "") -> 
         marks[m["well"]].append(m)
     wells = _sorted(set(marks) | set(excluded) | set(redo) | skipped)
     q = lambda s: '"{}"'.format(str(s).replace('"', '""'))  # noqa: E731
-    lines = [f"# protocol: {title}", f"# run: Run {run_n}", f"# date: {date}",
-             "well,group,contents,total_uL,status,excluded_reason,logged_by,note"]
+    lines = [f"# protocol: {title}", f"# run: Run {run_n}", f"# date: {date}"] + [
+        f"# reagent: {lq['name']} · {CONTAINERS[lq['labware']]['say']} {lq['well']} · {_fmt(lq['volume_ul'])} µL "
+        f"({_fmt(lq['drawn_ul'])} drawn + 10 % + {_fmt(lq['dead_ul'])} dead)" for lq in liquids or []] + [
+        "well,group,contents,total_uL,status,excluded_reason,logged_by,note"]
     for w in wells:
         parts, total = [], 0.0
         for m in marks[w]:
@@ -540,8 +607,9 @@ INSTRUCTIONS = (
     "Call read_run first. The file starts with setup_code exactly as given (metadata, deck, pipettes "
     "p50 and p1000, liquids, empty wells): copy it character for character, never change it. "
     "After it, inside run(), write only the steps, in order. Each step starts with "
-    "protocol.comment(<its comment>). A transfer: with its pipette variable (p50 or p1000), move "
-    "volume_ul µL from res[<source>] into each of its wells of plate, a new tip per well "
+    "protocol.comment(<its comment>). A transfer: for each of its sources, with its pipette variable "
+    "(p50 or p1000), move volume_ul µL from <source labware>[<source well>] (res or tubes, loaded in "
+    "setup_code) into each of that source's wells of plate, a new tip per well "
     "(new_tip=\"always\"). A delay: protocol.delay(seconds=<seconds>, msg=<msg>). "
     "Do nothing else: no mixing, no other liquid moves. "
     "Then call generate_protocol with the whole file, then simulate. If simulate fails, read the "
@@ -613,8 +681,8 @@ async def run_loop(call, approved: dict, sim, on_stage) -> dict:
                         res = {"ok": False, "error": "setup_code was changed: copy it exactly as read_run gave it."}
                     else:
                         res = await sim(st["code"])
-                    st["check"] = check(res.get("events") or [], steps, approved.get("seconds")) \
-                        if res.get("ok") else None
+                    st["check"] = check(res.get("events") or [], steps, approved.get("seconds"),
+                                        approved.get("liquids")) if res.get("ok") else None
                     st["tips"] = tips_used(res.get("events") or [])
                     st["passed"] = bool(res.get("ok")) and st["check"]["ok"]
                     st["error"] = "" if st["passed"] else res.get("error") or _diff_text(st["check"])

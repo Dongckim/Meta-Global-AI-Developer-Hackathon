@@ -279,8 +279,8 @@ struct HandoffFilesScreen: View {
     @ViewBuilder private var reservoir: some View {
         if let liqs = handoff.liquids, !liqs.isEmpty {
             HStack(spacing: 18 * u) {
-                Text("Reservoir").foregroundStyle(Theme.text2)
-                ForEach(liqs, id: \.well) { lq in
+                Text("Reagents").foregroundStyle(Theme.text2)
+                ForEach(liqs, id: \.line) { lq in
                     HStack(spacing: 8 * u) {
                         Circle().fill(Color(hex: UInt32(lq.color.dropFirst(), radix: 16) ?? 0)).frame(width: 14 * u, height: 14 * u)
                         Text(lq.line).foregroundStyle(Theme.text1)

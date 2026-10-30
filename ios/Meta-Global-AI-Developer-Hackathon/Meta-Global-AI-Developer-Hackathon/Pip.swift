@@ -660,18 +660,22 @@ struct Handoff: Decodable {
         }
     }
 
+    /// One container of a liquid: reservoir well or 1.5 mL tube, filled with
+    /// what the run draws + 10 % + its dead volume.
     struct Liquid: Decodable {
         var name: String
+        /// reservoir | tubes
+        var labware: String
         var well: String
         var volumeUl: Double
         var color: String
-        enum CodingKeys: String, CodingKey { case name, well, volumeUl = "volume_ul", color }
+        enum CodingKeys: String, CodingKey { case name, labware, well, volumeUl = "volume_ul", color }
 
-        /// "A1 Medium 2.3 mL" / "A2 PBS 77 µL".
+        /// "Res A1 Culture medium 4.1 mL" / "Tube A1 Vehicle 127 µL".
         var line: String {
             let v = volumeUl >= 1000 ? "\((volumeUl / 1000).formatted(.number.precision(.fractionLength(0...1)))) mL"
                 : "\(Int(volumeUl)) µL"
-            return "\(well) \(name) \(v)"
+            return "\(labware == "tubes" ? "Tube" : "Res") \(well) \(name) \(v)"
         }
     }
 

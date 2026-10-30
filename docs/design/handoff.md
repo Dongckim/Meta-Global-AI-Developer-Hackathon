@@ -120,6 +120,14 @@ not in that step (so never into an excluded one).
   `handoff.LIQUID_COLORS`, light pink for medium) + `res.load_liquid`, and
   `plate.load_empty` on the plate wells used. Spark copies it as is; a
   changed head fails before simulating.
+- Containers by code (`handoff.CONTAINERS`, sources in its comment): a
+  liquid that fits one 1.5 mL tube (`opentrons_24_tuberack_nest_1.5ml_snapcap`,
+  B1) goes there, else 12-well reservoir wells (D1), a new well when one would
+  overflow. Each holds drawn × 1.1 + dead volume. Dead volumes are estimates
+  (no Opentrons/NEST figure): the liquid at 4 mm in each well's labware
+  geometry (1 mm default aspirate clearance + 3 mm submerged): 1800 µL a
+  reservoir well, 50 µL a tube. The verifier checks each dispense's source
+  container and that no container gives more than it holds above its dead volume.
 - Pipettes by code: ≤ 50 µL `flex_1channel_50` (left, 50 µL tips), else
   `flex_1channel_1000` (right, 1000 µL tips); a new tip per well. The
   verifier checks the pipette and one tip per well.
