@@ -309,6 +309,18 @@ with patch("httpx.AsyncClient", FakeClient):
     assert api.store.r["view"]["current"] == {"screen": "run_view", "target": run1}
     print("RUN11 ok: active run opens its record")
 
+    # RUN12. On an older run's record, "here" is that run: a navigate / open with no run
+    # named stays on it (the model asked to see "the note here" and got the latest run),
+    # and the model is told which run is on screen.
+    assert run1 != active
+    for call in ({"id": "navigate", "args": {"screen": "run_view"}}, {"id": "open", "args": {"target": "run"}}):
+        c.post("/input", json={"action": call, "session": "run12"})
+        assert api.store.r["view"]["current"] == {"screen": "run_view", "target": run1}, call
+    st = api.store.model_state({})
+    assert st["current_screen"] == "run_view" and st["viewing_run"] == api.store.run_label(
+        api.runlog.resolve(run1, api.store.all_run_docs()))["spoken"], st
+    print("RUN12 ok: here on a run record is that run, never the latest")
+
 # LIB-merge. Duplicates of one original merge into the earliest import; their
 # runs move under it and number by start order; files go to a backup.
 from server import library as lib  # noqa: E402

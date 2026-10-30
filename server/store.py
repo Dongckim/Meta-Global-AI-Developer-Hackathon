@@ -280,6 +280,10 @@ class RecordStore:
             docs = [active] + [d for d in docs if d.get("run_id") != active["run_id"]]
         return docs
 
+    def _here_run(self) -> str:
+        """The run whose record is on screen ("" elsewhere): "here" on a run record."""
+        return (self._viewing_run() or {}).get("run_id") or ""
+
     def _viewing_run(self) -> dict | None:
         """view-target run doc, or None for the active scope."""
         v = (self.r.get("view") or {}).get("current") or {}
@@ -324,7 +328,8 @@ class RecordStore:
         screen = self._flow_gate(screen, session)
         t = target.strip() if isinstance(target, str) else ""
         if screen == "run_view":
-            self._open_run(res, session, t or "latest")
+            # no run named: the one on screen ("here"), else the latest
+            self._open_run(res, session, t or self._here_run() or "latest")
             return
         if screen in self.HANDOFF_SCREENS:
             self._open_handoff(res, session, t.split(":", 1)[0], screen)
@@ -1168,6 +1173,8 @@ class RecordStore:
             "timers": timers,
             "recent": self.r["recent"][-5:],
             "current_screen": (self.r.get("view") or {}).get("current", {}).get("screen", "main"),
+            # the run record on screen: "here", "this run" mean it, not the latest
+            **({"viewing_run": self.run_label(v)["spoken"]} if (v := self._viewing_run()) else {}),
             "pending_cards": len(self.r["cards"]),
             "draft_open": bool(self.r.get("draft")),
         }
@@ -1697,7 +1704,7 @@ class RecordStore:
                 self._open_search(res, session, t[7:] if low.startswith("search:") else t)
                 return
             if low.startswith("run ") or low in ("run", "runs"):
-                self._open_run(res, session, t if low.startswith("run ") else "latest")
+                self._open_run(res, session, t if low.startswith("run ") else self._here_run() or "latest")
                 return
             if runlog.resolve(t, self.all_run_docs()) is not None:
                 self._open_run(res, session, t)
