@@ -78,6 +78,7 @@
 	<array>
 		<string>processing</string>
 		<string>bluetooth-central</string>
+		<string>external-accessory</string>
 		<string>audio</string>
 		<string>bluetooth-peripheral</string>
 	</array>
@@ -85,6 +86,17 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<!-- The glasses camera's data channel (DAT over Bluetooth Classic). Without it the
+	     link and the mic work but no frame or photo arrives (Capture service unavailable). -->
+	<key>UISupportedExternalAccessoryProtocols</key>
+	<array>
+		<string>com.meta.ar.wearable</string>
+	</array>
+	<!-- Opening the Meta AI app (registration, camera permission). -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>fb-viewapp</string>
+	</array>
 	<key>UIAppFonts</key>
 	<array>
 		<string>Inter-Light.ttf</string>
