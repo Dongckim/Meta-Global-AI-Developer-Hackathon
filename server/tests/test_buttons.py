@@ -97,6 +97,10 @@ def fresh(sid: str, b: dict | None = None) -> RecordStore:
             target = f"{finished}:5"
         doc["handoff"] = {"approved": {"hash": handoff.record_hash(doc["record"]), "ts": 1, "steps": []},
                           "stage": ((b or {}).get("when") or {}).get("stage") or "passed", "attempt": 1}
+        if ((b or {}).get("when") or {}).get("review") == "done" or ((b or {}).get("when") or {}).get("reviewed"):
+            # every change already opened in the review
+            doc["handoff"]["reviewed"] = [r["index"] for r in handoff.changes(doc["record"])["rows"] if r["flagged"]]
+            doc["handoff"]["reviewed_hash"] = handoff.record_hash(doc["record"])
         runlog.write_run(doc, st.root)
     if sid == "main" and ((b or {}).get("when") or {}).get("last") == "yes":
         st.r["step_index"] = len(st.r["plan"]["steps"]) - 1  # the last step: Finish

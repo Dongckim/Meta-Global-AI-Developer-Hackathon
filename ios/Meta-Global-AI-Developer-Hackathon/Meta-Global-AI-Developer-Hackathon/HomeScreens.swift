@@ -278,6 +278,8 @@ struct RunRecordScreen: View {
     /// Code tab: the run's robot code, and the step lit in it (0: setup).
     @State private var code: RunCode?
     @State private var codeStep: Int?
+    /// Server `has_code`: a run saved without robot code has no Code tab.
+    @State private var hasCode = false
 
     private var summary: RunSummary? { runs.first { $0.runId == runId } }
 
@@ -336,7 +338,8 @@ struct RunRecordScreen: View {
 
     private var tabs: some View {
         HStack(spacing: 36 * u) {
-            ForEach(Array(["Notes", "Timers", "Searches", "Code"].enumerated()), id: \.offset) { i, t in
+            ForEach(Array((hasCode ? ["Notes", "Timers", "Searches", "Code"] : ["Notes", "Timers", "Searches"])
+                .enumerated()), id: \.offset) { i, t in
                 Button { withAnimation(Theme.Motion.ease(Theme.Motion.seg)) { tab = i } } label: {
                     VStack(spacing: 10 * u) {
                         Text(t).font(Theme.ui(26 * u, weight: tab == i ? .semibold : .regular))
@@ -414,6 +417,8 @@ struct RunRecordScreen: View {
             doc = r.run
             rlab.sync(r.run.record)
             code = r.handoff
+            hasCode = r.has_code ?? false
+            if !hasCode, tab == 3 { tab = 0 }
         } catch {
             self.error = error.localizedDescription
         }

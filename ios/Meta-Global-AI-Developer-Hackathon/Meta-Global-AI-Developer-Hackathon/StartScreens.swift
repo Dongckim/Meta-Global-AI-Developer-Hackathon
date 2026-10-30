@@ -144,6 +144,7 @@ struct DraftStepsScreen: View {
         let s = review.summary
         let n = s?.rows.count ?? 0, of = s?.of ?? n, changed = s?.changed ?? 0
         let steps = n == of ? "\(n) robot steps" : "\(n) of \(of) robot steps"
+        if s?.review == "done" { return "As the run went · \(steps) · Review finished!" }
         return "As the run went · \(steps) · " + (changed == 0 ? "as planned" : "\(changed) changed")
     }
 
@@ -160,7 +161,7 @@ struct DraftStepsScreen: View {
                 Text(rowDetail(r)).font(Theme.ui(28 * u)).foregroundStyle(Theme.text2)
                     .lineLimit(1).minimumScaleFactor(0.6)
                 Spacer(minLength: 12 * u)
-                if r.flagged {
+                if r.flagged, !(r.reviewed ?? false) {
                     Text(review.mode == .finalProtocol ? "Changed" : "Check").font(Theme.ui(22 * u, weight: .semibold)).foregroundStyle(.white)
                         .padding(.horizontal, 22 * u).frame(height: 44 * u)
                         .background(Capsule().fill(Theme.polishBlue))

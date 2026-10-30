@@ -503,6 +503,7 @@ class RecordStore:
         for d in docs:
             lab = self.run_label(d, everything)
             out.append({**runlog.summarize(d), "label": lab["display"], "spoken": lab["spoken"],
+                        "has_code": self.handoff_code(d) is not None,
                         "number": lab["number"], "day": lab["day"], "step": lab["step"],
                         "of": lab["of"], "state": lab["state"]})
         return out
@@ -2028,7 +2029,8 @@ class RecordStore:
     # --- hand off: a finished run -> approved as-run protocol -> robot code (docs/design/handoff.md) ---
 
     HANDOFF_SCREENS = ("final_protocol", "final_step", "final_page", "simulate", "export_files", "exported")
-    HANDOFF_ACTIONS = ("approve_handoff", "retry_handoff", "export_handoff", "share_result", "set_timing")
+    HANDOFF_ACTIONS = ("approve_handoff", "save_handoff", "next_change", "retry_handoff", "export_handoff",
+                       "share_result", "set_timing")
     #: The files a hand off shares (server/data/exports/<run>/).
     HANDOFF_FILES = ("protocol.py", "plate_map.csv")
     #: A share sheet left open longer than this (app gone) no longer holds the screen.
@@ -2087,8 +2089,26 @@ class RecordStore:
             res["messages"].append(f"There's no step {int(n)} to check." if rows else "This run has no robot steps.")
             return
         screen = "final_step" if name == "show_step" else "final_page"
+        if screen == "final_step" and rows[int(n) - 1]["flagged"]:
+            self._mark_reviewed(doc, rows[int(n) - 1]["index"])  # opened: this change was seen
         self._push_view(screen, f"{run_id}:{int(n)}")
         res["messages"].append(self.screen_line(screen, f"{run_id}:{int(n)}"))
+
+    def _reviewed(self, doc: dict) -> set:
+        """Changed steps (plan index) already opened in the review, while the run record stays the same."""
+        h = doc.get("handoff") or {}
+        return set(h.get("reviewed") or []) if h.get("reviewed_hash") == hand.record_hash(doc["record"]) else set()
+
+    def _mark_reviewed(self, doc: dict, index: int) -> None:
+        h = doc.setdefault("handoff", {})
+        h["reviewed"] = sorted(self._reviewed(doc) | {index})
+        h["reviewed_hash"] = hand.record_hash(doc["record"])
+        runlog.write_run(doc, self.root)
+
+    def _review_state(self, doc: dict, rows: list[dict]) -> str:
+        """none (nothing changed) | open (a change not opened yet) | done."""
+        changed = {r["index"] for r in rows if r["flagged"]}
+        return "none" if not changed else "done" if changed <= self._reviewed(doc) else "open"
 
     def _share_run(self) -> str:
         """The finished run whose files Share sends: a hand off screen's, or
@@ -2106,7 +2126,25 @@ class RecordStore:
             return
         h = doc.setdefault("handoff", {})
         timing = h.get("timing") or {}
-        if name == "approve_handoff":
+        if name == "next_change":
+            # the next changed step not opened yet (after this one first), else back to the list
+            rows = hand.changes(doc["record"], timing)["rows"]
+            v = self.r["view"]["current"]
+            here = _num(v.get("target", "").partition(":")[2]) if v.get("screen") == "final_step" else 0
+            seen = self._reviewed(doc)
+            left = [r for r in rows if r["flagged"] and r["index"] not in seen]
+            nxt = next((r for r in left if r["n"] > (here or 0)), left[0] if left else None)
+            if nxt is None:
+                self._push_view("final_protocol", run_id)
+                res["messages"].append(self.screen_line("final_protocol", run_id))
+            else:
+                self._final_step("show_step", {"step": str(nxt["n"])}, session, res)
+            return
+        if name in ("approve_handoff", "save_handoff") and \
+                self._review_state(doc, hand.changes(doc["record"], timing)["rows"]) == "open":
+            res["messages"].append(say("handoff_review_first", session))
+            return
+        if name in ("approve_handoff", "save_handoff"):
             rec = doc["record"]
             steps, liqs = hand.place(rec, hand.as_run(rec, timing))
             why = hand.blockers(steps, liqs) or ([] if steps else ["No robot steps were done in this run."])
@@ -2114,11 +2152,18 @@ class RecordStore:
                 res["messages"].append(why[0])
                 return
             title, n, date = self._handoff_names(doc)
-            doc["handoff"] = {"timing": timing, "stage": "generating", "attempt": 0, "approved": {
+            code = name == "approve_handoff"
+            doc["handoff"] = {"timing": timing, "stage": "generating" if code else "saved", "attempt": 0,
+                              "reviewed": h.get("reviewed") or [], "reviewed_hash": h.get("reviewed_hash"),
+                              "approved": {
                 "hash": hand.record_hash(rec), "ts": time.time(), "steps": steps, "liquids": liqs,
                 "setup": hand.setup_code(steps, liqs, title, n, date),
                 "seconds": hand.expected_seconds(rec, steps, timing)}}
             runlog.write_run(doc, self.root)
+            if not code:  # the approved as-run protocol is kept with the run; no robot code
+                self._push_view("home")
+                res["messages"].append(say("handoff_saved", session))
+                return
             self._push_view("simulate", run_id)
             res["messages"].append(self.screen_line("simulate", run_id))
             if self.spawn_handoff:
@@ -2235,8 +2280,13 @@ class RecordStore:
         h = doc.get("handoff") or {}
         p = lib.get(doc.get("protocol_id"), self.root) or {}
         ok = self._handoff_ok(doc)
+        summary = hand.changes(rec, h.get("timing"))
+        seen = self._reviewed(doc)
+        for r in summary["rows"]:
+            r["reviewed"] = r["index"] in seen  # a check once the review opened it
+        summary["review"] = self._review_state(doc, summary["rows"])
         return {"run_id": doc["run_id"], "label": self.run_label(doc)["display"],
-                "summary": hand.changes(rec, h.get("timing")), "approved": ok,
+                "summary": summary, "approved": ok,
                 "stage": h.get("stage") if ok else None, "attempt": h.get("attempt") or 0,
                 "error": h.get("error") or "", "check": h.get("check"),
                 "code": (h.get("code") or "") if ok else "", "csv": (h.get("csv") or "") if ok else "",
@@ -2265,11 +2315,19 @@ class RecordStore:
                      "doc": {"pdf": "PDF", "photo": "photo"}.get(v["meta"]["origin"] or "pdf", "text")}
         row = rows[int(step) - 1] if step.isdigit() and 0 < int(step) <= len(rows) else None
         if row:
-            out.update({"step": row["n"], "reason": row["reason"], "page": row["page"]})
+            out.update({"step": row["n"], "reason": row["reason"], "page": row["page"], "said": row["said"]})
             if any(c["kind"] == "timer" for c in row["changes"]):
                 out["timer"] = "changed"  # Keep as run / Use plan show
-        elif flagged := next((r for r in rows if r["flagged"]), None):
-            out["step"] = flagged["n"]
+        else:
+            # Review opens the first change not seen yet (all seen: the first one, greyed)
+            first = next((r for r in rows if r["flagged"] and not r["reviewed"]), None) or \
+                next((r for r in rows if r["flagged"]), None)
+            if first:
+                out["step"] = first["n"]
+        if screen == "final_protocol":
+            review = d["review"]
+            out.update({"review": review, "reviewed": "yes" if review != "open" else "",
+                        "line": say(f"handoff_review_{review}", None, robot=out["robot"], changed=out["changed"])})
         if screen == "simulate":
             stage = v["stage"] or "generating"
             chk = v["check"] or {}

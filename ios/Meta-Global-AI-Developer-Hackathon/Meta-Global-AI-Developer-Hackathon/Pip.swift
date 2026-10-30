@@ -599,6 +599,8 @@ struct DraftRow: Decodable, Identifiable {
     var plan: String?
     var run: String?
     var changes: [RunChange]?
+    /// Final protocol review: this change was opened (a check instead of Changed).
+    var reviewed: Bool?
     var id: Int { n }
 }
 
@@ -622,6 +624,8 @@ struct DraftSummary: Decodable {
     /// A final protocol: robot steps in the plan, and how many rows changed.
     var of: Int?
     var changed: Int?
+    /// The review of the changes: none | open | done.
+    var review: String?
 }
 
 /// Snapshot `handoff`: the finished run a hand off screen shows (⑨0-⑨d).

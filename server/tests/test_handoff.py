@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import server.api as api  # noqa: E402
 from server import handoff as hand  # noqa: E402
 from server import runs as runlog  # noqa: E402
+from server.screens import buttons_for  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
 
@@ -323,26 +324,43 @@ card = st.request_end_run({})[1]["card"]
 j = c.post("/confirm", json={"card_id": card["id"], "ok": True, "session": "ho"}).json()
 run_id = st.r["view"]["current"]["target"]
 assert st.r["view"]["current"]["screen"] == "final_protocol" and run_id, st.r["view"]
-assert j["message"].endswith("4 of 5 robot steps, 4 changes from the plan. Look right?"), j
+assert j["message"].endswith("4 of 5 robot steps, 4 changes from the plan. Review them one by one?"), j
 snap = c.get("/record").json()
 h = snap["handoff"]
 assert h["run_id"] == run_id and h["approved"] is False and h["stage"] is None, h
-assert h["summary"]["rows"][3]["changes"][0]["kind"] == "timer", h
+assert h["summary"]["rows"][3]["changes"][0]["kind"] == "timer" and h["summary"]["review"] == "open", h
+buttons = [b["say"] for b in buttons_for("final_protocol", snap["view"]["slots"])]
+assert buttons == ["Review"], buttons  # no Make robot code / Save without code before the review
+j = c.post("/input", json={"action": {"id": "approve_handoff", "args": {}}, "session": "ho"}).json()
+assert j["reply"] == "Review the changes first." and st.r["view"]["current"]["screen"] == "final_protocol", j
 
-j = c.post("/input", json={"text": "step 1", "session": "ho"}).json()  # the button shown: the first change
+# HO12. One change at a time: Review opens the first, Milo says it in one sentence, Next goes on;
+# seen ones get a check; all seen: Review finished!, Review greyed, the two choices
+j = c.post("/input", json={"text": "review", "session": "ho"}).json()
 assert st.r["view"]["current"] == {"screen": "final_step", "target": f"{run_id}:1"}, st.r["view"]
 assert j["reply"] == "Step 1: C3 excluded: bubbles; C4 marked off plan.", j
-j = c.post("/input", json={"action": {"id": "show_step", "args": {"step": "2"}}, "session": "ho"}).json()
+j = c.post("/input", json={"text": "next", "session": "ho"}).json()
 assert st.r["view"]["current"] == {"screen": "final_step", "target": f"{run_id}:2"}, st.r["view"]
 assert j["reply"] == "Step 2: B3 skipped.", j
 j = c.post("/input", json={"text": "open PDF", "session": "ho"}).json()
 assert st.r["view"]["current"] == {"screen": "final_page", "target": f"{run_id}:2"}, st.r["view"]
 c.post("/input", json={"text": "back to step", "session": "ho"})
-j = c.post("/input", json={"text": "looks right", "session": "ho"}).json()  # the step's: back to the list
+assert [r["reviewed"] for r in c.get("/record").json()["handoff"]["summary"]["rows"]] == [True, True, False, False]
+c.post("/input", json={"text": "next", "session": "ho"})
+j = c.post("/input", json={"text": "next", "session": "ho"}).json()
+assert j["reply"] == "Step 4: incubate ran 35 min, plan was 30 min.", j
+j = c.post("/input", json={"text": "next", "session": "ho"}).json()  # none left: back to the list
 assert st.r["view"]["current"] == {"screen": "final_protocol", "target": run_id}, st.r["view"]
+assert j["reply"] == "Review finished! Make robot code, or save without it?", j
+snap = c.get("/record").json()
+assert snap["handoff"]["summary"]["review"] == "done"
+shown = buttons_for("final_protocol", snap["view"]["slots"])
+assert [(b["say"], b.get("look")) for b in shown] == [
+    ("Review", "disabled"), ("Make robot code", None), ("Save without code", None)], shown
 assert spawned == []
 before = hand.record_hash(runlog.get(run_id, st.root)["record"])
-j = c.post("/input", json={"text": "looks right", "session": "ho"}).json()  # the list's: approve
+print("HO12 ok: review one change at a time, Next, checks, Review finished!, then the two choices")
+j = c.post("/input", json={"text": "make robot code", "session": "ho"}).json()
 assert st.r["view"]["current"] == {"screen": "simulate", "target": run_id}, st.r["view"]
 assert spawned == [run_id] and j["reply"] == "Writing the robot code…", j
 plan = st.handoff_plan(run_id)
@@ -402,6 +420,7 @@ j = c.post("/input", json={"text": "done", "session": "ho"}).json()  # shared, a
 assert st.r["view"]["current"]["screen"] == "home" and st.r["view"]["stack"] == [], st.r["view"]
 
 # Home: the finished run's robot code, each final protocol step with the lines it became
+assert c.get(f"/runs/{run_id}").json()["has_code"] is True
 code = c.get(f"/runs/{run_id}").json()["handoff"]
 lines = code["code"].splitlines()
 assert code["code"] == code_for(plan) and code["exported"] is True
@@ -432,7 +451,7 @@ doc = runlog.get(run_id, st.root)
 doc["handoff"]["code"] = doc["handoff"]["code"].replace('comment("', "comment('").replace('")\n', "')\n")
 assert "comment('Step 1:" in doc["handoff"]["code"]
 assert [x["lines"] for x in st.handoff_code(doc)["steps"]] == [x["lines"] for x in code["steps"]]
-print("HO9 ok: step, open PDF, looks right, export (share sheet, cancel, done → Home, shared, done → Home); "
+print("HO9 ok: step, open PDF, make robot code, export (share sheet, cancel, done → Home, shared, done → Home); "
       "HO8 ok: run record untouched; HO11 ok: Home shows the code by step")
 
 # HO2. A changed run record clears the approval: back to ⑨0, said why.
@@ -499,6 +518,29 @@ j = c.post("/input", json={"text": "keep as run", "session": "ho"}).json()
 assert j["reply"] == "Step 4 keeps the time it ran." and \
     c.get("/record").json()["handoff"]["summary"]["rows"][3]["run"] == "18 s", j
 print("HO4c ok: Keep as run / Use plan on the step")
+
+# HO13. Nothing changed: straight to the two choices; Save without code keeps the as-run
+# protocol, goes Home, and the run shows no code (has_code false)
+api.store = st = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+st.spawn_handoff = spawned.append
+st.start_demo_run()
+st.r["done"] = [m for i, stp in enumerate(st.r["plan"]["steps"]) for m in mark(i + 1, *stp.get("wells") or [])]
+st.r["step_index"] = len(st.r["plan"]["steps"]) - 1
+card = st.request_end_run({})[1]["card"]
+j = c.post("/confirm", json={"card_id": card["id"], "ok": True, "session": "ho"}).json()
+run_id = st.r["view"]["current"]["target"]
+assert j["message"].endswith("5 robot steps, as planned. Make robot code, or save without it?"), j
+assert [b["say"] for b in buttons_for("final_protocol", c.get("/record").json()["view"]["slots"])] == [
+    "Make robot code", "Save without code"]
+before = len(spawned)
+j = c.post("/input", json={"text": "save without code", "session": "ho"}).json()
+assert j["reply"] == "Saved the as-run protocol, without robot code." and st.r["view"]["current"]["screen"] == "home", j
+assert len(spawned) == before  # no robot code
+doc = runlog.get(run_id, st.root)
+assert doc["handoff"]["stage"] == "saved" and len(doc["handoff"]["approved"]["steps"]) == 5
+assert c.get(f"/runs/{run_id}").json()["has_code"] is False
+assert next(r for r in c.get("/runs").json()["runs"] if r["run_id"] == run_id)["has_code"] is False
+print("HO13 ok: no changes: the two choices; Save without code: Home, no code")
 
 # Live: the local simulator on the code for these steps (skipped when .venv-sim isn't installed).
 if hand.SIM_PYTHON.exists():

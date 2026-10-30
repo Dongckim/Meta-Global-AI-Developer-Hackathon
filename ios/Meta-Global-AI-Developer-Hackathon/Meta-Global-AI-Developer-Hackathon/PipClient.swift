@@ -139,6 +139,8 @@ struct RunDetailResponse: Decodable {
     let label: String?
     /// The robot code the run became, step by step (nil until it passed).
     let handoff: RunCode?
+    /// Server: the run has robot code (no Code tab without it).
+    let has_code: Bool?
 }
 
 /// A finished run's protocol.py and where each final protocol step sits in

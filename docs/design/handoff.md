@@ -73,7 +73,13 @@ page`, `back`). Final protocol UI may change: the server sends structured
 changes (kind, wells, from, to, event) and the app draws them in one small
 view.
 
-`Looks right` (`approve_handoff`) writes `handoff.approved = {hash, ts,
+Review: changes are opened one at a time (`Review` opens the first not seen,
+Milo says it in one sentence, `Next` goes on; seen rows get a check). When all
+are seen ("Review finished!", Review greyed), or nothing changed, two choices:
+`Make robot code` (⑨) or `Save without code` (keeps the approved as-run
+protocol, goes Home; the run has no Code tab: `has_code` false).
+
+`Make robot code` (`approve_handoff`) writes `handoff.approved = {hash, ts,
 steps}` (hash of plan, done, excluded, redo, skipped, timer_log,
 step_index). Before simulate and export the hash is checked; a changed run
 record clears the approval and returns to ⑨0.

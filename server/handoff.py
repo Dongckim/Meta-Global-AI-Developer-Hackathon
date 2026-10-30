@@ -185,11 +185,14 @@ def changes(record: dict, timing: dict | None = None) -> dict:
                         else f"ran {secs_text(run_s)}")
                 ch.append({"kind": "timer", "wells": [], "from": secs_text(plan_s), "to": secs_text(run_s),
                            "event": "timer", "status": t.get("status") or "", "label": t.get("label") or "",
-                           "text": f"{said} (plan {secs_text(plan_s)})" + (" · using plan" if choice == "plan" else "")})
+                           "text": f"{said} (plan {secs_text(plan_s)})" + (" · using plan" if choice == "plan" else ""),
+                           "speech": f"{step_short_title(st).lower()} {said}, plan was {secs_text(plan_s)}"})
             seconds = run_s if ch and choice == "run" else plan_s
             plan_d, run_d = secs_text(plan_s), secs_text(seconds)
         rows.append({"n": len(rows) + 1, "index": i, "title": step_short_title(st), "detail": run_d,
                      "flagged": bool(ch), "reason": "; ".join(c["text"] for c in ch),
+                     # what Milo says when the step opens in the review: one sentence
+                     "said": "; ".join(c.get("speech") or c["text"] for c in ch),
                      "quote": st.get("quote") or "", "page": st.get("quote_page"),
                      "plan": plan_d, "run": run_d, "changes": ch,
                      **({"seconds": seconds, "plan_s": plan_s, "timing": choice} if not st.get("pipette") else {})})
