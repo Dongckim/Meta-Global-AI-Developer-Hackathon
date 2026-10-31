@@ -18,3 +18,7 @@
 ## 2026-10-31 (not yet a baseline)
 - FLAT_PX 6 -> 12, MIN_WELLS 30 -> 12; ring peaks replaced by SAM "hole" on the flattened reference
 - why: ring peaks fit only 4 of 18 clips on a clear plate, and two of those got worse.
+
+## 2026-10-31 (continuous mode, no baseline change)
+- new rule filled(): FILL_S 1.0, FILL_WINDOW_S 3.0, STOP_MM_S 20, SINK_RATIO off; the clip rule (found_wells) is unchanged
+- why: without spoken wells a stay is the only cue. Cached desk 41/55 false 8, hand 16/16 false 0. The tip-sinking cue gave desk 27/55 false 6, hand 13/16, so it stays off.

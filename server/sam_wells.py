@@ -34,7 +34,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections import Counter
+from collections import Counter, deque
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
@@ -88,6 +88,20 @@ FLAT_PX, MAX_WELL_SHIFT, MIN_WELLS, SHIFT_MARGIN, MAX_WELL_SCALE = 12, 4, 12, 2,
 #: The screen's edge is this share of its size from the plate's box; SAM's plate stands in for an
 #: unmatched frame only when this much of it shows.
 EDGE_GAP, MIN_SHOWN = 0.02, 0.9
+#: Continuous mode's "went in": stopped frames (at most STOP_MM_S) over one well add up to FILL_S
+#: within the last FILL_WINDOW_S. SINK_RATIO: also ask for the tip's mask to shrink to this share of
+#: its size while moving, in the SINK_BACK_S before; off, it lost more hits than false wells (cached:
+#: 41/55 false 8 without, 27/55 false 6 at 1.0).
+FILL_S, FILL_WINDOW_S, STOP_MM_S = 1.0, 3.0, 20.0
+SINK_RATIO, SINK_BACK_S = None, 2.0
+#: A chunk's frame replaces the session's reference when its score (share of the plate showing +
+#: share of the 96 wells SAM finds) beats it by this much.
+REF_MARGIN = 0.15
+#: A chunk's looks for the tip. SAM's image calls run about one at a time however many are sent
+#: (1.6 s each), and a chunk closes every 9 s: 40 a chunk took 270 s, and dropped connections.
+CHUNK_TIP_LOOKS = 3
+#: Tries of an image call whose connection dropped.
+IMAGE_TRIES = 3
 
 
 class ClipTooLong(ValueError):
@@ -397,6 +411,40 @@ def found_wells(track: list, fps: float, dwell_s: float = DWELL_S, dwell_mm: flo
     return found
 
 
+def _sunk(track: list, f0: int, visit: list, fps: float, ratio: float) -> bool:
+    """The tip's mask smaller over the well than while it moved just before; nothing moved: True."""
+    size = lambda t: sorted(t)[len(t) // 2]  # noqa: E731
+    moving = [q[2] for p, q in zip(track, track[1:]) if f0 - SINK_BACK_S * fps <= q[0] < f0
+              and math.dist(p[1], q[1]) * fps / (q[0] - p[0]) > STOP_MM_S]
+    return not moving or size([t[2] for t in visit]) <= ratio * size(moving)
+
+
+def filled(track: list, fps: float, sink: float | None = SINK_RATIO) -> list:
+    """track as dwells' -> [{"well", "frame", "f0"}]: the frame a well's stopped time reached
+    FILL_S within FILL_WINDOW_S, and that time's first frame. Another well must come between
+    two of the same, and the tip must leave the spot first: one stay on the line between two
+    wells would otherwise fill both, in turns."""
+    recent, out, spot = deque(), [], None
+    for p, q in zip(track, track[1:]):
+        step = (q[0] - p[0]) / fps
+        well = cell_at(q[1])
+        if spot and math.dist(q[1], spot) > DWELL_MM:
+            spot = None
+        if spot or not well or q[0] - p[0] > MAX_MISSING + 1 or math.dist(p[1], q[1]) / step > STOP_MM_S:
+            continue
+        recent.append((q[0], well, step, q))
+        while recent[0][0] < q[0] - FILL_WINDOW_S * fps:
+            recent.popleft()
+        here = [r for r in recent if r[1] == well]
+        if sum(r[2] for r in here) < FILL_S - 1e-9 or (out and out[-1]["well"] == well):
+            continue
+        if sink is None or _sunk(track, here[0][0], [r[3] for r in here], fps, sink):
+            out.append({"well": well, "frame": q[0], "f0": here[0][0]})
+            spot = q[1]
+            recent.clear()
+    return out
+
+
 def compare_settings(attempts: list) -> dict:
     """attempts: [(targets, track, fps)] -> every dwell_s x dwell_mm on all of
     them, and the best (most wells hit, then fewest false, then most in order)."""
@@ -476,8 +524,14 @@ class MetaSam:
 
     def image(self, target: str, png: Path) -> list:
         body = look.build_sam_body(target, look.data_url(png.read_bytes(), "image/png"))
-        r = self.client.post(f"{BASE_URL}/responses", json=body,
-                             headers={**self.headers, "Accept": "text/event-stream"})
+        for attempt in range(IMAGE_TRIES):
+            try:
+                r = self.client.post(f"{BASE_URL}/responses", json=body,
+                                     headers={**self.headers, "Accept": "text/event-stream"})
+                break
+            except httpx.TransportError:
+                if attempt == IMAGE_TRIES - 1:
+                    raise
         r.raise_for_status()
         return look.matches(look.sse_text(r.text))
 
@@ -650,6 +704,16 @@ def object_prompt(prompts: dict, size: tuple) -> str:
             fps_.append(FramePrompt(frame=n, box=box))
         objs.append(PromptObject(id=oid, prompts=fps_))
     return build_object_prompt(size=size, objects=objs)
+
+
+def best_of_all(sam, target: str, fdir: Path, frames: list):
+    """(frame, match): the most confident of these frames; None without one. For a chunk, which
+    may not have the tip at all: best_detect keeps asking until it hits."""
+    pull(fdir, frames)
+    with ThreadPoolExecutor(len(frames)) as pool:
+        got = list(pool.map(lambda n: sam.image(target, frame_png(fdir, n)), frames))
+    hits = [(n, g[0]) for n, g in zip(frames, got) if g]
+    return max(hits, key=lambda h: h[1]["c"]) if hits else None
 
 
 def tip_gap(recs: dict, nframes: int, after: int, gap: int) -> int | None:
@@ -828,13 +892,7 @@ def follow_plate(clip: Path, recs: dict, nframes: int, find=None) -> dict:
     covered plate will do. -> {"quads": {frame: corners}, "ref", "redone", "kept"}."""
     import cv2
     import numpy as np
-    video, frames = cv2.VideoCapture(str(clip)), {}
-    for n in range(nframes):
-        ok, img = video.read()
-        if not ok:
-            break
-        frames[n] = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    video.release()
+    frames = gray_frames(clip, nframes)
     none = {"quads": {}, "ref": None, "redone": 0, "kept": 0, "wells": 0}
     if not frames:
         return none
@@ -845,23 +903,60 @@ def follow_plate(clip: Path, recs: dict, nframes: int, find=None) -> dict:
     quad0, wells = [tuple(map(float, p)) for p in plate_corners(mask_points(recs[ref][1], 2))], 0
     if find:
         quad0, wells = fit_wells(frames[ref], quad0, find)
-    corners0 = np.float32(quad0).reshape(-1, 1, 2)
     orb = cv2.ORB_create(ORB_FEATURES)
-    tip_at = lambda n: mask_points(recs[n][2], 2) if 2 in recs.get(n, {}) else None  # noqa: E731
-    plate_at = lambda n: seen_points(recs[n][1]) if 1 in recs.get(n, {}) else [(0, 0)]  # noqa: E731
-    kps, des = orb.detectAndCompute(frames[ref], _region(frames[ref], quad0, tip_at(ref), plate_at(ref)))
-    if des is None or len(kps) < MIN_INLIERS:
+    base = orb_base(orb, frames[ref], quad0, _tip_at(recs, ref), _plate_at(recs, ref))
+    if base is None:
         return none
-    base = (np.float32([k.pt for k in kps]), des)
-    reach = MATCH_PITCHES * pitch_px(plate_h(plate_quad(quad0, "tl")))
     out = {"quads": {ref: quad0}, "ref": ref, "redone": 0, "kept": 0, "wells": wells}
-    for way in (range(ref + 1, nframes), range(ref - 1, -1, -1)):
-        last, stuck = np.eye(3), 0
+    _carry(orb, base, frames, recs, quad0, (range(ref + 1, nframes), range(ref - 1, -1, -1)), np.eye(3), out)
+    return out
+
+
+def gray_frames(clip: Path, nframes: int) -> dict:
+    """{frame: its gray image}."""
+    import cv2
+    video, frames = cv2.VideoCapture(str(clip)), {}
+    for n in range(nframes):
+        ok, img = video.read()
+        if not ok:
+            break
+        frames[n] = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    video.release()
+    return frames
+
+
+def _tip_at(recs: dict, n: int) -> list | None:
+    return mask_points(recs[n][2], 2) if 2 in recs.get(n, {}) else None
+
+
+def _plate_at(recs: dict, n: int) -> list:
+    return seen_points(recs[n][1]) if 1 in recs.get(n, {}) else [(0, 0)]
+
+
+def orb_base(orb, gray, quad: list, tip: list | None, plate: list) -> tuple | None:
+    """The reference's features, or None with too few."""
+    import numpy as np
+    kps, des = orb.detectAndCompute(gray, _region(gray, quad, tip, plate))
+    if des is None or len(kps) < MIN_INLIERS:
+        return None
+    return np.float32([k.pt for k in kps]), des
+
+
+def _carry(orb, base: tuple, frames: dict, recs: dict, quad0: list, ways: tuple, start, out: dict) -> None:
+    """The plate's corners onto the frames of each way, from homography `start`."""
+    import cv2
+    import numpy as np
+    h, w = next(iter(frames.values())).shape
+    corners0 = np.float32(quad0).reshape(-1, 1, 2)
+    reach = MATCH_PITCHES * pitch_px(plate_h(plate_quad(quad0, "tl")))
+    for way in ways:
+        last, stuck = start, 0
         for n in way:
             if n not in frames:
                 continue
             lost = stuck >= LOST_FRAMES
-            found = _follow(orb, base, frames[n], tip_at(n), plate_at(n), last, quad0, reach * (LOST_REACH if lost else 1))
+            found = _follow(orb, base, frames[n], _tip_at(recs, n), _plate_at(recs, n), last, quad0,
+                            reach * (LOST_REACH if lost else 1))
             if found is not None:
                 quad = [tuple(map(float, p)) for p in cv2.perspectiveTransform(corners0, found).reshape(-1, 2)]
                 if not distorted(quad):  # a good inlier count on the wrong wells bends the grid
@@ -878,7 +973,88 @@ def follow_plate(clip: Path, recs: dict, nframes: int, find=None) -> dict:
                 out["quads"][n] = [tuple(map(float, p)) for p in cv2.perspectiveTransform(corners0, last).reshape(-1, 2)]
                 out["kept"] += 1
                 stuck += 1
+
+
+# ---------- continuous: the plate once a session ----------
+
+def plate_score(plate: dict, wells: int) -> float:
+    return shown(plate) + min(wells, 96) / 96
+
+
+def ref_candidate(sam, gray, plate: dict, frame: int) -> dict | None:
+    """This frame as the session's reference: None when the plate touches the screen's edge or
+    its grid is bent. The grid is fitted to the wells SAM finds there."""
+    size = gray.shape[::-1]
+    pts = mask_points(plate, 2)
+    if touches_edge(plate, size) or distorted(plate_corners(pts)):
+        return None
+    quad = [tuple(map(float, p)) for p in plate_corners(pts)]
+    quad, wells = fit_wells(gray, quad, lambda png: sam.image(WELL, png))
+    return {"gray": gray, "quad": quad, "seen": seen_points(plate), "wells": wells, "frame": frame,
+            "score": plate_score(plate, wells)}
+
+
+def follow_chunk(frames: dict, recs: dict, ref: dict, start: int) -> dict:
+    """{"quads", ...} for a chunk from the session's reference. SAM's plate on frame `start` says
+    roughly where the plate is now, and matching takes it from there both ways."""
+    import cv2
+    import numpy as np
+    orb = cv2.ORB_create(ORB_FEATURES)
+    out = {"quads": {}, "redone": 0, "kept": 0}
+    base = orb_base(orb, ref["gray"], ref["quad"], None, ref["seen"])
+    if base is None:
+        return out
+    here = np.float32(plate_corners(mask_points(recs[start][1], 2)))
+    first = cv2.getPerspectiveTransform(np.float32(ref["quad"]), here)
+    _carry(orb, base, frames, recs, ref["quad"], (range(start, len(frames)), range(start - 1, -1, -1)), first, out)
     return out
+
+
+def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) -> dict:
+    """One chunk of a continuous session -> its tip track in plate mm (frames from the chunk's
+    start) and times. `session`: offer(candidate) keeps the better reference, ref() gives it. A
+    chunk with no tip is {"track": []}: no SAM video."""
+    t, t_all = {}, time.perf_counter()
+    info = ffprobe(clip)
+    nframes, fps = info["frames"], info["fps"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    looks = [(2 * i + 1) * nframes // (2 * CHUNK_TIP_LOOKS) for i in range(CHUNK_TIP_LOOKS)]
+    fdir = frames_dir(clip, looks)
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor(1) as pool:
+        finding_plate = pool.submit(lambda: next(filter(None, (best_of_all(sam, PLATE, fdir, [n])
+                                                               for n in sorted(looks, key=lambda n: abs(n - nframes / 2)))), None))
+        tip0 = best_of_all(sam, pointer, fdir, looks)
+        plate0 = finding_plate.result()
+    t["first_find_s"] = time.perf_counter() - t0
+    gray = gray_frames(clip, nframes)
+    if plate0:
+        t0 = time.perf_counter()
+        cand = ref_candidate(sam, gray[plate0[0]], plate0[1], plate0[0])
+        t["reference_s"] = time.perf_counter() - t0
+        if cand:
+            session.offer({**cand, "chunk": out_dir.name})
+    if not plate0 or not tip0:
+        shutil.rmtree(fdir)
+        t["total_s"] = time.perf_counter() - t_all
+        return {"frames": nframes, "fps": fps, "track": [], "timing": t, "why": "no plate" if not plate0 else "no tip"}
+    prompts = {1: [plate0], 2: [tip0]}
+    _, recs, rounds = track_video(clip, out_dir, sam, prompts, nframes, fps, fdir, pointer, t)
+    shutil.rmtree(fdir)
+    t0 = time.perf_counter()
+    decode_masks(recs)
+    t["masks_s"] = time.perf_counter() - t0
+    ref = session.ref()
+    if ref is None or 1 not in recs.get(plate0[0], {}):
+        t["total_s"] = time.perf_counter() - t_all
+        return {"frames": nframes, "fps": fps, "track": [], "timing": t, "why": "no reference"}
+    t0 = time.perf_counter()
+    followed = follow_chunk(gray, recs, ref, plate0[0])
+    t["follow_s"] = time.perf_counter() - t0
+    track, *_ = locate(recs, nframes, a1, quads=followed["quads"])
+    t["total_s"] = time.perf_counter() - t_all
+    return {"frames": nframes, "fps": fps, "track": [[n, mm[0], mm[1], a] for n, mm, a in track], "timing": t,
+            "rounds": rounds, "redone": followed["redone"], "kept": followed["kept"]}
 
 
 # ---------- one clip ----------
@@ -917,33 +1093,11 @@ def locate(recs: dict, nframes: int, a1: str, say=_quiet, quads: dict | None = N
     return track, per, pitches, fails
 
 
-def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_quiet) -> dict:
-    """Everything one clip gives: clip facts, the tip track (plate mm, so
-    other dwell settings rerun without SAM), wells found, failures, timing,
-    check images in out_dir. say(stage, done, total) tells how far it is."""
-    t, t_all = {}, time.perf_counter()
-    say("Reading the clip's frames")
-    info = ffprobe(clip)
-    if info["duration_s"] > MAX_CLIP_S + 0.5:
-        raise ClipTooLong(f"clip is {info['duration_s']:.0f} s (max {MAX_CLIP_S} s)")
-    t0 = time.perf_counter()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    nframes, fps = info["frames"], info["fps"]
-    fdir = frames_dir(clip, list(range(0, nframes, scan_step(fps))))
-    t["frames_s"] = time.perf_counter() - t0
-
-    t0 = time.perf_counter()
-    with ThreadPoolExecutor(1) as pool:  # sam-3.1 allows 3,000 a minute, no limit on concurrency
-        finding_plate = pool.submit(best_detect, sam, PLATE, fdir, nframes, fps)
-        tip0 = best_detect(sam, pointer, fdir, nframes, fps, say=say)
-        plate0 = finding_plate.result()
-    t["first_find_s"] = time.perf_counter() - t0
-    missing = [x for x, d in ((PLATE, plate0), (pointer, tip0)) if not d]
-    if missing:
-        raise RuntimeError(f"SAM found no {' and no '.join(missing)} on any sampled frame")
-    size = (plate0[1]["w"], plate0[1]["h"])
-    prompts = {1: [plate0], 2: [tip0]}
-
+def track_video(clip: Path, out_dir: Path, sam, prompts: dict, nframes: int, fps: float, fdir: Path,
+                pointer: str, t: dict, say=_quiet) -> tuple:
+    """The clip re-encoded, uploaded and tracked from `prompts`, found again when the tip goes
+    missing (prompts grows). -> (SAM's text, its records, rounds); t gets the times."""
+    size = (prompts[1][0][1]["w"], prompts[1][0][1]["h"])
     t0 = time.perf_counter()
     say("Uploading the clip to SAM")
     sent = out_dir / "clip_sam.mp4"
@@ -977,6 +1131,35 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
         if not again or any(n == again[0] for n, _ in prompts[2]):
             break
         prompts[2].append(again)
+    return text, recs, rounds
+
+
+def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_quiet) -> dict:
+    """Everything one clip gives: clip facts, the tip track (plate mm, so
+    other dwell settings rerun without SAM), wells found, failures, timing,
+    check images in out_dir. say(stage, done, total) tells how far it is."""
+    t, t_all = {}, time.perf_counter()
+    say("Reading the clip's frames")
+    info = ffprobe(clip)
+    if info["duration_s"] > MAX_CLIP_S + 0.5:
+        raise ClipTooLong(f"clip is {info['duration_s']:.0f} s (max {MAX_CLIP_S} s)")
+    t0 = time.perf_counter()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    nframes, fps = info["frames"], info["fps"]
+    fdir = frames_dir(clip, list(range(0, nframes, scan_step(fps))))
+    t["frames_s"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor(1) as pool:  # sam-3.1 allows 3,000 a minute, no limit on concurrency
+        finding_plate = pool.submit(best_detect, sam, PLATE, fdir, nframes, fps)
+        tip0 = best_detect(sam, pointer, fdir, nframes, fps, say=say)
+        plate0 = finding_plate.result()
+    t["first_find_s"] = time.perf_counter() - t0
+    missing = [x for x, d in ((PLATE, plate0), (pointer, tip0)) if not d]
+    if missing:
+        raise RuntimeError(f"SAM found no {' and no '.join(missing)} on any sampled frame")
+    prompts = {1: [plate0], 2: [tip0]}
+    text, recs, rounds = track_video(clip, out_dir, sam, prompts, nframes, fps, fdir, pointer, t, say)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "sam_video.txt").write_text(text)
     (out_dir / "detections.json").write_text(json.dumps(

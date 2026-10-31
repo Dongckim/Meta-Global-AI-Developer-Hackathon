@@ -86,7 +86,7 @@ def fill(clip: str) -> None:
 
 def follow_key() -> str:
     """Changes with the following's code or values."""
-    code = [sw.follow_plate, sw.fit_wells, sw._follow, sw._region, sw.best_frame, sw.touches_edge, sw.distorted, sw.convex, sw.plate_corners]
+    code = [sw.follow_plate, sw._carry, sw.fit_wells, sw._follow, sw._region, sw.best_frame, sw.touches_edge, sw.distorted, sw.convex, sw.plate_corners]
     text = "".join(inspect.getsource(f) for f in code) + json.dumps(values())
     return hashlib.sha1(text.encode()).hexdigest()
 
@@ -125,7 +125,9 @@ def run(item: dict) -> dict:
     track, per, *_ = sw.locate(recs, meta["frames"], meta["a1"], quads=f["quads"])
     found = [w for w, *_ in sw.found_wells(track, meta["fps"])]
     j = sw.judge(item["targets"], found)
-    return {**item, "fps": meta["fps"], "size": f"{meta['w']}x{meta['h']}", "w": meta["w"], "h": meta["h"],
+    live = {name: sw.judge(item["targets"], [w["well"] for w in sw.filled(track, meta["fps"], sink)])
+            for name, sink in (("stopped", None), ("stopped and sinking", 1.0))}
+    return {**item, "live": live, "fps": meta["fps"], "size": f"{meta['w']}x{meta['h']}", "w": meta["w"], "h": meta["h"],
             "found": found, "hits": j["hits"], "total": j["total"], "false": j["false"],
             "missed": [w["well"] for w in j["wells"] if not w["ok"]],
             "bent": sum(sw.distorted(p[2]) for p in per.values() if p[2]), "frames": meta["frames"],
@@ -158,6 +160,10 @@ def table(rows: list, base: dict) -> tuple:
         rs = [r for r in rows if r["where"] == where]
         lines.append(f"\n{where}: {sum(r['hits'] for r in rs)}/{sum(r['total'] for r in rs)} wells, "
                      f"{sum(len(r['false']) for r in rs)} false, {len(rs)} clips")
+        for rule in ("stopped", "stopped and sinking"):
+            js = [r["live"][rule] for r in rs]
+            lines.append(f"\n{where}, continuous rule ({rule}): {sum(j['hits'] for j in js)}/{sum(j['total'] for j in js)} wells, "
+                         f"{sum(len(j['false']) for j in js)} false")
     return lines, worse
 
 

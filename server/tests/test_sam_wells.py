@@ -370,4 +370,108 @@ fit14, wells14 = sw.fit_wells(gray14, off14, holes14)
 assert wells14 >= 60 and all(sw.math.dist(a, b) < 3 for a, b in zip(fit14, true14)), (wells14, fit14)
 assert sw.fit_wells(gray14, off14, lambda png: holes14(png, 5)) == (off14, 0)
 print("SW14 ok: the grid sits on the wells")
+
+# SW15. Continuous "went in": stopped time on one well within 3 s; a pass over a well doesn't count;
+# time spread over longer than the window doesn't add up; a well comes back only after another.
+FP = 7
+well_mm = lambda r, c: sw.well_center_mm(r, c)  # noqa: E731
+stay = lambda f0, n, r, c, a=100: [(f0 + i, well_mm(r, c), a) for i in range(n)]  # noqa: E731
+got = sw.filled(stay(0, 9, 1, 2), FP)
+assert [(w["well"], w["f0"]) for w in got] == [("B3", 1)] and got[0]["frame"] == 7, got
+assert sw.filled(stay(0, 5, 1, 2), FP) == []  # 4 steps, 0.57 s
+moving = [(i, (well_mm(1, 0)[0] + i * 5, well_mm(1, 0)[1]), 100) for i in range(40)]  # 35 mm/s
+assert sw.filled(moving, FP) == []
+hover = stay(0, 5, 1, 2) + stay(30, 5, 1, 2)  # 4 s apart
+assert sw.filled(hover, FP) == []
+assert [w["well"] for w in sw.filled(stay(0, 9, 1, 2) + stay(20, 9, 1, 3) + stay(40, 9, 1, 2), FP)] == ["B3", "B4", "B3"]
+assert [w["well"] for w in sw.filled(stay(0, 9, 1, 2) + stay(20, 9, 1, 2), FP)] == ["B3"]
+line = [(i, ((well_mm(1, 2)[0] + well_mm(0, 2)[0]) / 2, 15.74 + (-1) ** i * 0.3), 100) for i in range(40)]
+assert len(sw.filled(line, FP)) == 1  # one stay on the line between A3 and B3 fills one
+# With sinking asked for: the tip must show less over the well than while moving.
+run_in = [(i, (well_mm(1, 2)[0] + (9 - i) * 5, well_mm(1, 2)[1]), 100) for i in range(9)]
+assert sw.filled(run_in + stay(9, 9, 1, 2, a=100), FP, 0.9) == []
+assert [w["well"] for w in sw.filled(run_in + stay(9, 9, 1, 2, a=60), FP, 0.9)] == ["B3"]
+print("SW15 ok: stopped time on a well, within the window")
+
+# SW16. A continuous session through the endpoints: the wells come from the joined timeline, a chunk
+# with no tip is fine, a late chunk holds back the ones after it, a stay across a boundary counts once.
+from server import lab_sam_live as live  # noqa: E402
+live.ROOT = lab_sam.ROOT.parent / "sam_live_test"
+c16 = TestClient(api.app)
+for bad in ({"a1": "xx"}, {"pointer": "spoon"}):
+    assert c16.post("/lab/sam-wells/live", json=bad).status_code == 400
+sid = c16.post("/lab/sam-wells/live", json={"a1": "tl", "pointer": "pen"}).json()["id"]
+assert c16.get("/lab/sam-wells/live/nope").status_code == 404
+real16 = sw.track_chunk
+
+
+def fake_chunk(clip, a1, sam, out, pointer, session):
+    n = int(out.name)
+    session.offer({"chunk": out.name, "frame": 0, "wells": 10 * (n + 1), "score": [0.5, 0.6, 1.0][n % 3]})
+    wait[n].wait(5)
+    return chunks16[n]
+
+
+import threading  # noqa: E402
+wait = {n: threading.Event() for n in range(3)}
+track_of16 = lambda f0, n, r, c: [[f, *well_mm(r, c), 100] for f in range(f0, f0 + n)]  # noqa: E731
+chunks16 = {0: {"fps": 7.0, "frames": 70, "track": track_of16(60, 10, 1, 2), "timing": {}},  # frames 60-69
+            1: {"fps": 7.0, "frames": 70, "track": track_of16(0, 7, 1, 2) + track_of16(50, 9, 3, 4), "timing": {}},  # 63-69, 113-121
+            2: {"fps": 7.0, "frames": 70, "track": [], "timing": {}, "why": "no tip"}}
+sw.track_chunk = fake_chunk
+send16 = lambda n: c16.post(f"/lab/sam-wells/live/{sid}/chunks", data={"n": n, "start": n * 63},  # noqa: E731
+                            files={"clip": ("c.mp4", b"x", "video/mp4")})
+wait[1].set()
+wait[2].set()
+threads16 = [threading.Thread(target=send16, args=(n,)) for n in (1, 2)]
+for t16 in threads16:
+    t16.start()
+for t16 in threads16:
+    t16.join()
+s16 = c16.get(f"/lab/sam-wells/live/{sid}").json()
+assert s16["wells"] == [] and not s16["done"], s16  # chunk 0 still missing
+assert send16(1).status_code == 400  # already here
+wait[0].set()
+assert send16(0).status_code == 200
+s16 = c16.post(f"/lab/sam-wells/live/{sid}/stop").json()
+assert s16["done"] and [w["well"] for w in s16["wells"]] == ["B3", "D5"], s16
+assert [c["status"] for c in s16["chunks"]] == ["done", "done", "empty"], s16
+assert s16["references"][-1]["chunk"] == "2", s16["references"]
+one16 = live.Live("x", "tl", "pen")
+for score, name in ((0.5, "a"), (0.6, "b"), (1.0, "c")):  # 0.6 isn't clearly better than 0.5
+    one16.offer({"chunk": name, "frame": 0, "wells": 0, "score": score})
+assert [r["chunk"] for r in one16.refs] == ["a", "c"]
+sw.track_chunk = real16
+print("SW16 ok: a continuous session joins its chunks")
+
+# SW17. track_chunk: a chunk with no tip spends no SAM video; with one, plate mm come from the session's reference.
+
+
+class Ref16:
+    def __init__(self):
+        self.got = None
+
+    def offer(self, cand):
+        self.got = self.got or cand
+
+    def ref(self):
+        return self.got
+
+
+class NoTip(FakeSam):
+    def image(self, target, png):
+        return [] if target == "pen" else FakeSam.image(self, target, png)
+
+    def video(self, *a, **k):
+        raise AssertionError("no video without a tip")
+
+
+out17 = Path(tempfile.mkdtemp())
+FakeSam.targets = ["B3"]
+r17 = sw.track_chunk(clip, "tl", NoTip(), out17 / "0", "pen", Ref16())
+assert r17["track"] == [] and r17["why"] == "no tip", r17
+session17 = Ref16()
+r17 = sw.track_chunk(clip, "tl", FakeSam(), out17 / "1", "pen", session17)
+assert session17.got and r17["track"], r17
+print("SW17 ok: a chunk without a tip is empty, one with a tip tracks")
 print("ALL PASS")
