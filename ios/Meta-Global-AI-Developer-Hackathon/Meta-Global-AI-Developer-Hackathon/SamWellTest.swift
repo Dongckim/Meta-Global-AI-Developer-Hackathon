@@ -170,6 +170,68 @@ enum SamWellAPI {
         let _: Attempt = try await send(req)
     }
 
+    // Continuous
+
+    struct Live: Decodable {
+        struct Well: Decodable {
+            let well: String
+            let frame: Int
+            let f0: Int
+        }
+        struct Chunk: Decodable {
+            let n: Int
+            let status: String
+            let why: String?
+            let error: String?
+            let timing: [String: Double]?
+        }
+        struct Reference: Decodable {
+            let chunk: String
+            let frame: Int
+            let wells: Int
+        }
+        let id: String
+        let wells: [Well]
+        let done: Bool
+        let chunks: [Chunk]
+        let references: [Reference]
+    }
+
+    static func newLive(a1: String, pointer: String) async throws -> Live {
+        var req = URLRequest(url: url("live"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["a1": a1, "pointer": pointer])
+        return try await send(req)
+    }
+
+    static func live(_ id: String) async throws -> Live { try await send(URLRequest(url: url("live/\(id)"))) }
+
+    static func stopLive(_ id: String) async throws -> Live {
+        var req = URLRequest(url: url("live/\(id)/stop"))
+        req.httpMethod = "POST"
+        return try await send(req)
+    }
+
+    static func uploadChunk(live id: String, n: Int, start: Int, clip: URL) async throws {
+        struct Out: Decodable { let n: Int }
+        let boundary = "----samwell\(UUID().uuidString)"
+        var body = Data()
+        for (k, v) in [("n", "\(n)"), ("start", "\(start)")] {
+            body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(k)\"\r\n\r\n\(v)\r\n".utf8))
+        }
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"clip\"; filename=\"chunk.mp4\"\r\n".utf8))
+        body.append(Data("Content-Type: application/octet-stream\r\n\r\n".utf8))
+        body.append(try Data(contentsOf: clip))
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        var req = URLRequest(url: url("live/\(id)/chunks"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 60
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        let _: Out = try await send(req)
+    }
+
     static func imageURL(session: String, attempt: Int, name: String) -> URL {
         url("sessions/\(session)/attempts/\(attempt)/images/\(name)")
     }
@@ -243,8 +305,10 @@ final class WellCam: @unchecked Sendable {
     private var pendingURL: URL?
     private var fps = 2
 
-    private func open(width: Int, height: Int) {
-        guard let url = pendingURL, let w = try? AVAssetWriter(outputURL: url, fileType: .mp4) else { return }
+    /// A started H.264 .mp4 writer from time zero, or nil.
+    static func writer(url: URL, width: Int, height: Int, fps: Int)
+        -> (AVAssetWriter, AVAssetWriterInput, AVAssetWriterInputPixelBufferAdaptor)? {
+        guard let w = try? AVAssetWriter(outputURL: url, fileType: .mp4) else { return nil }
         let settings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height,
             // ~0.6 bits a pixel a frame (3.9 Mbps at 720×1280, 7 fps): the frames come
@@ -257,10 +321,15 @@ final class WellCam: @unchecked Sendable {
         let i = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         i.expectsMediaDataInRealTime = true
         let a = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: i, sourcePixelBufferAttributes: nil)
-        guard w.canAdd(i) else { return }
+        guard w.canAdd(i) else { return nil }
         w.add(i)
         w.startWriting()
         w.startSession(atSourceTime: .zero)
+        return (w, i, a)
+    }
+
+    private func open(width: Int, height: Int) {
+        guard let url = pendingURL, let (w, i, a) = Self.writer(url: url, width: width, height: height, fps: fps) else { return }
         (writer, input, adaptor, first) = (w, i, a, .zero)
     }
 
@@ -313,6 +382,7 @@ struct SamWellTestView: View {
     @State private var a1 = "tl"
     @State private var pointer = "pen"
     @State private var opened: String?
+    @State private var continuous = false
     @State private var error: String?
 
     var body: some View {
@@ -327,6 +397,7 @@ struct SamWellTestView: View {
                     Text("Pipette tip").tag("pipette tip")
                 }
                 .pickerStyle(.segmented)
+                Button("Continuous (no target wells)") { continuous = true }
                 Button("Start session (5 attempts)") {
                     Task {
                         do { opened = try await SamWellAPI.newSession(a1: a1, pointer: pointer).id } catch { self.error = error.localizedDescription }
@@ -352,6 +423,7 @@ struct SamWellTestView: View {
         }
         .navigationTitle("SAM well test")
         .navigationDestination(item: $opened) { SamWellSessionView(sessionID: $0, dat: dat) }
+        .navigationDestination(isPresented: $continuous) { SamWellLiveView(dat: dat, a1: a1, pointer: pointer) }
         .task(id: opened) {
             if opened == nil { rows = (try? await SamWellAPI.sessions()) ?? rows }
         }
@@ -474,21 +546,7 @@ struct SamWellSessionView: View {
                 .font(.system(size: 54, weight: .bold, design: .rounded))
                 .frame(maxWidth: .infinity)
             ZStack(alignment: .topLeading) {
-                Group {
-                    if let img = dat?.liveFrame {
-                        Color.black.overlay(Image(uiImage: img).resizable().scaledToFill())
-                    } else {
-                        Color.black.overlay(Text("Waiting for the glasses' camera…").foregroundStyle(.white))
-                    }
-                }
-                // the plate's shape (the middle of the 9:16 frame); the clip keeps the whole frame
-                .aspectRatio(127.76 / 85.48, contentMode: .fit)
-                .overlay {
-                    if let aimQuad, let size = dat?.liveFrame?.size {
-                        AimOutline(quad: aimQuad, image: size).stroke(.green, lineWidth: 3)
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                SamWellPreview(dat: dat, aimQuad: aimQuad)
                 TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
                     HStack {
                         Text((cam.rate ?? "no frames") + " from the glasses (asked 720×1280 · \(fps) fps)")
@@ -501,6 +559,7 @@ struct SamWellSessionView: View {
                     .padding(8)
                 }
             }
+            .frame(height: 640)  // the page scrolls, so a tall frame needs a height to fit in
             .frame(maxWidth: .infinity)
             if let clipReport { Text("Last clip: \(clipReport)").font(.caption.monospacedDigit()) }
             Toggle("Sounds", isOn: $soundOn)
@@ -582,6 +641,30 @@ struct SamWellSessionView: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+/// The whole glasses frame, with the aiming outline.
+struct SamWellPreview: View {
+    var dat: GlassesDAT?
+    var aimQuad: [CGPoint]?
+
+    var body: some View {
+        Group {
+            if let img = dat?.liveFrame {
+                Color.black.overlay(Image(uiImage: img).resizable().scaledToFill())
+            } else {
+                Color.black.overlay(Text("Waiting for the glasses' camera…").foregroundStyle(.white))
+            }
+        }
+        // the frame's own shape, so the whole frame shows (as the clip keeps it)
+        .aspectRatio(dat?.liveFrame?.size ?? CGSize(width: 9, height: 16), contentMode: .fit)
+        .overlay {
+            if let aimQuad, let size = dat?.liveFrame?.size {
+                AimOutline(quad: aimQuad, image: size).stroke(.green, lineWidth: 3)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 
