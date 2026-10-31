@@ -24,12 +24,15 @@ flow never calls it.
 
 import json
 import math
+import os
 import random
 import re
 import subprocess
 import tempfile
 import time
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 import httpx
@@ -462,6 +465,10 @@ def video_records(text: str) -> dict:
     return out
 
 
+def _quiet(stage: str, done: int | None = None, total: int | None = None) -> None:
+    pass
+
+
 def mask_points(match: dict, step: int = 1) -> list:
     """Mask pixels as source-pixel points (cell centers); the box corners when unreadable.
     A match from the cache (compact()) already has its points."""
@@ -481,6 +488,25 @@ def mask_points(match: dict, step: int = 1) -> list:
     return pts or [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
 
 
+def _points2(match: dict) -> list:
+    return mask_points(match, 2)
+
+
+def decode_masks(recs: dict, say=_quiet) -> None:
+    """Every mask's points onto its match, on all CPUs: a mask is arithmetic-coded (each bit's
+    odds depend on the last), so one can't be sped up, but they don't depend on each other."""
+    todo = [m for r in recs.values() for m in r.values() if m.get("mask")]
+    if not todo:
+        return
+    try:
+        with ProcessPoolExecutor(os.cpu_count()) as pool:
+            for i, (m, pts) in enumerate(zip(todo, pool.map(_points2, todo, chunksize=8))):
+                m["points"] = pts
+                say("Reading the masks", i, len(todo))
+    except BrokenProcessPool as e:  # locate decodes what's left itself
+        print(f"sam wells: mask workers failed ({e}); one at a time", flush=True)
+
+
 def compact(recs: dict) -> dict:
     """SAM's records as locate() reads them without decoding masks: JSON-ready. The plate
     keeps only its outline (all plate_corners uses), the tip every other pixel (as locate)."""
@@ -492,10 +518,6 @@ def compact(recs: dict) -> dict:
 def expand(saved: dict) -> dict:
     """compact()'s JSON back in video_records' shape."""
     return {int(n): {int(oid): m for oid, m in r.items()} for n, r in saved.items()}
-
-
-def _quiet(stage: str, done: int | None = None, total: int | None = None) -> None:
-    pass
 
 
 def best_detect(sam, target: str, fdir: Path, nframes: int, fps: float, start: int = 0, say=_quiet):
@@ -677,9 +699,15 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
         {oid: [{"frame": n, **{k: m[k] for k in ("box", "w", "h", "c")}} for n, m in items]
          for oid, items in prompts.items()}))
 
+    t0 = time.perf_counter()
+    decode_masks(recs, say)
+    t["masks_s"] = time.perf_counter() - t0
+    t0 = time.perf_counter()
     track, per, pitches, fails = locate(recs, nframes, a1, say)
+    t["grid_s"] = time.perf_counter() - t0
     found = found_wells(track, fps)
 
+    t0 = time.perf_counter()
     images = []
     pick = {rep: w for w, rep, *_ in found}
     for n in [round(i * (nframes - 1) / 3) for i in range(4)]:
@@ -700,6 +728,7 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
     for f in fdir.glob("*.png"):
         f.unlink()
     fdir.rmdir()
+    t["images_s"] = time.perf_counter() - t0
 
     pitches.sort()
     pitch = pitches[len(pitches) // 2] if pitches else 0.0
