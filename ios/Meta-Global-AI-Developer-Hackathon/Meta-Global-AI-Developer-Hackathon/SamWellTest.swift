@@ -343,6 +343,11 @@ struct SamWellSessionView: View {
     /// with less compression a frame than 15. SAM gets every frame.
     private let fps: UInt = 7
     @State private var cam = WellCam()
+    @AppStorage("samwell.sound") private var soundOn = true
+    @AppStorage("samwell.sayPlate") private var sayPlate = true
+    @State private var aimState = PlateAimState()
+    @State private var aimQuad: [CGPoint]?
+    @State private var finder: PlateFinder?
     @State private var recordingUntil: Date?
     @State private var uploading = false
     @State private var uploadMB = 0.0
@@ -401,12 +406,17 @@ struct SamWellSessionView: View {
         }
         .onAppear {
             let cam = cam
-            dat?.frameTap.set { cam.frame($0) }
+            let finder = PlateFinder { quad in Task { @MainActor in aimed(quad) } }
+            self.finder = finder
+            dat?.frameTap.set { cam.frame($0); finder.frame($0) }
             live()
         }
         .onDisappear {
             dat?.frameTap.set(nil)
             dat?.stopLive()
+            finder = nil
+            aimQuad = nil
+            aimState = PlateAimState()
         }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.mpeg4Movie, .quickTimeMovie]) { r in
             if case .success(let url) = r { pickedClip = url; typedTargets = targets.joined(separator: ", ") }
@@ -440,6 +450,11 @@ struct SamWellSessionView: View {
                 }
                 // the plate's shape (the middle of the 9:16 frame); the clip keeps the whole frame
                 .aspectRatio(127.76 / 85.48, contentMode: .fit)
+                .overlay {
+                    if let aimQuad, let size = dat?.liveFrame?.size {
+                        AimOutline(quad: aimQuad, image: size).stroke(.green, lineWidth: 3)
+                    }
+                }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
                     HStack {
@@ -454,6 +469,8 @@ struct SamWellSessionView: View {
                 }
             }
             .frame(maxWidth: .infinity)
+            Toggle("Sounds", isOn: $soundOn)
+            Toggle("Say \"Plate in view\"", isOn: $sayPlate)
             Picker("Length", selection: $seconds) {
                 ForEach([10, 20, 30], id: \.self) { Text("\($0) s").tag($0) }
             }
@@ -467,6 +484,21 @@ struct SamWellSessionView: View {
                 Spacer()
                 Button("Pick a clip") { picking = true }.disabled(recordingUntil != nil)
             }
+        }
+    }
+
+    /// A detector result: the outline, and the aiming sounds. Aiming only, SAM judges the wells.
+    private func aimed(_ quad: [CGPoint]?) {
+        guard finder != nil else { return }  // a result that landed after leaving the page
+        aimQuad = quad
+        switch aimState.update(seen: quad != nil, at: CACurrentMediaTime()) {
+        case .entered(let first):
+            if soundOn { SamTone.rising.play() }
+            if first, sayPlate { SpeechBus.shared.speak("Plate in view.") }
+        case .lost:
+            if soundOn { SamTone.falling.play() }
+        case nil:
+            break
         }
     }
 
