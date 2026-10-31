@@ -5,6 +5,7 @@
 
 #if DEBUG
 import AVFoundation
+import CoreImage
 import MWDATCamera
 import os
 import SwiftUI
@@ -29,17 +30,24 @@ final class WellChunks: @unchecked Sendable {
     private let queue = DispatchQueue(label: "samwell.chunks")
     private let fps: Int
     private let closed: @Sendable (Chunk) -> Void
+    private let stillsReady: @Sendable ([(frame: Int, jpeg: Data)]) -> Void
+    private var stills: [(frame: Int, jpeg: Data)] = []
+    private let images = CIContext()
     private var open: [Open] = []
     private var arrivals: [Double] = []
     private var stopped = false
 
-    init(fps: Int, closed: @escaping @Sendable (Chunk) -> Void) {
+    init(fps: Int, stillsReady: @escaping @Sendable ([(frame: Int, jpeg: Data)]) -> Void,
+         closed: @escaping @Sendable (Chunk) -> Void) {
         self.fps = fps
+        self.stillsReady = stillsReady
         self.closed = closed
     }
 
     private var length: Int { Self.seconds * fps }
     private var step: Int { (Self.seconds - Self.overlap) * fps }
+    /// Three frames over about the first second: the server picks the plate's reference from them.
+    private var stillFrames: [Int] { [0, fps * 3 / 7, fps * 6 / 7] }
 
     func frame(_ sb: CMSampleBuffer) {
         guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
@@ -47,6 +55,11 @@ final class WellChunks: @unchecked Sendable {
             guard !stopped else { return }
             let frame = arrivals.count
             arrivals.append(CACurrentMediaTime())
+            if stillFrames.contains(frame),
+               let jpeg = images.jpegRepresentation(of: CIImage(cvPixelBuffer: pb), colorSpace: CGColorSpaceCreateDeviceRGB()) {
+                stills.append((frame, jpeg))
+                if stills.count == stillFrames.count { stillsReady(stills) }
+            }
             if frame % step == 0 {
                 let url = FileManager.default.temporaryDirectory.appending(path: "samwell-chunk-\(UUID().uuidString).mp4")
                 if let (w, i, a) = WellCam.writer(url: url, width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb), fps: fps) {
@@ -136,9 +149,13 @@ final class SamWellRun {
             self.error = error.localizedDescription
             return
         }
-        chunks = WellChunks(fps: fps) { chunk in
+        guard let live = id else { return }
+        chunks = WellChunks(fps: fps, stillsReady: { stills in
+            let copy = stills
+            Task { try? await SamWellAPI.uploadStills(live: live, stills: copy) }
+        }, closed: { chunk in
             Task { @MainActor [weak self] in self?.send(chunk) }
-        }
+        })
         phase = .recording
         polling = Task { [weak self] in
             while !Task.isCancelled {

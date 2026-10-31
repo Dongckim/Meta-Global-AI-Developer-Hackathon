@@ -8,6 +8,7 @@ server/data/lab/sam_live/<session>/ (never committed).
 import json
 import os
 import re
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -20,7 +21,10 @@ from server import sam_wells as sw
 
 router = APIRouter(prefix="/lab/sam-wells/live")
 ROOT = Path(__file__).resolve().parent / "data" / "lab" / "sam_live"
+REFS = ROOT.parent / "sam_refs"
 MAX_CHUNK_BYTES = 100_000_000
+#: Longest a chunk's image calls stay behind the session's first ones.
+REF_FIRST_S = 30
 _SID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
 #: Open sessions, in memory (the reference holds an image).
 _LIVE: dict = {}
@@ -32,28 +36,30 @@ class Live:
         self.targets = targets or []  # debug only: what the tester says they'll fill
         self.lock = threading.Lock()
         self.chunks: dict = {}  # n -> {"n", "start", "status", ...}
-        self.best = None  # the reference
-        self.refs: list = []  # every change of it
+        self.best = None  # the session's one reference, from the frames at Record
+        self.ready = threading.Event()
+        self.picking = False
+        self.refs: list = []
         self.stopped = False
         self.fps = None
         self.wells: list = []
         self.created = time.time()
 
     def ref(self) -> dict | None:
-        with self.lock:
-            return self.best
+        """The session's grid correction, if it's in yet; a chunk doesn't wait for it."""
+        return self.best
 
-    def offer(self, cand: dict) -> None:
-        """Keeps the first reference, then one with enough wells that's clearly better."""
-        with self.lock:
-            if self.best and (cand["wells"] < sw.MIN_WELLS or cand["score"] < self.best["score"] + sw.REF_MARGIN):
-                return
-            was = self.best
-            self.best = cand
-            self.refs.append({k: cand[k] for k in ("chunk", "frame", "wells", "score")} | {"t": time.time() - self.created})
-        print(f"sam live {self.id}: reference {'set' if was is None else 'replaced'}: chunk {cand['chunk']} "
-              f"frame {cand['frame']}, {cand['wells']} wells, score {cand['score']:.2f}"
-              + (f" (was {was['score']:.2f})" if was else ""), flush=True)
+    def first(self) -> None:
+        """While the stills are being worked on, a chunk's image calls wait: those run first."""
+        if self.picking:
+            self.ready.wait(REF_FIRST_S)
+
+    def set_reference(self, ref: dict | None) -> None:
+        self.best = ref
+        if ref:
+            self.refs.append({"chunk": "record", "frame": ref["frame"], "wells": ref["wells"], "covered": ref["covered"]})
+        print(f"sam live {self.id}: reference " + (f"frame {ref['frame']}, {ref['wells']} wells, covered {ref['covered']}" if ref else "none"), flush=True)
+        self.ready.set()
 
     def _judge(self) -> None:
         """The wells on the frames every chunk before has finished (results can land out of order,
@@ -143,6 +149,40 @@ def _live(sid: str) -> Live:
 @router.get("/{sid}")
 def live_state(sid: str):
     return _live(sid).out()
+
+
+def _pick(live: Live, stills: list) -> None:
+    """Background: the session's reference, saved as an image. stills: [(frame, jpeg or png bytes)]."""
+    import cv2
+    import numpy as np
+    live.picking = True
+    try:
+        d = live.dir / "stills"
+        d.mkdir()
+        decoded = []
+        for frame, data in stills:
+            img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+            cv2.imwrite(str(d / f"{frame}.png"), img)
+            decoded.append((frame, cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), d / f"{frame}.png"))
+        ref = sw.pick_reference(lab_sam.make_sam(), decoded, live.pointer)
+        if ref:
+            REFS.mkdir(exist_ok=True)
+            shutil.copy(d / f"{ref['frame']}.png", REFS / f"{live.id}.png")
+        live.set_reference(ref)
+    except Exception as e:
+        print(f"sam live {live.id}: reference failed: {type(e).__name__}: {e}", flush=True)
+        live.set_reference(None)
+
+
+@router.post("/{sid}/reference")
+async def new_reference(sid: str, background: BackgroundTasks, frames: list[UploadFile] = File(...), numbers: str = Form(...)):
+    """The frames at Record, named by `numbers` ("0,3,6"); the session's reference comes from these, once."""
+    live = _live(sid)
+    wanted = [int(x) for x in numbers.split(",") if x.isdigit()]
+    if len(wanted) != len(frames) or live.ready.is_set():
+        raise HTTPException(400, "a bad or repeated reference")
+    background.add_task(_pick, live, [(n, await f.read()) for n, f in zip(wanted, frames)])
+    return {"frames": wanted}
 
 
 def _analyze(live: Live, n: int, clip: Path) -> None:

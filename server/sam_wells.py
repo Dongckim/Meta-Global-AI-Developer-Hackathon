@@ -95,11 +95,9 @@ EDGE_GAP, MIN_SHOWN = 0.02, 0.9
 #: 41/55 false 8 without, 27/55 false 6 at 1.0).
 FILL_S, FILL_WINDOW_S, STOP_MM_S = 1.0, 3.0, 20.0
 SINK_RATIO, SINK_BACK_S = None, 2.0
-#: A chunk's frame replaces the session's reference when its score (share of the plate showing +
-#: share of the 96 wells SAM finds) beats it by this much.
-REF_MARGIN = 0.15
 #: A continuous well is "sure" with at least SURE_INLIERS ORB inliers on its stay (the median) and
-#: the tip within SURE_OFF_MM of the well's center.
+#: the tip within SURE_OFF_MM of the well's center. The reference's wells don't count: SAM can find
+#: none on a clear view of a clear plate, and the grid then just keeps to the outline.
 SURE_INLIERS, SURE_OFF_MM = 70, 3.0  # 70: the lowest 5th percentile of matched frames on the iPad sessions
 #: A chunk's looks for the tip. SAM's image calls run about one at a time however many are sent
 #: (1.6 s each), and a chunk closes every 9 s: 40 a chunk took 270 s, and dropped connections.
@@ -718,6 +716,14 @@ def object_prompt(prompts: dict, size: tuple) -> str:
     return build_object_prompt(size=size, objects=objs)
 
 
+def plates_on(sam, fdir: Path, frames: list) -> list:
+    """[(frame, match)]: every plate SAM gives on these frames."""
+    pull(fdir, frames)
+    with ThreadPoolExecutor(len(frames)) as pool:
+        got = list(pool.map(lambda n: sam.image(PLATE, frame_png(fdir, n)), frames))
+    return [(n, m) for n, g in zip(frames, got) for m in g]
+
+
 def hits_on(sam, target: str, fdir: Path, frames: list) -> list:
     """[(frame, match)] on these frames that have the target. For a chunk, which may not have the
     tip at all: best_detect keeps asking until it hits."""
@@ -994,94 +1000,154 @@ def _carry(orb, base: tuple, frames: dict, recs: dict, quad0: list, ways: tuple,
 
 # ---------- continuous: the plate once a session ----------
 
-def plate_score(plate: dict, wells: int) -> float:
-    return shown(plate) + min(wells, 96) / 96
+def _overlap(a: list, b: list) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
-def ref_candidate(sam, gray, plate: dict, frame: int) -> dict | None:
-    """This frame as the session's reference: None when the plate touches the screen's edge or
-    its grid is bent. The grid is fitted to the wells SAM finds there."""
-    size = gray.shape[::-1]
-    pts = mask_points(plate, 2)
-    if touches_edge(plate, size) or distorted(plate_corners(pts)):
+def plates_with_pen(plates: list, pens: list) -> list:
+    ends = [e for pen in pens for e in tip_ends(mask_points(pen, 2))]
+    return [m for m in plates if any(m["box"][0] <= x <= m["box"][2] and m["box"][1] <= y <= m["box"][3] for x, y in ends)]
+
+
+def best_plate(plates: list, size: tuple, pens: list = ()) -> dict:
+    """Of SAM's plates, the one to build on. There can be another plate on the desk, so only those
+    with a pen's end in their box count; with the pen on none, those over the biggest (the nearest).
+    Of them: unbent (a hand on the plate bends the outline SAM gives), off the screen's edge, the most showing."""
+    holding = plates_with_pen(plates, pens)
+    if not holding:
+        area = lambda b: (b[2] - b[0]) * (b[3] - b[1])  # noqa: E731
+        big = max(plates, key=lambda m: area(m["box"]))
+        holding = [m for m in plates if _overlap(m["box"], big["box"])]
+    return max(holding, key=lambda m: (not distorted(plate_corners(mask_points(m, 2))), not touches_edge(m, size), shown(m)))
+
+
+def pick_reference(sam, stills: list, pointer: str) -> dict | None:
+    """The session's grid correction from the frames at Record: stills are [(frame, gray, png)]. The
+    middle one gives the plate; a second apart the view barely moves, so its outline flattens all
+    three for SAM's wells, and the one with the most wells sets the correction, asked again once
+    when that's too few to fit (SAM can miss them all on a good view). Few image calls: chunks
+    queue behind these. None when the middle one shows no usable plate."""
+    frame, gray, png = stills[len(stills) // 2]
+    plates = sam.image(PLATE, png)
+    if not plates:
         return None
-    quad = [tuple(map(float, p)) for p in plate_corners(pts)]
-    quad, wells = fit_wells(gray, quad, lambda png: sam.image(WELL, png))
-    return {"gray": gray, "quad": quad, "seen": seen_points(plate), "wells": wells, "frame": frame,
-            "score": plate_score(plate, wells)}
+    pens = sam.image(pointer, png)
+    plate = best_plate(plates, gray.shape[::-1], pens)
+    corners_ = [tuple(map(float, p)) for p in plate_corners(mask_points(plate, 2))]
+    if touches_edge(plate, gray.shape[::-1]) or distorted(corners_):
+        return None
+    covered = shown(plate) < MIN_SHOWN or any(_overlap(m["box"], plate["box"]) for m in pens)
+    fit = lambda g: fit_wells(g, corners_, lambda p: sam.image(WELL, p))  # noqa: E731
+    with ThreadPoolExecutor(len(stills)) as pool:
+        fits = list(pool.map(fit, [g for _, g, _ in stills]))
+    pick = max(range(len(stills)), key=lambda i: fits[i][1])
+    quad, wells = fits[pick]
+    if wells < MIN_WELLS:
+        quad, wells = max((quad, wells), fit(stills[pick][1]), key=lambda f: f[1])
+    return {"fit": outline_fit(corners_, quad), "wells": wells, "frame": stills[pick][0], "covered": covered}
 
 
-def follow_chunk(frames: dict, recs: dict, ref: dict, start: int, plate: dict) -> dict:
-    """{"quads", ...} for a chunk from the session's reference. `plate` (SAM's, on frame `start`)
-    says roughly where the plate is now, and matching takes it from there both ways. It runs
-    beside SAM's video, so neither the hand nor the tip is masked out: RANSAC drops their matches."""
+UNIT = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+
+
+def outline_fit(outline_: list, quad: list) -> list:
+    """The session's grid correction: where the fitted corners sit with SAM's outline flattened to
+    a unit square. It holds from any view, where a reference frame's pixels don't."""
+    import cv2
+    import numpy as np
+    flat = cv2.getPerspectiveTransform(np.float32(outline_), np.float32(UNIT))
+    return cv2.perspectiveTransform(np.float32(quad).reshape(-1, 1, 2), flat).reshape(-1, 2).tolist()
+
+
+def corrected(outline_: list, fit: list | None) -> list:
+    """SAM's outline on this frame, with the session's correction when there is one yet."""
+    import cv2
+    import numpy as np
+    if fit is None:
+        return [tuple(map(float, p)) for p in outline_]
+    back = cv2.getPerspectiveTransform(np.float32(UNIT), np.float32(outline_))
+    return [tuple(map(float, p)) for p in cv2.perspectiveTransform(np.float32(fit).reshape(-1, 1, 2), back).reshape(-1, 2)]
+
+
+def follow_chunk(frames: dict, recs: dict, anchor: int, plate: dict, fit: list | None) -> dict:
+    """A chunk on its own: `plate`, SAM's on frame `anchor`, flattened and corrected by the session's
+    `fit`, then ORB from that frame to the rest of the chunk (features fade as the view moves away,
+    so nothing matches back to the session's first seconds). The pen's mask isn't in yet, so
+    RANSAC drops its matches and the hand's. A bent `plate` means no frame gets inliers: _carry
+    won't take a bent grid, so the chunk's wells come out not sure."""
     import cv2
     import numpy as np
     orb = cv2.ORB_create(ORB_FEATURES)
+    quad = corrected(plate_corners(mask_points(plate, 2)), fit)
     out = {"quads": {}, "redone": 0, "kept": 0}
-    base = orb_base(orb, ref["gray"], ref["quad"], None, ref["seen"])
+    base = orb_base(orb, frames[anchor], quad, None, seen_points(plate))
     if base is None:
         return out
-    here = np.float32(plate_corners(mask_points(plate, 2)))
-    first = cv2.getPerspectiveTransform(np.float32(ref["quad"]), here)
-    _carry(orb, base, frames, recs, ref["quad"], (range(start, len(frames)), range(start - 1, -1, -1)), first, out,
-           plate_tracked=False)
+    out["quads"][anchor] = quad
+    if not distorted(quad):
+        out["inliers"] = {anchor: len(base[0])}
+    _carry(orb, base, frames, recs, quad, (range(anchor + 1, len(frames)), range(anchor - 1, -1, -1)), np.eye(3), out, False)
     return out
 
 
 def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) -> dict:
     """One chunk of a continuous session -> its tip track in plate mm (frames from the chunk's
-    start) and times. `session`: offer(candidate) keeps the better reference, ref() gives it. A
-    chunk with no tip is {"track": []}: no SAM video."""
+    start) and times. Chunks run side by side and need nothing from each other; `session.ref()`
+    gives the grid correction if it's there yet, and session.first() holds this chunk's image calls
+    while that's being worked out (they queue at SAM, so it would get in line behind them). The
+    plate is asked for on the middle look, and on the others only when that one won't do. No tip
+    or no plate: {"track": []}, no SAM video."""
     t, t_all = {}, time.perf_counter()
     info = ffprobe(clip)
     nframes, fps = info["frames"], info["fps"]
     out_dir.mkdir(parents=True, exist_ok=True)
+    done = lambda r: {"frames": nframes, "fps": fps, "timing": t, **r}  # noqa: E731
+    gray = gray_frames(clip, nframes)
+
+    def follow(plate0: tuple, fit: list | None) -> dict:
+        t0 = time.perf_counter()
+        followed = follow_chunk(gray, {}, plate0[0], plate0[1], fit)
+        t["follow_s"] = time.perf_counter() - t0
+        return followed
+
     looks = [(2 * i + 1) * nframes // (2 * CHUNK_TIP_LOOKS) for i in range(CHUNK_TIP_LOOKS)]
     fdir = frames_dir(clip, looks)
     t0 = time.perf_counter()
     # each step that doesn't need another's result runs beside it: the chunk waits for the longest
     with ThreadPoolExecutor(3) as pool:
         sending = pool.submit(send_video, clip, out_dir, sam, fps, t)
-        finding_plate = pool.submit(lambda: next(filter(None, (hits_on(sam, PLATE, fdir, [n])
-                                                               for n in sorted(looks, key=lambda n: abs(n - nframes / 2)))), [None]))
+        session.first()
+        middle = looks[CHUNK_TIP_LOOKS // 2]
+        finding_plates = pool.submit(plates_on, sam, fdir, [middle])
         tips = hits_on(sam, pointer, fdir, looks)
-        plate0 = finding_plate.result()[0]
+        plates = finding_plates.result()
+        pens = [m for _, m in tips]
+        if tips and not any(not distorted(plate_corners(mask_points(m, 2))) for m in plates_with_pen([m for _, m in plates], pens)):
+            plates += plates_on(sam, fdir, [n for n in looks if n != middle])
         t["first_find_s"] = time.perf_counter() - t0
-        gray = gray_frames(clip, nframes)
-        if plate0:
-            def offer() -> None:
-                cand = ref_candidate(sam, gray[plate0[0]], plate0[1], plate0[0])
-                if cand:
-                    session.offer({**cand, "chunk": out_dir.name})
-            if session.ref() is None:
-                t0 = time.perf_counter()
-                offer()
-                t["reference_s"] = time.perf_counter() - t0
-            else:  # a better reference can land later; this chunk needn't wait for the call
-                threading.Thread(target=offer, daemon=True).start()
-        ref = session.ref()
-        if not plate0 or not tips or ref is None:
+        plate0 = None
+        if plates:
+            best = best_plate([m for _, m in plates], gray[0].shape[::-1], pens)
+            plate0 = next(p for p in plates if p[1] is best)
+        if not tips or not plate0:
             shutil.rmtree(fdir)
             sending.result()
             t["total_s"] = time.perf_counter() - t_all
-            why = "no plate" if not plate0 else "no tip" if not tips else "no reference"
-            return {"frames": nframes, "fps": fps, "track": [], "timing": t, "why": why}
-        following = pool.submit(follow_chunk, gray, {}, ref, plate0[0], plate0[1])
+            return done({"track": [], "why": "no tip" if not tips else "no plate"})
+        ref = session.ref()
+        following = pool.submit(follow, plate0, ref["fit"] if ref else None)
         # every look that saw the tip prompts it, in one video call: a second round repeats the whole video
         _, recs, rounds = track_video(sending.result(), sam, {2: tips}, nframes, fps, fdir, pointer, t, max_rounds=1)
         shutil.rmtree(fdir)
         t0 = time.perf_counter()
         decode_masks(recs)
         t["masks_s"] = time.perf_counter() - t0
-        t0 = time.perf_counter()
         followed = following.result()
-        t["follow_wait_s"] = time.perf_counter() - t0
     track, *_ = locate(recs, nframes, a1, quads=followed["quads"])
     t["total_s"] = time.perf_counter() - t_all
-    return {"frames": nframes, "fps": fps, "track": [[n, mm[0], mm[1], a] for n, mm, a in track], "timing": t,
-            "rounds": rounds, "redone": followed["redone"], "kept": followed["kept"], "ref_wells": ref["wells"],
-            "inliers": followed.get("inliers", {})}
+    return done({"track": [[n, mm[0], mm[1], a] for n, mm, a in track], "rounds": rounds, "ref_wells": ref["wells"] if ref else 0,
+                 "corrected": ref is not None, "anchor": plate0[0], "bent_anchor": "inliers" not in followed, "inliers": followed.get("inliers", {}),
+                 "redone": followed["redone"], "kept": followed["kept"]})
 
 
 # ---------- one clip ----------

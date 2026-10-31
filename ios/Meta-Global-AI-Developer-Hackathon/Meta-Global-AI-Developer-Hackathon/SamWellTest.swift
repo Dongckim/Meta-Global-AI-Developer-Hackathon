@@ -224,6 +224,26 @@ enum SamWellAPI {
         return try await send(req)
     }
 
+    /// The frames at Record; the server picks the session's one reference from them.
+    static func uploadStills(live id: String, stills: [(frame: Int, jpeg: Data)]) async throws {
+        struct Out: Decodable { let frames: [Int] }
+        let boundary = "----samwell\(UUID().uuidString)"
+        var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"numbers\"\r\n\r\n\(stills.map { String($0.frame) }.joined(separator: ","))\r\n".utf8)
+        for s in stills {
+            body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"frames\"; filename=\"\(s.frame).jpg\"\r\n".utf8))
+            body.append(Data("Content-Type: image/jpeg\r\n\r\n".utf8))
+            body.append(s.jpeg)
+            body.append(Data("\r\n".utf8))
+        }
+        body.append(Data("--\(boundary)--\r\n".utf8))
+        var req = URLRequest(url: url("live/\(id)/reference"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 30
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        let _: Out = try await send(req)
+    }
+
     static func uploadChunk(live id: String, n: Int, start: Int, clip: URL) async throws {
         struct Out: Decodable { let n: Int }
         let boundary = "----samwell\(UUID().uuidString)"
