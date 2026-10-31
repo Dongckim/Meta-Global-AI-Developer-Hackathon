@@ -280,6 +280,7 @@ struct RunRecordScreen: View {
     @State private var codeStep: Int?
     /// Server `has_code`: a run saved without robot code has no Code tab.
     @State private var hasCode = false
+    @State private var modeChanges: [String] = []
 
     private var summary: RunSummary? { runs.first { $0.runId == runId } }
 
@@ -314,6 +315,9 @@ struct RunRecordScreen: View {
                 .padding(.top, 8 * u)
             Text([summary?.day, summary?.state].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
                 .font(Theme.ui(28 * u)).foregroundStyle(Theme.text1).padding(.top, 14 * u)
+            ForEach(modeChanges, id: \.self) { line in
+                Text(line).font(Theme.ui(20 * u)).foregroundStyle(Theme.text2).padding(.top, 6 * u)
+            }
             tabs.padding(.top, 36 * u)
             Group {
                 switch tab {
@@ -418,6 +422,7 @@ struct RunRecordScreen: View {
             rlab.sync(r.run.record)
             code = r.handoff
             hasCode = r.has_code ?? false
+            modeChanges = r.mode_changes ?? []
             if !hasCode, tab == 3 { tab = 0 }
         } catch {
             self.error = error.localizedDescription

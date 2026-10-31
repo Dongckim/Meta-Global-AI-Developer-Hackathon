@@ -2620,7 +2620,9 @@ async def run_get(run_id: str):
     doc = {**doc, "record": {**(doc.get("record") or {}), "bench": store.bench_view(doc.get("record") or {})}}
     # the robot code it became, step by step (Home: Run record, Code tab)
     code = store.handoff_code(doc)
-    return {"run": doc, "label": lab["display"], "spoken": lab["spoken"], "handoff": code, "has_code": code is not None}
+    changes = ((doc["record"].get("run") or {}).get("mode_changes") or [])
+    return {"run": doc, "label": lab["display"], "spoken": lab["spoken"], "handoff": code, "has_code": code is not None,
+            "mode_changes": [c["line"] for c in changes]}
 
 
 @app.delete("/protocols/draft")

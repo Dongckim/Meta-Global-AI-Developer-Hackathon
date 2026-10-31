@@ -29,7 +29,7 @@ from server.grammar import (
     where_am_i_reply,
 )
 from server.screens import READ_KINDS as SCREEN_READ_KINDS
-from server.screens import FLOWS, PLANNED, SCREENS, canonical, card_answers, card_choices, item_off, ITEMS, parent_of, result_of, title_of, ui_of
+from server.screens import FLOWS, PLANNED, SCREENS, canonical, card_answers, card_choices, item_off, ITEMS, result_of, title_of, ui_of
 from server.private_wake import PrivateWake
 from server.tone import run_mode, say, section, set_run_mode
 from server import library as lib
@@ -212,12 +212,26 @@ class RecordStore:
     def _save_mode(self, mode: str) -> None:
         set_run_mode(mode)
         (self.root / "run_mode.txt").write_text(mode)  # outlives the record: a new run keeps it
+        self._follow_mode()
+
+    def _follow_mode(self) -> None:
+        """A run is always in the chosen mode, whatever it started in; a change
+        stays on its record. Neither a protocol nor an old run has a say."""
+        run, mode = self.r.get("run"), run_mode()
+        if not run or run.get("mode") == mode:
+            return
+        if run.get("mode"):
+            label = (section("modes").get(mode) or {}).get("label") or mode.capitalize()
+            run.setdefault("mode_changes", []).append(
+                {"mode": mode, "ts": time.time(), "line": say("mode_switched", None, label=label, step=self.current_step())})
+        run["mode"] = mode
 
     def restore_mode(self) -> None:
         """Server start only: a store in a test must not inherit the iPad's choice."""
         saved = self.root / "run_mode.txt"
         if saved.exists():
             set_run_mode(saved.read_text().strip())
+            self._follow_mode()
 
     def _load_or_seed(self):
         if self.path.exists():
@@ -756,6 +770,7 @@ class RecordStore:
         run = self.r.get("run")
         if not run:
             return None
+        self._follow_mode()  # hand off goes by the mode the run ends in
         if status == "finished":
             self._log_timers(self.r["timers"], time.time())
             self.r["timers"] = []
@@ -1100,12 +1115,11 @@ class RecordStore:
 
     def header_mode(self, screen: str) -> dict | None:
         """The header's mode label, on screens after the mode was chosen
-        (registry `header_mode`): a run's own screens show that run's mode,
-        the start flow the mode chosen now; else None (not drawn)."""
+        (registry `header_mode`), else None (not drawn). Always the mode that's
+        running: what the header says is where the turn goes."""
         if not SCREENS.get(screen, {}).get("header_mode"):
             return None
-        mode = (self.r.get("run") or {}).get("mode") if parent_of(screen) == "main" else None
-        mode = mode or run_mode()
+        mode = run_mode()
         return {"id": mode, "label": (section("modes").get(mode) or {}).get("label") or mode.capitalize()}
 
     # --- plan helpers ---
@@ -2137,6 +2151,7 @@ class RecordStore:
         draft, version, epoch = self.r.get("draft"), self.r.get("version", 0), self.r.get("epoch")
         self.r = json.loads(json.dumps(doc["record"]))
         self.r["run"] = {**(self.r.get("run") or {}), "run_id": doc["run_id"]}
+        self._follow_mode()
         self.r["version"], self.r["epoch"] = version, epoch or uuid.uuid4().hex[:16]
         self.r["view"] = self._default_view(True)
         self.r["cards"] = {}
@@ -2780,10 +2795,9 @@ class RecordStore:
                 res["messages"].append("No active run.")
             else:
                 name = (self.r.get("run") or {}).get("protocol_name") or "run"
-                mode = (self.r.get("run") or {}).get("mode")
                 doc = self._finish_locked("finished")
                 res["messages"].append(f"Run finished: {name}.")
-                if doc and mode != "private":  # hand off: the run as it went, for the robot
+                if doc and run_mode() != "private":  # hand off: the run as it went, for the robot
                     self._open_handoff(res, session, doc["run_id"])
         else:
             res["messages"].append("That card is gone.")

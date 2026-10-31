@@ -221,6 +221,7 @@
   "run_paused": [
     "{run} is paused."
   ],
+  "mode_switched": ["Switched to {label} at step {step}"],
   "run_resumed": [
     "{run} picks up at step {step}."
   ],

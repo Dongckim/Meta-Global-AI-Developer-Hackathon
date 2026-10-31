@@ -50,6 +50,7 @@ def ran(mode: str = "full") -> RecordStore:
     the incubate step (step 5 never reached), and finished."""
     st = RecordStore(path=tempfile.mkdtemp() + "/r.json")
     st._begin_locked(json.loads(json.dumps(PLAN)), None, "Hand test")
+    api.tone.set_run_mode(mode)
     st.r["run"]["mode"] = mode
     st.r["done"] = mark(1, "B2", "B3", "B4", "C2", "C3") + mark(1, "C4", source="tap") \
         + mark(2, "B2", "B4") + mark(3, "C2", "C9")
@@ -502,6 +503,7 @@ c.post("/confirm", json={"card_id": card["id"], "ok": True, "session": "ho"})
 assert st.r["view"]["current"]["screen"] != "final_protocol", st.r["view"]
 j = c.post("/input", json={"action": {"id": "make_robot", "args": {}}, "session": "ho"}).json()
 assert j["reply"] == "Hand off is off in Private mode." and st.r["view"]["current"]["screen"] != "final_protocol", j
+api.tone.set_run_mode(None)
 print("HO10 ok: private runs skip hand off")
 
 # HO4c. On ⑨0's step: a timer that ran off plan offers Keep as run / Use plan (voice and tap alike).
