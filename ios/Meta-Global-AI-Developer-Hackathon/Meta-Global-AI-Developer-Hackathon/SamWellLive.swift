@@ -232,12 +232,12 @@ struct SamWellLiveView: View {
                 }
                 switch run.phase {
                 case .idle:
-                    Button("Start") { Task { await begin() } }
+                    Button("Record") { Task { await begin() } }
                         .buttonStyle(.borderedProminent).disabled(aimQuad == nil)
                     Text(aimQuad == nil ? "Waiting for the plate in view…" : "Plate in view.").foregroundStyle(.secondary)
                 case .recording:
                     Button("Stop") { run.stop() }.buttonStyle(.borderedProminent).tint(.red)
-                    Text("● Recording · \(run.seen.count) wells · \(run.waiting) chunks in analysis").font(.callout.monospacedDigit())
+                    Text("● REC · \(run.seen.count) wells · \(run.sentChunks) chunks sent · \(run.waiting) in analysis").font(.callout.monospacedDigit())
                 case .finishing:
                     HStack { ProgressView(); Text("Finishing the last chunks (\(run.waiting) left)…") }
                 case .done:
