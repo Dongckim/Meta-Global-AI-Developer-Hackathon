@@ -181,7 +181,7 @@
     "new_run": {"title": "{run} is finished", "detail": "Start a new run of {name}?"},
     "confirm_search": {"title": "Search the web?", "detail": "“{query}”"},
     "confirm_photo": {"title": "Send a photo?", "detail": "Only the part you ask about leaves the iPad"},
-    "confirm_import": {"title": "Send this to the Meta API?", "detail": "That's how it gets read into a protocol"},
+    "import_too_long": {"title": "Too long for Private", "detail": "Switch to Full to read it?"},
     "unmarked": {"context": "Step {now} · {now_title}", "title": "{wells} not marked", "detail": "Mark all {n} done and go to step {step}?", "header": "{wells} not marked."},
     "import_known": {"title": "Already saved as {name}", "detail": "Open it or review again?"},
     "save_as": {"title": "{name} already exists", "detail": "Save as version {version}, or keep it separate?"},
@@ -278,7 +278,7 @@
   "look_no_glasses": ["Connect your glasses first."],
   "look_send_failed": ["I couldn't check the photo. Try again."],
   "confirm_photo": ["Send a photo to answer that?"],
-  "confirm_import": ["Send this to the Meta API to read it?"],
+  "import_too_long": ["This file is too long for Private mode. Switch to Full?"],
   "import_reading": ["Reading it now."],
   "import_failed": ["I couldn't read that file."],
   "looking_up": ["Looking it up."],
@@ -300,6 +300,7 @@
     "repo": "meta-models/Muse-Glimmer-30B-GGUF",
     "files": ["Muse-Glimmer-30B-KQuant-Dynamic-Q4_K_XL.gguf", "mmproj-Muse-Glimmer-30B-Q4_K_M.gguf", "dflash-Muse-Glimmer-30B-Q4_K_M.gguf"],
     "wake_timeout_s": 90,
+    "import_max_chars": 30000,
     "ready_ttl_s": 100,
     "speak_after_s": 1.5,
     "waking_line": "Waking up my private brain. Give me half a minute.",
@@ -317,8 +318,8 @@
   },
   "modes": {
     "_note": "Run modes: header label, the line under each choice on the Mode screen, an optional smaller detail under it.",
-    "full": {"label": "Full", "line": "Cloud model · fastest answers", "confirm_search": false, "confirm_photo": false, "confirm_import": false},
-    "private": {"label": "Private", "line": "Voice commands run on our own Meta model (Glimmer).", "detail": "Search, photos and imports ask before using the Meta API.", "confirm_search": true, "confirm_photo": true, "confirm_import": true}
+    "full": {"label": "Full", "line": "Cloud model · fastest answers", "confirm_search": false, "confirm_photo": false},
+    "private": {"label": "Private", "line": "Voice commands run on our own Meta model (Glimmer).", "detail": "Voice commands and imported protocols run on our own Meta model (Glimmer). Search and photo questions ask before using the Meta API.", "confirm_search": true, "confirm_photo": true}
   },
   "also_ask": [
     "Should I also {what}?",

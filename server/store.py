@@ -209,6 +209,10 @@ class RecordStore:
 
     # --- persistence / broadcast ---
 
+    def _save_mode(self, mode: str) -> None:
+        set_run_mode(mode)
+        (self.root / "run_mode.txt").write_text(mode)  # outlives the record: a new run keeps it
+
     def restore_mode(self) -> None:
         """Server start only: a store in a test must not inherit the iPad's choice."""
         saved = self.root / "run_mode.txt"
@@ -381,8 +385,7 @@ class RecordStore:
         if mode not in section("modes"):
             res["messages"].append("Full or Private?")
             return
-        set_run_mode(mode)
-        (self.root / "run_mode.txt").write_text(mode)  # outlives the record: a new run keeps it
+        self._save_mode(mode)
         waiting = self.r["view"]["current"]["screen"] == "private_wait"
         if mode == "private" and not self.wake.fresh():
             self._wait_for_private(session, "import_choice")
@@ -868,11 +871,11 @@ class RecordStore:
             self._commit()
             return card
 
-    def ask_import(self, session: dict) -> dict:
-        """The card a mode that asks first shows before a file goes to be read."""
+    def ask_import_full(self, session: dict) -> dict:
+        """Private can't hold this document: Full reads it, if the owner says so."""
         with self._lock:
-            card = self._card({"cards": []}, "confirm_import", say("confirm_import", session), None,
-                              {"op": "import"})
+            card = self._card({"cards": []}, "import_too_long", say("import_too_long", session), None,
+                              {"op": "import_full"})
             self._commit()
             return card
 
@@ -2764,7 +2767,9 @@ class RecordStore:
                     self._saved(self._save_draft_locked(), session, res)
         elif op == "web_search":
             res["messages"].append(say("looking_up", session))
-        elif op == "import":
+        elif op == "import_full":
+            self._save_mode("full")
+            self.wake.reset()
             self.spawn_import()
             res["messages"].append(say("import_reading", session))
         elif op == "look":

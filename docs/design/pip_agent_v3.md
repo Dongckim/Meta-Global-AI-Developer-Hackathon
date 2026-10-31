@@ -430,10 +430,11 @@ the key stays on the server (handshake `authorization.accessToken`).
 
 - Bug-judged behavior changes need a question first (AGENTS.md).
 - No commit/push without an explicit ask.
-- Private: voice commands run on Glimmer, our own deployment of Meta's open
-  weights (server/private/README.md), and speech is transcribed on the iPad.
-  Everything else stays on Spark: imports, hand off, photo questions, search
-  summaries. Search, photos and imports ask first (`modes.private.confirm_*`).
+- Private: voice commands and protocol imports run on Glimmer, our own
+  deployment of Meta's open weights (server/private/README.md), and speech is
+  transcribed on the iPad. Hand off, photo questions and search summaries stay
+  on Spark; search and photo questions ask first (`modes.private.confirm_*`).
+  A document too long for Glimmer asks to switch to Full.
   Say it as "not sent to the Meta API, processed on the Meta model we run";
   never "on device".
 - "Hey Meta" voice invocation is out of scope; add no related

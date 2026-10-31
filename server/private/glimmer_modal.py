@@ -44,7 +44,7 @@ SCALEDOWN_S = 120
 PORT = 8080
 UPSTREAM = f"http://127.0.0.1:{PORT}/v1/chat/completions"
 
-MAX_TOKENS = 2048
+MAX_TOKENS = 4096  # protocol extraction (IMPORT_MAX_OUTPUT_TOKENS)
 MAX_BODY_BYTES = 16_000_000
 MAX_TEXT_CHARS = 60_000  # about the context below, images not counted
 MAX_MESSAGES = 64

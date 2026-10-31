@@ -197,16 +197,62 @@ assert [d["status"] for d in api.store.searches()] == ["looking"], j
 print("PV9 ok: a photo question: card first, the camera only after yes")
 
 
+# Imports read on Glimmer, Meta 0 ------------------------------------------------
+SAMPLE = Path(__file__).resolve().parents[2] / "samples" / "protocol_wash.pdf"
+EMPTY_PLAN = json.dumps({"title": "Wash", "short_title": "Wash", "liquids": [], "conditions": [], "steps": []})
+
+
+def post_import(c, **k):
+    return c.post("/protocols/import", data={"session": "t", "original_id": "o", **k.pop("data", {})}, **k)
+
+
+c = private()
+calls = Calls(chat(text=EMPTY_PLAN))
+with patch.object(api, "_post", calls):
+    r = post_import(c, files={"file": ("wash.pdf", SAMPLE.read_bytes(), "application/pdf")})
+sent = calls.glimmer[0]
+assert r.status_code == 200 and not calls.meta and len(calls.glimmer) == 1, (r.text, calls.meta)
+assert "card" not in r.json() and r.json()["draft"], r.json()
+assert sent["response_format"]["json_schema"]["schema"] == api.proto.PROTOCOL_SCHEMA, "the same schema"
+assert sent["max_tokens"] == api.proto.IMPORT_MAX_OUTPUT_TOKENS and "tools" not in sent
+assert isinstance(sent["messages"][1]["content"], list) and "Document:" in sent["messages"][1]["content"][0]["text"]
+print("PV10 ok: a PDF goes as its text to Glimmer, same schema, no card, Meta 0")
+
+c = private()
+calls = Calls(chat(text="Add 10 uL to C2."), chat(text=EMPTY_PLAN))
+with patch.object(api, "_post", calls):
+    r = post_import(c, files={"file": ("page1.jpg", b"\xff\xd8x", "image/jpeg")})
+assert r.status_code == 200 and len(calls.glimmer) == 2 and not calls.meta, (r.text, calls.meta)
+image = calls.glimmer[0]["messages"][1]["content"][1]
+assert image["type"] == "image_url" and image["image_url"]["url"].startswith("data:image/jpeg"), image
+assert "Add 10 uL to C2." in calls.glimmer[1]["messages"][1]["content"][0]["text"], "the transcript is the original"
+print("PV11 ok: a photo is transcribed on Glimmer first, then extracted, Meta 0")
+
+c = private()
+calls = Calls(chat(text=EMPTY_PLAN))
+with patch.object(api, "_post", calls):
+    r = post_import(c, data={"text": "Add 20 uL to C3."})
+    again = post_import(c, data={"text": "Add 20 uL to C3."})
+assert r.status_code == 200 and len(calls.glimmer) == 1 and not calls.meta and again.status_code == 200, again.text
+print("PV12 ok: text on Glimmer; the same content doesn't extract twice")
+
+c = private()
+calls = Calls(chat(text="{not json"))
+with patch.object(api, "_post", calls):
+    r = post_import(c, data={"text": "Add 21 uL to C3."})
+assert r.status_code == 502 and "did not return JSON" in r.text, r.text
+print("PV13 ok: Glimmer's output meets the same checks")
+
+long_text = "Add 10 uL to C2. " * 2000
+assert len(long_text) > tone.section("private")["import_max_chars"]
+c = private()
+calls = Calls()
 extracted = []
 
 
 async def fake_once(uploads, text, filename, original_id, h):
-    extracted.append(text)
+    extracted.append(tone.run_mode())
     raise api.HTTPException(502, "stop here")
-
-
-def import_text(c, text):
-    return c.post("/protocols/import", data={"text": text, "session": "t"}).json()
 
 
 async def after_yes():
@@ -214,25 +260,25 @@ async def after_yes():
     api._spawn_import()
     await asyncio.sleep(0.01)
 
-c = private()
-with patch.object(api, "_import_once", fake_once):
-    j = import_text(c, "Add 10 uL to C2.")
-    assert [j["card"]["kind"], j["draft"], extracted] == ["confirm_import", None, []], j
-    say(c, "no")
-    assert extracted == [], extracted
-    print("PV10 ok: an import waits for its card; no sends nothing")
-    j = import_text(c, "Add 20 uL to C3.")
-    assert j["card"]["kind"] == "confirm_import" and extracted == [], j
-    asyncio.run(after_yes())
-assert extracted == ["Add 20 uL to C3."], extracted
-print("PV11 ok: yes reads the held import, once")
-
+with patch.object(api, "_post", calls):
+    j = post_import(c, data={"text": long_text}).json()
+assert j["card"]["kind"] == "import_too_long" and not calls.glimmer and not calls.meta, j
+assert j["reply"] == "This file is too long for Private mode. Switch to Full?", j
+say(c, "no")
+assert tone.run_mode() == "private" and not extracted
+with patch.object(api, "_post", calls):
+    j = post_import(c, data={"text": long_text}).json()
 stages = []
+card = j["card"]["id"]
 with patch.object(api, "_import_once", fake_once), patch.object(api, "_stage", lambda s, st, **k: stages.append((st, k))):
-    import_text(c, "Add 30 uL to C4.")
+    api.store.spawn_import = lambda: None  # the task needs a running loop: run it below
+    c.post("/input", json={"text": "yes", "session": "t"})
+    assert tone.run_mode() == "full" and not calls.meta
+    tone.set_run_mode("full")
     asyncio.run(after_yes())
+assert extracted == ["full"], extracted
 assert ("failed", {"reason": "HTTPException", "say": "I couldn't read that file."}) in stages, stages
-print("PV11b ok: a failed read after the card is said, nobody is waiting on a response")
+print("PV14 ok: too long: asks, no stays, yes reads on Full; a failure there is said")
 
 c = private()
 calls = Calls(chat(("perform", {"action": "mark_done", "wells": ["B7"]})))

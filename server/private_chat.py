@@ -1,6 +1,6 @@
-"""Private voice turns: the Responses request `_call_spark` builds, as
-chat/completions for Glimmer, and its answer back in Responses shape. The turn
-around it doesn't know which model answered.
+"""Private: a Responses request (a voice turn, a protocol extraction, a page
+transcription) as chat/completions for Glimmer, and its answer back in
+Responses shape. What's around the call doesn't know which model answered.
 
 The bench state changes every turn and llama.cpp reuses only the prompt's
 unchanged start, so it rides in the first user message: the system prompt and
@@ -11,8 +11,17 @@ tools stay a fixed prefix.
 STATE_MARK = "\n\n현재 상태(JSON):\n"
 
 
+def _parts(content):
+    """Responses content parts as chat ones; plain text stays as it is."""
+    if isinstance(content, str):
+        return content
+    return [{"type": "text", "text": p["text"]} if p["type"] == "input_text"
+            else {"type": "image_url", "image_url": {"url": p["image_url"]}} for p in content]
+
+
 def to_chat(body: dict) -> dict:
-    """The same instructions, input and tools (memory and caching stay behind)."""
+    """The same instructions, input, tools and output format (memory and
+    caching stay behind)."""
     system, mark, state = body["instructions"].partition(STATE_MARK)
     messages = [{"role": "system", "content": system}]
     items = body["input"]
@@ -24,15 +33,21 @@ def to_chat(body: dict) -> dict:
         elif item.get("type") == "function_call_output":
             messages.append({"role": "tool", "tool_call_id": item["call_id"], "content": item["output"]})
         else:
-            messages.append({"role": item["role"], "content": item["content"]})
+            messages.append({"role": item["role"], "content": _parts(item["content"])})
     if mark:
         # in English: a Korean label in the user's message turned some replies Korean
         messages[1]["content"] = f"Current state (JSON):\n{state}\n\nThe owner said: {messages[1]['content']}"
-    tools = [{"type": "function", "function": {k: t[k] for k in ("name", "description", "parameters")}}
-             for t in body["tools"]]
-    choice = {"tool_choice": body["tool_choice"]} if "tool_choice" in body else {}
-    return {**choice, "messages": messages, "tools": tools, "max_tokens": body["max_output_tokens"],
-            "cache_prompt": True, "parallel_tool_calls": True}  # llama.cpp allows one call without it
+    out = {"messages": messages, "max_tokens": body["max_output_tokens"], "cache_prompt": True}
+    if "tools" in body:
+        out["tools"] = [{"type": "function", "function": {k: t[k] for k in ("name", "description", "parameters")}}
+                        for t in body["tools"]]
+        out["parallel_tool_calls"] = True  # llama.cpp allows one call without it
+    if "tool_choice" in body:
+        out["tool_choice"] = body["tool_choice"]
+    fmt = (body.get("text") or {}).get("format")
+    if fmt:
+        out["response_format"] = {"type": "json_schema", "json_schema": {k: fmt[k] for k in ("name", "schema", "strict")}}
+    return out
 
 
 def from_chat(payload: dict) -> dict:

@@ -452,7 +452,7 @@ struct ChoiceCard: View {
                 Text(line).font(Theme.ui(28 * u)).foregroundStyle(Theme.text2).lineLimit(2)
                     .multilineTextAlignment(.center).minimumScaleFactor(0.6).padding(.top, 22 * u)
                 if !detail.isEmpty {
-                    Text(detail).font(Theme.ui(22 * u)).foregroundStyle(Theme.text3).lineLimit(2)
+                    Text(detail).font(Theme.ui(22 * u)).foregroundStyle(Theme.text3).lineLimit(4)
                         .multilineTextAlignment(.center).minimumScaleFactor(0.6).padding(.top, 10 * u)
                 }
             }

@@ -111,6 +111,8 @@ WELL_KEYWORDS = [f"{r}{c}" for r in "ABCDEFGH" for c in range(1, 13)]
 KEYWORDS = WELL_KEYWORDS + ["to", "through", "done", "exclude", "redo", "note", "timer", "next", "drug A", "drug B", "pipette", "thirty", "fifteen", "minutes", "wash", "each", "every", "all"]
 LANGUAGE_BIAS = ["English"]
 TIMEOUT = httpx.Timeout(120.0)
+#: Modal's web limit: past this the request would redirect, not answer.
+PRIVATE_READ_TIMEOUT_S = 150.0
 #: Stable per-prefix cache keys (docs: never per-user/per-run) + 24h retention hint.
 CACHE_KEY = "pip-bench-spark"
 CACHE_RETENTION = "24h"
@@ -2146,6 +2148,18 @@ def _coerce_patch_value(draft, parsed, value):
 _IMAGE_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "heic": "image/heic"}
 
 
+class TooLongForPrivate(Exception):
+    """More text than Glimmer's context holds; Full can read it."""
+
+
+async def _glimmer_json(client, name: str, body: dict) -> dict:
+    """_spark_json's answer from Glimmer. Long: extraction alone takes a while."""
+    resp = await _post(client, "private model", _private_url(), json=to_chat(body), timeout=PRIVATE_READ_TIMEOUT_S)
+    _check(name, resp)
+    store.wake.touch()
+    return from_chat(resp.json())
+
+
 async def _spark_json(client, name: str, body: dict) -> dict:
     resp = await _post(client, name, f"{BASE_URL}/responses",
                        headers={"Authorization": f"Bearer {_key()}", "Content-Type": "application/json"},
@@ -2316,23 +2330,24 @@ async def protocol_import(file: list[UploadFile] = File(default=[]), text: str =
         return {"draft": None, "review": [], "errors": [], "reply": card["question"],
                 "speak": speak_text(card["question"]), "card": card, "ms": 0, "protocol_id": known["id"],
                 "record_version": store.r["version"]}
-    if (section("modes").get(run_mode()) or {}).get("confirm_import"):
+    try:
+        return await _extract_import(sess, uploads, text, filename, original_id, h)
+    except TooLongForPrivate:
         _held_import[:] = [sess, uploads, text, filename, original_id, h]
-        card = store.ask_import(sess)
-        print(f"[import] {h} waits for card {card['id']}", flush=True)
+        card = store.ask_import_full(sess)
+        print(f"[import] {h} too long for Private, card {card['id']}", flush=True)
         return {"draft": None, "review": [], "errors": [], "reply": card["question"],
                 "speak": speak_text(card["question"]), "card": card, "ms": 0,
                 "record_version": store.r["version"]}
-    return await _extract_import(sess, uploads, text, filename, original_id, h)
 
 
-#: An import waiting for its card's yes: the session, then _extract_import's
-#: arguments. shortcut: a no leaves the bytes here until the next import.
+#: An import too long for Private, waiting for a yes to Full: the session, then
+#: _extract_import's arguments. shortcut: a no leaves the bytes here until the next import.
 _held_import: list = []
 
 
 def _spawn_import() -> None:
-    """A yes to the import card: the extraction runs on its own, like a tap on Import."""
+    """A yes to Full: the extraction runs on its own, like a tap on Import."""
     args, _held_import[:] = list(_held_import), []
     if args:
         task = asyncio.get_running_loop().create_task(_import_after_card(args))
@@ -2402,6 +2417,8 @@ async def _import_once(uploads: list, text: str, filename: str, original_id: str
     the app keeps PDFs and photos under `original_id` on the device."""
     if sum(len(raw) for _, raw in uploads) + len(text.encode()) > PROTOCOL_MAX_BYTES:
         raise HTTPException(413, "protocol file too large (10MB max)")
+    private = run_mode() == "private"
+    read = _glimmer_json if private else _spark_json
     ext = lambda n: n.lower().rsplit(".", 1)[-1] if "." in n else ""  # noqa: E731
     t0 = time.perf_counter()
     pages = None
@@ -2410,7 +2427,7 @@ async def _import_once(uploads: list, text: str, filename: str, original_id: str
             origin, name, kind, doc_text = "text", filename or "Pasted text", "txt", text
         elif uploads and all(ext(n) in _IMAGE_TYPES for n, _ in uploads):
             origin, name, kind = "photo", filename or "Photo", "txt"
-            outs = await asyncio.gather(*(_spark_json(client, "transcribe", proto.build_transcribe_body(
+            outs = await asyncio.gather(*(read(client, "transcribe", proto.build_transcribe_body(
                 f"data:{_IMAGE_TYPES[ext(n)]};base64," + base64.b64encode(raw).decode("ascii"), SPARK_MODEL))
                 for n, raw in uploads))
             pages = [proto.output_text(o).strip() for o in outs]
@@ -2438,11 +2455,17 @@ async def _import_once(uploads: list, text: str, filename: str, original_id: str
             payload = "data:application/pdf;base64," + base64.b64encode(raw).decode("ascii")
         else:
             payload = doc_text[: proto.PROMPT_CHARS]
-        out = await _spark_json(client, "protocol", proto.build_extract_body(kind, name, payload, SPARK_MODEL))
+        if private:  # Glimmer reads text: a PDF goes as what the server extracted
+            if not doc_text.strip():
+                raise HTTPException(422, "no text found in this PDF; photograph its pages instead")
+            if len(doc_text) > section("private")["import_max_chars"]:
+                raise TooLongForPrivate
+            kind, payload = "txt", doc_text
+        out = await read(client, "protocol", proto.build_extract_body(kind, name, payload, SPARK_MODEL))
     ms = int((time.perf_counter() - t0) * 1000)
     usage = out.get("usage") or {}
-    print(f"protocol origin={origin} ms={ms} in_tok={usage.get('input_tokens', '?')} "
-          f"out_tok={usage.get('output_tokens', '?')}", flush=True)
+    print(f"protocol origin={origin} ms={ms} in_tok={usage.get('input_tokens', usage.get('prompt_tokens', '?'))} "
+          f"out_tok={usage.get('output_tokens', usage.get('completion_tokens', '?'))}", flush=True)
     ok, data = proto.parse_extract_payload(out)
     if not ok:
         raise HTTPException(502, f"protocol extraction failed: {data}")

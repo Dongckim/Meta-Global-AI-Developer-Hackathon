@@ -6,10 +6,14 @@ revision pinned in `glimmer_modal.py`) on llama.cpp, with the DFlash drafter and
 so the URL is held by the guard, `max_containers=1` and the Modal workspace
 budget.
 
-What runs here: voice commands only (`_call_spark` through
-`server/private_chat.py`), transcribed on the iPad. Imports, hand off, photo
-questions and search summaries stay on Spark; search, photos and imports ask
-first. Say it as "not sent to the Meta API, processed on the Meta model we run",
+What runs here: voice commands (`_call_spark`) and protocol imports
+(`_import_once`), both through `server/private_chat.py`, with speech transcribed
+on the iPad. A PDF goes as the text the server extracted, a photo is transcribed
+here first. Hand off, photo questions and search summaries stay on Spark; photo
+questions and search ask first. A document over `private.import_max_chars`
+(30,000, about 8,000 tokens) asks to switch to Full: the context is 16,384 with
+4,096 kept for the answer. `MAX_TOKENS` is 4,096 because the demo PDFs need up to
+2,472 output tokens, reasoning included. Say it as "not sent to the Meta API, processed on the Meta model we run",
 never "on device". Choose Private on the Mode screen: the choice is saved in
 `run_mode.txt` next to the record and survives a restart.
 
