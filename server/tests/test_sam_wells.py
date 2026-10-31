@@ -175,6 +175,8 @@ class FakeSam:
     prompts: list = []
 
     def image(self, target, png):
+        if target == sw.WELL:
+            return []
         n = int(png.stem) - 1
         if target == sw.PLATE:
             return [{"box": PLATE_BOX, "w": W, "h": H, "c": 0.5 + n / 100, "mask": None}]
@@ -349,20 +351,23 @@ assert sw.convex([(0, 0), (10, 0), (10, 10), (0, 10)]) and sw.convex([(0, 10), (
 assert not sw.convex([(0, 0), (10, 10), (10, 0), (0, 10)])  # crossed
 assert not sw.convex([(0, 0), (10, 0), (2, 2), (0, 10)])  # dented
 print("SW13 ok: following repeats exactly")
-# SW14. An outline 3 mm off (the plate's wall): the grid moves onto the wells.
-import cv2  # noqa: E402
+# SW14. An outline 3 mm off (the plate's wall): the grid moves onto the wells SAM finds; too few: stays.
 import numpy as np  # noqa: E402
-PX = 6
-frame14 = np.full((round(sw.PLATE_MM[1] * PX) + 200, round(sw.PLATE_MM[0] * PX) + 200), 40, np.uint8)
-for r14 in range(8):
-    for c14 in range(12):
-        x14, y14 = sw.well_center_mm(r14, c14)
-        cv2.circle(frame14, (round(x14 * PX) + 100, round(y14 * PX) + 100), round(sw.WELL_D_MM * PX / 2), 200, 2)
-true14 = [(100, 100), (100 + sw.PLATE_MM[0] * PX, 100), (100 + sw.PLATE_MM[0] * PX, 100 + sw.PLATE_MM[1] * PX),
-          (100, 100 + sw.PLATE_MM[1] * PX)]
-off14 = [(x + 3 * PX, y + 3 * PX) for x, y in true14]
-fit14, wells14 = sw.fit_wells(frame14, off14)
-assert wells14 >= 60 and all(sw.math.dist(a, b) < 4 for a, b in zip(fit14, true14)), (wells14, fit14)
-assert sw.fit_wells(np.zeros_like(frame14), off14) == (off14, 0)  # nothing to fit: as given
+F14, gray14 = sw.FLAT_PX, np.zeros((400, 600), np.uint8)
+true14 = [(100, 100), (100 + sw.PLATE_MM[0] * 3, 100), (100 + sw.PLATE_MM[0] * 3, 100 + sw.PLATE_MM[1] * 3),
+          (100, 100 + sw.PLATE_MM[1] * 3)]  # 3 px a mm
+off14 = [(x + 9, y + 9) for x, y in true14]
+
+
+def holes14(png, count=96):
+    """Well boxes on the flattened frame, as SAM would: the true wells sit -3 mm from the outline's."""
+    r = [{"box": (round((x - 3 - 3) * F14), round((y - 3 - 3) * F14), round((x - 3 + 3) * F14), round((y - 3 + 3) * F14))}
+         for x, y in (sw.well_center_mm(a, b) for a in range(8) for b in range(12))]
+    return r[:count]
+
+
+fit14, wells14 = sw.fit_wells(gray14, off14, holes14)
+assert wells14 >= 60 and all(sw.math.dist(a, b) < 3 for a, b in zip(fit14, true14)), (wells14, fit14)
+assert sw.fit_wells(gray14, off14, lambda png: holes14(png, 5)) == (off14, 0)
 print("SW14 ok: the grid sits on the wells")
 print("ALL PASS")

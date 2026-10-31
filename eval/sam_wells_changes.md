@@ -14,3 +14,7 @@
 ## 2026-10-31 (not yet a baseline)
 - FLAT_PX None -> 6, MAX_WELL_SHIFT None -> 4, MIN_WELLS None -> 30, SHIFT_MARGIN None -> 2, MAX_WELL_SCALE None -> 0.06
 - why: seen from the side the mask's outline takes in the plate's wall and pushes the grid off the wells; the grid now fits the wells on the reference frame.
+
+## 2026-10-31 (not yet a baseline)
+- FLAT_PX 6 -> 12, MIN_WELLS 30 -> 12; ring peaks replaced by SAM "hole" on the flattened reference
+- why: ring peaks fit only 4 of 18 clips on a clear plate, and two of those got worse.

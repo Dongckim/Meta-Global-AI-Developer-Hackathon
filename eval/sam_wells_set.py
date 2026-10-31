@@ -86,9 +86,19 @@ def fill(clip: str) -> None:
 
 def follow_key() -> str:
     """Changes with the following's code or values."""
-    code = [sw.follow_plate, sw.fit_wells, sw.well_centers, sw._follow, sw._region, sw.best_frame, sw.touches_edge, sw.distorted, sw.convex, sw.plate_corners]
+    code = [sw.follow_plate, sw.fit_wells, sw._follow, sw._region, sw.best_frame, sw.touches_edge, sw.distorted, sw.convex, sw.plate_corners]
     text = "".join(inspect.getsource(f) for f in code) + json.dumps(values())
     return hashlib.sha1(text.encode()).hexdigest()
+
+
+def wells_on(c: Path, png: Path) -> list:
+    """SAM's wells on a flattened frame: from the cache, by the image's content, else SAM, once."""
+    saved, key = c / "wells.json", hashlib.sha1(png.read_bytes()).hexdigest()
+    known = json.loads(saved.read_text()) if saved.exists() else {}
+    if key not in known:
+        known[key] = [{"box": m["box"]} for m in sw.MetaSam(os.environ["MODEL_API_KEY"]).image(sw.WELL, png)]
+        saved.write_text(json.dumps(known))
+    return known[key]
 
 
 def followed(item: dict, recs: dict, frames: int) -> dict:
@@ -101,7 +111,7 @@ def followed(item: dict, recs: dict, frames: int) -> dict:
             return {**f, "quads": {int(n): q for n, q in f["quads"].items()}}
     video = next(c.glob("clip_*fps.mp4"), None) or next((LAB / item["clip"]).glob("clip.*"))
     t0 = time.perf_counter()
-    f = {**sw.follow_plate(video, recs, frames), "seconds": 0.0, "key": key}
+    f = {**sw.follow_plate(video, recs, frames, lambda png: wells_on(c, png)), "seconds": 0.0, "key": key}
     f["seconds"] = time.perf_counter() - t0
     saved.write_text(json.dumps(f))
     return f

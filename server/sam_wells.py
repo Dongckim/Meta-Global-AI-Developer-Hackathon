@@ -13,7 +13,8 @@ flow never calls it.
    runs again.
 3. The plate is found once: its four edges cross at four corners on the frame that shows it
    most (follow_plate), and features matched to that frame carry those corners to the others; a
-   frame that can't be matched finds its own edges. Each frame: corners -> homography to the plate's
+   frame that can't be matched finds its own edges. SAM finds the wells on the flattened reference,
+   and the grid moves onto them. Each frame: corners -> homography to the plate's
    footprint in mm (SBS: 127.76 x 85.48, A1 at 14.38 / 11.24, pitch 9) ->
    the tip end's well. The tip end is the mask's long-axis end over the
    plate; both or neither: the one nearer the last frame's tip end (the
@@ -44,6 +45,8 @@ from server import look
 
 BASE_URL = "https://api.meta.ai/v1"
 PLATE, TIP = "96-well plate", "pipette tip"
+#: SAM finds a plate's wells as this ("well" alone finds none).
+WELL = "hole"
 #: What goes into the wells (SAM's prompt).
 POINTERS = (TIP, "pen")
 PLATE_MM = (127.76, 85.48)  # ANSI/SLAS footprint
@@ -78,10 +81,10 @@ PLATE_MARGIN, MIN_BASE_SIZE = 1.15, 0.85
 #: After this many frames in a row left in place the plate has likely moved on: matches may come
 #: from this many times further, and SAM's plate counts even partly covered, if its corners hold up.
 LOST_FRAMES, LOST_REACH = 3, 3.0
-#: Fitting the grid to the wells: px a mm on the flattened frame; how far (mm) the outline can be
+#: Fitting the grid to the wells: px a mm on the flattened frame SAM sees; how far (mm) the outline can be
 #: off (under half a pitch: further is the next well over); the fewest wells to trust; how many
 #: more wells a shifted fit must explain than the one before; how far the fit may rescale.
-FLAT_PX, MAX_WELL_SHIFT, MIN_WELLS, SHIFT_MARGIN, MAX_WELL_SCALE = 6, 4, 30, 2, 0.06
+FLAT_PX, MAX_WELL_SHIFT, MIN_WELLS, SHIFT_MARGIN, MAX_WELL_SCALE = 12, 4, 12, 2, 0.06
 #: The screen's edge is this share of its size from the plate's box; SAM's plate stands in for an
 #: unmatched frame only when this much of it shows.
 EDGE_GAP, MIN_SHOWN = 0.02, 0.9
@@ -768,38 +771,27 @@ def _follow(orb, base: tuple, gray, tip: list | None, plate: list, last, quad0: 
     return h
 
 
-def well_centers(flat) -> "object":
-    """Well centers (mm) on a flattened frame. A clear plate's wells catch light differently, so
-    no one brightness or circle test finds them; each well's rim is an edge, though, and a ring of
-    a well's size over the edges peaks at its center."""
-    import cv2
-    import numpy as np
-    soft = cv2.GaussianBlur(flat, (5, 5), 1).astype(np.float32)
-    edges = cv2.magnitude(cv2.Sobel(soft, cv2.CV_32F, 1, 0), cv2.Sobel(soft, cv2.CV_32F, 0, 1))
-    edges = np.minimum(edges, np.percentile(edges, 95))  # a glare spot doesn't outvote a rim
-    size = round(WELL_D_MM * FLAT_PX) + 7
-    ring = np.zeros((size, size), np.float32)
-    cv2.circle(ring, (size // 2, size // 2), round(WELL_D_MM * FLAT_PX / 2), 1.0, 2)
-    score = cv2.filter2D(edges, cv2.CV_32F, ring / ring.sum())
-    gap = round(PITCH_MM * FLAT_PX * 0.7) | 1
-    top = score == cv2.dilate(score, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (gap, gap)))
-    ys, xs = np.nonzero(top)
-    order = np.argsort(-score[ys, xs], kind="stable")[:96]
-    return np.float32(np.stack([xs[order], ys[order]], axis=1)) / FLAT_PX
-
-
-def fit_wells(gray, quad: list) -> tuple:
+def fit_wells(gray, quad: list, find) -> tuple:
     """The plate's corners moved so the grid sits on the wells that show. Seen from the side, the
     mask's outline takes in the plate's wall too, which pushes the grid off the wells: flatten the
-    frame by that outline, find the wells, and fit the 8 x 12 grid to them with RANSAC.
-    -> (corners in the same order, wells matched); the corners as given when too few fit."""
+    frame by that outline, have SAM find the wells (`find(png)` -> its matches), and fit the
+    8 x 12 grid to them with RANSAC. -> (corners in the same order, wells matched); the corners as
+    given when too few fit."""
     import cv2
     import numpy as np
     ordered = plate_quad(quad, "tl")  # the grid is the same turned 180 degrees, so any A1 will do
     w, h = PLATE_MM
     to_flat = cv2.getPerspectiveTransform(np.float32(ordered), np.float32([(0, 0), (w, 0), (w, h), (0, h)]) * FLAT_PX)
     flat = cv2.warpPerspective(gray, to_flat, (round(w * FLAT_PX), round(h * FLAT_PX)))
-    seen = well_centers(flat)
+    d = Path(tempfile.mkdtemp(prefix="samwells_"))
+    cv2.imwrite(str(d / "flat.png"), flat)
+    matches = find(d / "flat.png")
+    shutil.rmtree(d)
+    sized = [m["box"] for m in matches if 0.4 * PITCH_MM <= (m["box"][2] - m["box"][0]) / FLAT_PX <= PITCH_MM
+             and 0.4 * PITCH_MM <= (m["box"][3] - m["box"][1]) / FLAT_PX <= PITCH_MM]
+    if len(sized) < MIN_WELLS:
+        return quad, 0
+    seen = np.float32([((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b in sized]) / FLAT_PX
     grid = np.float32([well_center_mm(r, c) for r in range(8) for c in range(12)])
     best, most = None, 0
     cv2.setRNGSeed(0)
@@ -829,7 +821,7 @@ def fit_wells(gray, quad: list) -> tuple:
     return (fitted, most) if convex(fitted) and not distorted(fitted) else (quad, 0)
 
 
-def follow_plate(clip: Path, recs: dict, nframes: int) -> dict:
+def follow_plate(clip: Path, recs: dict, nframes: int, find=None) -> dict:
     """The plate's corners once, on its best frame, then carried to every frame by matching
     features to that frame. A frame that can't be matched takes SAM's plate if it's all in view,
     else stays where the last one was; a few of those in a row and the search widens and a partly
@@ -850,7 +842,9 @@ def follow_plate(clip: Path, recs: dict, nframes: int) -> dict:
     ref = best_frame(recs, (w, h))
     if ref is None or ref not in frames:
         return none
-    quad0, wells = fit_wells(frames[ref], [tuple(map(float, p)) for p in plate_corners(mask_points(recs[ref][1], 2))])
+    quad0, wells = [tuple(map(float, p)) for p in plate_corners(mask_points(recs[ref][1], 2))], 0
+    if find:
+        quad0, wells = fit_wells(frames[ref], quad0, find)
     corners0 = np.float32(quad0).reshape(-1, 1, 2)
     orb = cv2.ORB_create(ORB_FEATURES)
     tip_at = lambda n: mask_points(recs[n][2], 2) if 2 in recs.get(n, {}) else None  # noqa: E731
@@ -994,7 +988,7 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
     t["masks_s"] = time.perf_counter() - t0
     t0 = time.perf_counter()
     say("Following the plate from its best frame")
-    followed = follow_plate(clip, recs, nframes)
+    followed = follow_plate(clip, recs, nframes, lambda png: sam.image(WELL, png))
     t["follow_s"] = time.perf_counter() - t0
     t0 = time.perf_counter()
     track, per, pitches, fails = locate(recs, nframes, a1, say, followed["quads"])
