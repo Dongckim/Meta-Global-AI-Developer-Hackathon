@@ -33,6 +33,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from collections import Counter, deque
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -706,14 +707,13 @@ def object_prompt(prompts: dict, size: tuple) -> str:
     return build_object_prompt(size=size, objects=objs)
 
 
-def best_of_all(sam, target: str, fdir: Path, frames: list):
-    """(frame, match): the most confident of these frames; None without one. For a chunk, which
-    may not have the tip at all: best_detect keeps asking until it hits."""
+def hits_on(sam, target: str, fdir: Path, frames: list) -> list:
+    """[(frame, match)] on these frames that have the target. For a chunk, which may not have the
+    tip at all: best_detect keeps asking until it hits."""
     pull(fdir, frames)
     with ThreadPoolExecutor(len(frames)) as pool:
         got = list(pool.map(lambda n: sam.image(target, frame_png(fdir, n)), frames))
-    hits = [(n, g[0]) for n, g in zip(frames, got) if g]
-    return max(hits, key=lambda h: h[1]["c"]) if hits else None
+    return [(n, g[0]) for n, g in zip(frames, got) if g]
 
 
 def tip_gap(recs: dict, nframes: int, after: int, gap: int) -> int | None:
@@ -786,7 +786,7 @@ def best_frame(recs: dict, size: tuple) -> int | None:
     return None
 
 
-def _region(gray, quad: list, tip: list | None, plate: list):
+def _region(gray, quad: list, tip: list | None, plate: list | None):
     """ORB's mask: the plate and a margin around it, without the tip, and without what covers
     the plate (a hand: inside the plate's corners, not in SAM's plate mask)."""
     import cv2
@@ -797,18 +797,19 @@ def _region(gray, quad: list, tip: list | None, plate: list):
     cv2.fillConvexPoly(mask, np.int32((np.array(quad) - mid) * PLATE_MARGIN + mid), 255)
     inside, seen = np.zeros(gray.shape, np.uint8), np.zeros(gray.shape, np.uint8)
     cv2.fillConvexPoly(inside, corners_, 255)
-    h, w = gray.shape
-    xy = np.int32(plate)
-    xy = xy[(xy[:, 0] >= 0) & (xy[:, 0] < w) & (xy[:, 1] >= 0) & (xy[:, 1] < h)]
-    seen[xy[:, 1], xy[:, 0]] = 255
-    seen = cv2.dilate(seen, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)))
-    mask[(inside > 0) & (seen == 0)] = 0
+    if plate is not None:
+        h, w = gray.shape
+        xy = np.int32(plate)
+        xy = xy[(xy[:, 0] >= 0) & (xy[:, 0] < w) & (xy[:, 1] >= 0) & (xy[:, 1] < h)]
+        seen[xy[:, 1], xy[:, 0]] = 255
+        seen = cv2.dilate(seen, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)))
+        mask[(inside > 0) & (seen == 0)] = 0
     if tip:
         cv2.fillConvexPoly(mask, cv2.convexHull(np.int32(tip)), 0)
     return mask
 
 
-def _follow(orb, base: tuple, gray, tip: list | None, plate: list, last, quad0: list, reach: float):
+def _follow(orb, base: tuple, gray, tip: list | None, plate: list | None, last, quad0: list, reach: float):
     """This frame's homography from the reference, or None. A match stays within `reach` px of
     where the last frame's homography puts it (the wells repeat)."""
     import cv2
@@ -929,7 +930,10 @@ def _tip_at(recs: dict, n: int) -> list | None:
     return mask_points(recs[n][2], 2) if 2 in recs.get(n, {}) else None
 
 
-def _plate_at(recs: dict, n: int) -> list:
+def _plate_at(recs: dict, n: int, tracked: bool = True) -> list | None:
+    """Where the plate shows on frame n; None when SAM didn't track the plate at all."""
+    if not tracked:
+        return None
     return seen_points(recs[n][1]) if 1 in recs.get(n, {}) else [(0, 0)]
 
 
@@ -942,7 +946,8 @@ def orb_base(orb, gray, quad: list, tip: list | None, plate: list) -> tuple | No
     return np.float32([k.pt for k in kps]), des
 
 
-def _carry(orb, base: tuple, frames: dict, recs: dict, quad0: list, ways: tuple, start, out: dict) -> None:
+def _carry(orb, base: tuple, frames: dict, recs: dict, quad0: list, ways: tuple, start, out: dict,
+           plate_tracked: bool = True) -> None:
     """The plate's corners onto the frames of each way, from homography `start`."""
     import cv2
     import numpy as np
@@ -955,7 +960,7 @@ def _carry(orb, base: tuple, frames: dict, recs: dict, quad0: list, ways: tuple,
             if n not in frames:
                 continue
             lost = stuck >= LOST_FRAMES
-            found = _follow(orb, base, frames[n], _tip_at(recs, n), _plate_at(recs, n), last, quad0,
+            found = _follow(orb, base, frames[n], _tip_at(recs, n), _plate_at(recs, n, plate_tracked), last, quad0,
                             reach * (LOST_REACH if lost else 1))
             if found is not None:
                 quad = [tuple(map(float, p)) for p in cv2.perspectiveTransform(corners0, found).reshape(-1, 2)]
@@ -994,9 +999,10 @@ def ref_candidate(sam, gray, plate: dict, frame: int) -> dict | None:
             "score": plate_score(plate, wells)}
 
 
-def follow_chunk(frames: dict, recs: dict, ref: dict, start: int) -> dict:
-    """{"quads", ...} for a chunk from the session's reference. SAM's plate on frame `start` says
-    roughly where the plate is now, and matching takes it from there both ways."""
+def follow_chunk(frames: dict, recs: dict, ref: dict, start: int, plate: dict) -> dict:
+    """{"quads", ...} for a chunk from the session's reference. `plate` (SAM's, on frame `start`)
+    says roughly where the plate is now, and matching takes it from there both ways. Only the tip
+    is tracked, so a hand on the plate isn't masked out: RANSAC drops its matches."""
     import cv2
     import numpy as np
     orb = cv2.ORB_create(ORB_FEATURES)
@@ -1004,9 +1010,10 @@ def follow_chunk(frames: dict, recs: dict, ref: dict, start: int) -> dict:
     base = orb_base(orb, ref["gray"], ref["quad"], None, ref["seen"])
     if base is None:
         return out
-    here = np.float32(plate_corners(mask_points(recs[start][1], 2)))
+    here = np.float32(plate_corners(mask_points(plate, 2)))
     first = cv2.getPerspectiveTransform(np.float32(ref["quad"]), here)
-    _carry(orb, base, frames, recs, ref["quad"], (range(start, len(frames)), range(start - 1, -1, -1)), first, out)
+    _carry(orb, base, frames, recs, ref["quad"], (range(start, len(frames)), range(start - 1, -1, -1)), first, out,
+           plate_tracked=False)
     return out
 
 
@@ -1022,34 +1029,39 @@ def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) 
     fdir = frames_dir(clip, looks)
     t0 = time.perf_counter()
     with ThreadPoolExecutor(1) as pool:
-        finding_plate = pool.submit(lambda: next(filter(None, (best_of_all(sam, PLATE, fdir, [n])
-                                                               for n in sorted(looks, key=lambda n: abs(n - nframes / 2)))), None))
-        tip0 = best_of_all(sam, pointer, fdir, looks)
-        plate0 = finding_plate.result()
+        finding_plate = pool.submit(lambda: next(filter(None, (hits_on(sam, PLATE, fdir, [n])
+                                                               for n in sorted(looks, key=lambda n: abs(n - nframes / 2)))), [None]))
+        tips = hits_on(sam, pointer, fdir, looks)
+        plate0 = finding_plate.result()[0]
     t["first_find_s"] = time.perf_counter() - t0
     gray = gray_frames(clip, nframes)
     if plate0:
-        t0 = time.perf_counter()
-        cand = ref_candidate(sam, gray[plate0[0]], plate0[1], plate0[0])
-        t["reference_s"] = time.perf_counter() - t0
-        if cand:
-            session.offer({**cand, "chunk": out_dir.name})
-    if not plate0 or not tip0:
+        def offer() -> None:
+            cand = ref_candidate(sam, gray[plate0[0]], plate0[1], plate0[0])
+            if cand:
+                session.offer({**cand, "chunk": out_dir.name})
+        if session.ref() is None:
+            t0 = time.perf_counter()
+            offer()
+            t["reference_s"] = time.perf_counter() - t0
+        else:  # a better reference can land later; this chunk needn't wait for the call
+            threading.Thread(target=offer, daemon=True).start()
+    if not plate0 or not tips:
         shutil.rmtree(fdir)
         t["total_s"] = time.perf_counter() - t_all
         return {"frames": nframes, "fps": fps, "track": [], "timing": t, "why": "no plate" if not plate0 else "no tip"}
-    prompts = {1: [plate0], 2: [tip0]}
-    _, recs, rounds = track_video(clip, out_dir, sam, prompts, nframes, fps, fdir, pointer, t)
+    # every look that saw the tip prompts it, in one video call: a second round repeats the whole video
+    _, recs, rounds = track_video(clip, out_dir, sam, {2: tips}, nframes, fps, fdir, pointer, t, max_rounds=1)
     shutil.rmtree(fdir)
     t0 = time.perf_counter()
     decode_masks(recs)
     t["masks_s"] = time.perf_counter() - t0
     ref = session.ref()
-    if ref is None or 1 not in recs.get(plate0[0], {}):
+    if ref is None:
         t["total_s"] = time.perf_counter() - t_all
         return {"frames": nframes, "fps": fps, "track": [], "timing": t, "why": "no reference"}
     t0 = time.perf_counter()
-    followed = follow_chunk(gray, recs, ref, plate0[0])
+    followed = follow_chunk(gray, recs, ref, plate0[0], plate0[1])
     t["follow_s"] = time.perf_counter() - t0
     track, *_ = locate(recs, nframes, a1, quads=followed["quads"])
     t["total_s"] = time.perf_counter() - t_all
@@ -1068,7 +1080,7 @@ def locate(recs: dict, nframes: int, a1: str, say=_quiet, quads: dict | None = N
         say("Placing the grid on each frame", n, nframes)
         r = recs.get(n, {})
         plate, tip = r.get(1), r.get(2)
-        if not plate:
+        if not plate and n not in (quads or {}):
             fails["no_plate"] += 1
             continue
         try:
@@ -1094,10 +1106,11 @@ def locate(recs: dict, nframes: int, a1: str, say=_quiet, quads: dict | None = N
 
 
 def track_video(clip: Path, out_dir: Path, sam, prompts: dict, nframes: int, fps: float, fdir: Path,
-                pointer: str, t: dict, say=_quiet) -> tuple:
+                pointer: str, t: dict, say=_quiet, max_rounds: int = MAX_ROUNDS) -> tuple:
     """The clip re-encoded, uploaded and tracked from `prompts`, found again when the tip goes
     missing (prompts grows). -> (SAM's text, its records, rounds); t gets the times."""
-    size = (prompts[1][0][1]["w"], prompts[1][0][1]["h"])
+    first_match = next(iter(prompts.values()))[0][1]
+    size = (first_match["w"], first_match["h"])
     t0 = time.perf_counter()
     say("Uploading the clip to SAM")
     sent = out_dir / "clip_sam.mp4"
@@ -1119,7 +1132,7 @@ def track_video(clip: Path, out_dir: Path, sam, prompts: dict, nframes: int, fps
         t["video_s"] += time.perf_counter() - t0
         t["video_first_frame_s"] = t["video_first_frame_s"] or first
         recs = video_records(text)
-        if rounds >= MAX_ROUNDS:
+        if rounds >= max_rounds:
             break
         g = tip_gap(recs, nframes, max(n for n, _ in prompts[2]), gap)
         if g is None:
