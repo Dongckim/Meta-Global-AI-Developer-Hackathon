@@ -74,9 +74,10 @@ def went_to(c):
 
 full, private = modes.mode_view("full"), modes.mode_view("private")
 assert [named(s) for s in full["steps"]] == ["Meta Voice Transcribe", "Muse Spark (Meta Model API)"], full
-assert full["notes"] == ["Search · Photos · Robot code: Meta Model API"], full
+assert full["notes"] == [{"feature": "Search · Photos · Robot code", "how": "Meta Model API"}], full
 assert [named(s) for s in private["steps"]] == ["iOS Speech (on iPad)", "Muse Glimmer (Private GPU · Modal)"], private
-assert private["notes"] == ["Search & photos: Milo checks with you first.", "Robot code: Full only"], private
+assert private["notes"] == [{"feature": "Search & photos", "how": "Milo checks with you first."},
+                            {"feature": "Robot code", "how": "Full only"}], private
 print("MF1 ok: the cards say what was asked for")
 
 c = fresh("private")
@@ -105,7 +106,8 @@ with setting("full", commands="glimmer"):
 print("MF3 ok: move the setting, and the turn and the card move together")
 
 with setting("private", confirm_photo=False, handoff=True):
-    assert modes.mode_view("private")["notes"] == ["Photos · Robot code: Meta Model API", "Search: Milo checks with you first."]
+    assert modes.mode_view("private")["notes"] == [{"feature": "Photos · Robot code", "how": "Meta Model API"},
+                                                   {"feature": "Search", "how": "Milo checks with you first."}]
     c = fresh("private")
     j = c.post("/input", json={"text": "what does this label say", "session": "m"}).json()
     assert not j["cards"], "photo didn't ask: the card said so too"

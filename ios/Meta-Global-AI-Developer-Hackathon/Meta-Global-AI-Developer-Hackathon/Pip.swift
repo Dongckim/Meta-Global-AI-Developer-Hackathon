@@ -764,8 +764,10 @@ struct RecordSnapshot: Decodable {
         var label: String
         var line: String
         var steps: [Step]
-        var notes: [String]
+        var notes: [Note]
         struct Step: Decodable, Equatable { var icon: String; var name: String; var `where`: String }
+        /// Fine print: which feature, and how it runs.
+        struct Note: Decodable, Equatable { var feature: String; var how: String }
     }
 
     struct PrivateWake: Decodable, Equatable {

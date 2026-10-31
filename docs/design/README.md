@@ -79,7 +79,8 @@ nearest frame's parts and should get a look.
 - **⑤a Mode cards, what each mode does**: inside the 543 x 345 card, centered:
   icon + "Say Full" (50), the line (22), then the path a command takes, two
   chips (78 tall, radius 20, SF Symbol + name 19 semibold + where 16) with a
-  chevron between, then one or two fine print lines (18). Full's card is white,
+  chevron between, then one or two fine print lines (18: the feature semibold,
+  then how it runs in secondary, 10 apart). Full's card is white,
   Private's the dark canvas color on any screen. After the card is in, chip,
   chevron, chip arrive left to right (.35 s, then .1 s apart, 8 from the left);
   Reduce Motion: no motion. Saying "what's the difference?" on this screen

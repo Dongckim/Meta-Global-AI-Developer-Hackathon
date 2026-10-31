@@ -525,9 +525,15 @@ struct ModeCard: View {
                     .padding(.top, 4 * u)
                 path.padding(.top, 22 * u)
                 VStack(spacing: 2 * u) {
-                    ForEach(flow.notes, id: \.self) { Text($0) }
+                    ForEach(flow.notes, id: \.feature) { note in
+                        HStack(spacing: 10 * u) {
+                            Text(note.feature).fontWeight(.semibold).foregroundStyle(Theme.text1)
+                            Text(note.how).foregroundStyle(Theme.text2)
+                        }
+                    }
                 }
-                .font(Theme.ui(18 * u)).foregroundStyle(Theme.text2).lineLimit(1).minimumScaleFactor(0.85)
+                .font(Theme.ui(18 * u)).lineLimit(1).minimumScaleFactor(0.85)
+                .frame(height: 48 * u, alignment: .top)  // two lines' room: the chips line up across the cards
                 .padding(.top, 16 * u)
             }
             .padding(.horizontal, 24 * u)
@@ -536,7 +542,7 @@ struct ModeCard: View {
             .benchCard(radius: 44 * u, fill: dark ? Theme.privateCard : Theme.card)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(([button.say, flow.line] + flow.steps.map { "\($0.name) \($0.where)" } + flow.notes)
+        .accessibilityLabel(([button.say, flow.line] + flow.steps.map { "\($0.name) \($0.where)" } + flow.notes.map { "\($0.feature): \($0.how)" })
             .joined(separator: ", "))
         .onAppear { withAnimation(reduce ? nil : M.ease(M.lineFade).delay(M.modeFlowDelay)) { shown = true } }
     }
@@ -572,7 +578,8 @@ struct ModeCard: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12 * u)
-        .frame(maxWidth: .infinity, minHeight: 78 * u)
+        .frame(maxWidth: .infinity)
+        .frame(height: 78 * u)
         .background(RoundedRectangle(cornerRadius: 20 * u, style: .continuous).fill(Theme.flowChip))
     }
 }

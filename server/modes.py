@@ -31,9 +31,9 @@ def mode_view(mode: str) -> dict:
     """Snapshot `modes`: one Mode card, generated from the routing settings."""
     cfg = section("modes")[mode]
     asks, direct, robot = _meta_use(mode)
-    notes = [" · ".join(direct) + ": Meta Model API"] if direct else []
-    notes += [" & ".join(asks).capitalize() + ": Milo checks with you first."] if asks else []
-    notes += [] if robot else ["Robot code: Full only"]
+    notes = [{"feature": " · ".join(direct), "how": "Meta Model API"}] if direct else []
+    notes += [{"feature": " & ".join(asks).capitalize(), "how": "Milo checks with you first."}] if asks else []
+    notes += [] if robot else [{"feature": "Robot code", "how": "Full only"}]
     return {"id": mode, "label": cfg["label"], "line": cfg["line"],
             "steps": [_step("asr", mode), _step("commands", mode)], "notes": notes}
 
