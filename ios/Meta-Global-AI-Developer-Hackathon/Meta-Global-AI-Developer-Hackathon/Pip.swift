@@ -754,6 +754,17 @@ struct RecordSnapshot: Decodable {
     /// The private model's wake-up (server `private`); nil until Private asks for it.
     var privateWake: PrivateWake?
     var transcribe: String?
+    var modes: [ModeFlow]?
+
+    /// A Mode card, as the server's routing settings make it.
+    struct ModeFlow: Decodable, Equatable {
+        var id: String
+        var label: String
+        var line: String
+        var steps: [Step]
+        var notes: [String]
+        struct Step: Decodable, Equatable { var icon: String; var name: String; var `where`: String }
+    }
 
     struct PrivateWake: Decodable, Equatable {
         var state: String
@@ -787,7 +798,7 @@ struct RecordSnapshot: Decodable {
         case epoch, view, version, plan, stepIndex = "step_index", done, excluded, redo,
              notes, tips, timers, stamps, cards, draft, handoff, run, recent, header, bench
         case privateWake = "private"
-        case transcribe
+        case transcribe, modes
     }
 
     init(from decoder: Decoder) throws {
@@ -816,6 +827,7 @@ struct RecordSnapshot: Decodable {
         headerMode = try c.decodeIfPresent(Header.self, forKey: .header)?.mode
         privateWake = (try? c.decodeIfPresent(PrivateWake.self, forKey: .privateWake)) ?? nil  // auxiliary, like draft
         transcribe = try? c.decodeIfPresent(String.self, forKey: .transcribe)
+        modes = try? c.decodeIfPresent([ModeFlow].self, forKey: .modes)
         bench = try c.decodeIfPresent(Bench.self, forKey: .bench)
     }
 }
@@ -937,6 +949,7 @@ final class LabState {
     var bench: RecordSnapshot.Bench?
     /// The private model's wake-up, drawn as the server sends it.
     var privateWake: RecordSnapshot.PrivateWake?
+    var modes: [RecordSnapshot.ModeFlow] = []
     /// Ready came on the wait screen: it stays for its ending, the app clears this.
     var wakeEnding = false
     var cards: [ServerCard] = []
@@ -981,6 +994,7 @@ final class LabState {
         }
         privateWake = snap.privateWake
         PipClient.transcribeOnDevice = snap.transcribe == "device"
+        modes = snap.modes ?? modes
         bench = snap.bench
         cards = snap.cards
         draft = snap.draft

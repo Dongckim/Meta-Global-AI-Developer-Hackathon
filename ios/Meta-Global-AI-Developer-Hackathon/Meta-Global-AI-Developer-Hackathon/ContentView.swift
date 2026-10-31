@@ -496,7 +496,7 @@ struct ContentView: View {
                 // ⑤a / ⑤b start (Figma 37:13141, 37:13167)
                 stage { u in
                     if lab.view.current.screen == "mode" {
-                        ModeScreen(buttons: buttons("mode"), u: u, perform: performButton)
+                        ModeScreen(buttons: buttons("mode"), flows: lab.modes, u: u, perform: performButton)
                     } else {
                         ImportChoiceScreen(buttons: buttons("import_choice"), afterWake: wakeLanding, u: u, perform: performButton)
                     }

@@ -322,9 +322,20 @@
     ]
   },
   "modes": {
-    "_note": "Run modes: header label, the line under each choice on the Mode screen, an optional smaller detail under it.",
-    "full": {"label": "Full", "line": "Meta API · fastest", "confirm_search": false, "confirm_photo": false},
-    "private": {"label": "Private", "line": "On our own Meta model", "detail": "Voice commands and imported protocols run on our own Meta model (Glimmer). Search and photo questions ask before using the Meta API.", "confirm_search": true, "confirm_photo": true}
+    "_note": "Run modes: header label, Mode card line, and the routing itself: asr, commands, imports (keys of mode_routes), handoff, confirm_*. server/modes.py reads these for the routing and the Mode card alike.",
+    "full": {"label": "Full", "line": "Meta API · fastest", "asr": "meta", "commands": "spark", "imports": "spark", "handoff": true, "confirm_search": false, "confirm_photo": false},
+    "private": {"label": "Private", "line": "On our own Meta model", "asr": "device", "commands": "glimmer", "imports": "glimmer", "handoff": false, "confirm_search": true, "confirm_photo": true}
+  },
+  "mode_routes": {
+    "_note": "How a route is named on the Mode card and aloud.",
+    "asr": {
+      "meta": {"icon": "waveform", "name": "Meta Voice Transcribe", "where": ""},
+      "device": {"icon": "waveform", "name": "iOS Speech", "where": "on iPad"}
+    },
+    "commands": {
+      "spark": {"icon": "sparkle", "name": "Muse Spark", "where": "Meta API"},
+      "glimmer": {"icon": "sparkle", "name": "Muse Glimmer", "where": "our server"}
+    }
   },
   "also_ask": [
     "Should I also {what}?",

@@ -31,6 +31,7 @@ from server.grammar import (
 from server.screens import READ_KINDS as SCREEN_READ_KINDS
 from server.screens import FLOWS, PLANNED, SCREENS, canonical, card_answers, card_choices, item_off, ITEMS, result_of, title_of, ui_of
 from server.private_wake import PrivateWake
+from server.modes import all_modes, mode_view, route
 from server.tone import run_mode, say, section, set_run_mode
 from server import library as lib
 from server import protocol as proto
@@ -401,7 +402,7 @@ class RecordStore:
             return
         self._save_mode(mode)
         waiting = self.r["view"]["current"]["screen"] == "private_wait"
-        if mode == "private" and not self.wake.fresh():
+        if route("commands", mode) == "glimmer" and not self.wake.fresh():
             self._wait_for_private(session, "import_choice")
             return
         if mode == "full":
@@ -1079,7 +1080,8 @@ class RecordStore:
         snap["handoff"] = self.handoff_view(self._handoff_here()) if self._handoff_here() else None
         snap["bench"] = self.bench_view(self.r)
         snap["private"] = self.wake.view()
-        snap["transcribe"] = "device" if run_mode() == "private" else "server"
+        snap["transcribe"] = "device" if route("asr") == "device" else "server"
+        snap["modes"] = [mode_view(m) for m in all_modes()]
         snap["header"] = {"mode": self.header_mode(cur.get("screen") or ("main" if snap.get("run") else "home"))}
         if snap.get("run"):  # what the app shows instead of the run id
             snap["run"]["label"] = self.run_label(self.active_run_doc() or snap["run"])["display"]
@@ -2249,7 +2251,7 @@ class RecordStore:
         if doc is None:
             res["messages"].append(say("handoff_none", session))
             return
-        if ((doc.get("record") or {}).get("run") or {}).get("mode") == "private":
+        if not route("handoff", ((doc.get("record") or {}).get("run") or {}).get("mode") or "full"):
             res["messages"].append(say("handoff_private", session))
             return
         h = doc.get("handoff") or {}
@@ -2797,7 +2799,7 @@ class RecordStore:
                 name = (self.r.get("run") or {}).get("protocol_name") or "run"
                 doc = self._finish_locked("finished")
                 res["messages"].append(f"Run finished: {name}.")
-                if doc and run_mode() != "private":  # hand off: the run as it went, for the robot
+                if doc and route("handoff"):  # hand off: the run as it went, for the robot
                     self._open_handoff(res, session, doc["run_id"])
         else:
             res["messages"].append("That card is gone.")

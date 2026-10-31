@@ -51,6 +51,7 @@ from server.grammar import (
     bare_completion,
     answer_or_filler,
     unfinished,
+    asks_difference,
     asks_record,
     unserved_parts,
     untouched_wells,
@@ -81,6 +82,7 @@ from server.labels import protocol_short
 from server.live_session import LiveSender, LiveConversation, device_hints, live_keywords
 from server.live_session import settings as live_settings
 from server.tone import keys as tone_keys
+from server.modes import explain, route
 from server.private_chat import STATE_MARK, from_chat, to_chat
 from server.private_wake import wake_up, weights_gb
 from server.tone import run_mode, say, section
@@ -95,7 +97,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 24
+API_VERSION = 25
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -569,7 +571,7 @@ async def _call_spark(
     a recent-actions summary; a second failure answers sorry instead of a 502.
     """
     mem: Memory = session["memory"]
-    private = run_mode() == "private"
+    private = route("commands") == "glimmer"
     if isinstance(mem, SparkChainMemory) and mem.needs_reanchor:
         mem.reset(store.session_summary())
         session["pending_outputs"] = []
@@ -1101,6 +1103,8 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         reply = _compose_reply(calls, res, store.prompt_state(session), session)
         return calls, res["messages"], reply, 0, "grammar", res["cards"], res["info"], []
     v = store.r["view"]
+    if v["current"]["screen"] == "mode" and asks_difference(text):
+        return [], [], explain(), 0, "grammar", [], {"dropped": 0, "drop_reasons": []}, []
     shown = [x for x in ((v.get("sheet") or {}).get("name"), v["current"]["screen"]) if x]
     vslots = store.view_slots(v["current"]["screen"], v["current"].get("target") or "")
     b, which = button_match(text, shown, vslots)
@@ -1142,7 +1146,7 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
         if res["info"].get("edited"):
             reply = f"Note updated ({res['info']['edited']['target']})."
         return calls, res["messages"], reply, 0, "grammar", res["cards"], res["info"], []
-    if run_mode() == "private" and not store.wake.fresh():  # asleep: this turn runs once it's up
+    if route("commands") == "glimmer" and not store.wake.fresh():  # asleep: this turn runs once it's up
         return [], [], store.park_for_private(text, session, source), 0, "wait", [], \
             {"dropped": 0, "drop_reasons": []}, []
     summary = evidence_summary(session.get("turns"))
@@ -1822,7 +1826,7 @@ async def orchestrate(body: OrchestrateIn):
 async def voice(audio: UploadFile | None = File(None), transcript: str = Form(""),
                 state: str = Form("{}"), session: str = Form("bench")):
     total0 = time.perf_counter()
-    if run_mode() == "private":  # heard on the iPad; audio sent anyway stops here
+    if route("asr") == "device":  # heard on the iPad; audio sent anyway stops here
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             return await _voice_turn(client, _key(), transcript, get_session(session), 0, total0)
     if audio is None:
@@ -1928,7 +1932,7 @@ async def voice_live(ws: WebSocket):
     start = await ws.receive_json()
     session = get_session((start or {}).get("session") or "bench")
     mode = run_mode()
-    device = mode == "private"
+    device = route("asr") == "device"
     meta = live_asr.DeviceStream() if device else live_asr.MetaStream(
         _key(), mode="DIARIZATION", keywords=live_keywords(store.r), language_bias=["English"])
     hints = _device_hints() if device else []
@@ -2417,7 +2421,7 @@ async def _import_once(uploads: list, text: str, filename: str, original_id: str
     the app keeps PDFs and photos under `original_id` on the device."""
     if sum(len(raw) for _, raw in uploads) + len(text.encode()) > PROTOCOL_MAX_BYTES:
         raise HTTPException(413, "protocol file too large (10MB max)")
-    private = run_mode() == "private"
+    private = route("imports") == "glimmer"
     read = _glimmer_json if private else _spark_json
     ext = lambda n: n.lower().rsplit(".", 1)[-1] if "." in n else ""  # noqa: E731
     t0 = time.perf_counter()

@@ -1000,6 +1000,11 @@ _CLAUSE_SPLIT = re.compile(r"[.!?;]+\s*|,?\s+(?:and|then)\s+|,\s*", re.IGNORECAS
 _ASKING = re.compile(r"(?:how|what|which|when|where|who|why|is|are|did|does|has|have)\b")
 
 
+def asks_difference(text) -> bool:
+    """On the Mode screen: "what's the difference?", "how are they different"."""
+    return bool(re.search(r"\b(difference|differ|different|compare)\b", (text or "").lower()))
+
+
 def asks_record(text) -> bool:
     return bool(_ASKING.match((text or "").strip().lower()))
 

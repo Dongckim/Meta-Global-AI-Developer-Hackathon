@@ -74,6 +74,12 @@ enum Theme {
     static let text3 = modal(Color(hex: 0x6E6E73), Color(hex: 0xC7C7CC))
     /// A progress segment not reached yet, on the canvas.
     static let segmentRest = modal(.white, Color(hex: 0x7C7C80))
+    /// Private's Mode card: the dark canvas, on any screen.
+    static let privateCard = Color(hex: 0x3A3A3C)
+    /// A step of a mode's path on its card.
+    static let flowChip = modal(Color(hex: 0xF2F2F5), Color.white.opacity(0.1))
+    /// "Say" and accents: polish blue doesn't read on the dark card.
+    static let sayTint = modal(polishBlue, Color(hex: 0x6CB6FF))
     /// Legend dots stay readable on the dark canvas.
     static let legendRing = modal(.clear, Color.white.opacity(0.7))
     /// Unselected card.
@@ -238,6 +244,10 @@ enum Theme {
         static let wakeAwakeHold = 0.6
         static let wakeCardRise: CGFloat = 12
         static let wakeCardStep = 0.08
+        /// A Mode card's path: after the card is in, chip, arrow, chip.
+        static let modeFlowDelay = 0.35
+        static let modeFlowStep = 0.1
+        static let modeFlowShift: CGFloat = 8
         /// --ease cubic-bezier(.22,1,.36,1) and --spring cubic-bezier(.34,1.36,.64,1).
         static func ease(_ duration: Double) -> Animation { .timingCurve(0.22, 1, 0.36, 1, duration: duration) }
         static func spring(_ duration: Double) -> Animation { .timingCurve(0.34, 1.36, 0.64, 1, duration: duration) }

@@ -434,7 +434,9 @@ the key stays on the server (handshake `authorization.accessToken`).
   deployment of Meta's open weights (server/private/README.md), and speech is
   transcribed on the iPad. Hand off, photo questions and search summaries stay
   on Spark; search and photo questions ask first (`modes.private.confirm_*`).
-  A document too long for Glimmer asks to switch to Full.
+  A document too long for Glimmer asks to switch to Full. Which model runs
+  what is one setting, `modes` in pip_voice.json, read by the routing and the
+  Mode card alike (server/modes.py): never a mode check in code.
   Say it as "not sent to the Meta API, processed on the Meta model we run";
   never "on device".
 - "Hey Meta" voice invocation is out of scope; add no related

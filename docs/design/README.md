@@ -76,6 +76,15 @@ nearest frame's parts and should get a look.
   between. Failed: the ring stops orange, "The private model didn't wake up.",
   Try again (primary) and Use Full mode (secondary), both 360 wide. Reduce
   Motion: ring only. All times are `Theme.Motion`.
+- **⑤a Mode cards, what each mode does**: inside the 543 x 345 card, centered:
+  icon + "Say Full" (50), the line (22), then the path a command takes, two
+  chips (78 tall, radius 20, SF Symbol + name 19 semibold + where 16) with a
+  chevron between, then one or two fine print lines (18). Full's card is white,
+  Private's the dark canvas color on any screen. After the card is in, chip,
+  chevron, chip arrive left to right (.35 s, then .1 s apart, 8 from the left);
+  Reduce Motion: no motion. Saying "what's the difference?" on this screen
+  speaks the same facts. All of it comes from the routing settings
+  (`server/modes.py`, snapshot `modes`).
 - **⑤a Mode, Private variant (differs from the design)**: its line "Nothing
   leaves this iPad" isn't true, so it isn't used. What happens: speech is
   transcribed on the iPad; voice commands and imports run on Glimmer on our

@@ -47,6 +47,13 @@
         "info": {"type": "string"}
       }
     },
+    "modes": {"type": "array",
+      "description": "Served snapshots only: the Mode cards, generated from the routing settings (server/modes.py). The app draws them as they are.",
+      "items": {"type": "object", "required": ["id", "label", "line", "steps", "notes"],
+        "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "line": {"type": "string"},
+          "steps": {"type": "array", "items": {"type": "object", "required": ["icon", "name", "where"],
+            "properties": {"icon": {"type": "string"}, "name": {"type": "string"}, "where": {"type": "string"}}}},
+          "notes": {"type": "array", "items": {"type": "string"}}}}},
     "transcribe": {"enum": ["device", "server"],
       "description": "Served snapshots only: who turns speech into text. device (Private): the iPad, and audio stays on it."},
     "epoch": {"type": "string",

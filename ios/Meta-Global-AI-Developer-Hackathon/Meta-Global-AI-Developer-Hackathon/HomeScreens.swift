@@ -431,7 +431,7 @@ struct RunRecordScreen: View {
 }
 
 // MARK: - ⑤a Mode, ⑤b Import (Start)
-// ⑤a (Figma 37:13141): Full or Private, lines from pip_voice.json `modes`;
+// ⑤a (Figma 37:13141): Full or Private, cards from the server (snapshot `modes`);
 // Private waits for its model (PrivateWaitScreen), then goes on to ⑤b.
 // ⑤b (37:13167): Text / File / Photo from the registry import_choice
 // buttons; File opens the importer, Text and Photo are planned.
@@ -441,7 +441,6 @@ struct ChoiceCard: View {
     var icon: String
     var button: ScreenButton
     var line: String
-    var detail = ""
     var u: CGFloat
     var perform: (ScreenButton) -> Void
 
@@ -456,10 +455,6 @@ struct ChoiceCard: View {
                     .padding(.top, 70 * u)
                 Text(line).font(Theme.ui(28 * u)).foregroundStyle(Theme.text2).lineLimit(2)
                     .multilineTextAlignment(.center).minimumScaleFactor(0.6).padding(.top, 22 * u)
-                if !detail.isEmpty {
-                    Text(detail).font(Theme.ui(22 * u)).foregroundStyle(Theme.text3)
-                        .multilineTextAlignment(.center).padding(.top, 10 * u)
-                }
             }
             .padding(.horizontal, 24 * u)
             .padding(.vertical, 24 * u)
@@ -476,28 +471,112 @@ struct ChoiceCard: View {
 struct ModeScreen: View {
     /// Registry mode buttons (Full, Private).
     var buttons: [ScreenButton]
+    /// The server's cards; a button without one shows its word only.
+    var flows: [RecordSnapshot.ModeFlow]
     var u: CGFloat
     var perform: (ScreenButton) -> Void
 
-    private func mode(_ b: ScreenButton) -> Persona.Mode? { Persona.modes[b.say.lowercased()] }
+    private func flow(_ b: ScreenButton) -> RecordSnapshot.ModeFlow? {
+        flows.first { $0.id == b.say.lowercased() }
+    }
 
     var body: some View {
         VStack(spacing: Theme.Layout.titleGap * u) {
-            Text(buttons.map { mode($0)?.label ?? $0.say }.joined(separator: " or ") + "?")
+            Text(buttons.map { flow($0)?.label ?? $0.say }.joined(separator: " or ") + "?")
                 .font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1).displayLine(u)
                 .enter(.text, u: u)
             HStack(spacing: 36 * u) {
                 ForEach(Array(buttons.enumerated()), id: \.offset) { i, b in
-                    ChoiceCard(icon: b.say.lowercased() == "private" ? "lock.fill" : "cloud.fill", button: b,
-                               line: mode(b)?.line ?? "", detail: mode(b)?.detail ?? "", u: u, perform: perform)
-                        .enter(i == 0 ? .left : .right, i + 1, u: u)
+                    if let f = flow(b) {
+                        ModeCard(flow: f, button: b, u: u, perform: perform)
+                            .enter(i == 0 ? .left : .right, i + 1, u: u)
+                    }
                 }
             }
-            .fixedSize(horizontal: false, vertical: true)  // a long detail grows both cards, never cuts
             .frame(width: 1122 * u)
         }
         .padding(.bottom, Theme.Layout.choiceLift * u)
         .frame(maxHeight: .infinity)
+    }
+}
+
+/// ⑤a's card (Figma 543 x 345) with what the mode does: who it is, then the
+/// path a command takes, then the fine print. Private's card is dark whatever
+/// the screen, so the choice reads before a word does.
+struct ModeCard: View {
+    var flow: RecordSnapshot.ModeFlow
+    var button: ScreenButton
+    var u: CGFloat
+    var perform: (ScreenButton) -> Void
+
+    private let M = Theme.Motion.self
+    @Environment(\.accessibilityReduceMotion) private var reduce
+    @State private var shown = false
+    private var dark: Bool { flow.id == "private" }
+
+    var body: some View {
+        Button { perform(button) } label: {
+            VStack(spacing: 0) {
+                HStack(spacing: 14 * u) {
+                    Image(systemName: dark ? "lock.fill" : "cloud.fill").font(Theme.ui(30 * u))
+                        .foregroundStyle(Theme.text2)
+                    (Say.prefix(Theme.sayTint).font(Theme.ui(40 * u))
+                     + Text(button.say).font(Theme.ui(50 * u, weight: .semibold)).foregroundStyle(Theme.text1))
+                        .tracking(-0.9 * u).lineLimit(1)
+                }
+                Text(flow.line).font(Theme.ui(22 * u)).foregroundStyle(Theme.text2).lineLimit(1)
+                    .padding(.top, 4 * u)
+                path.padding(.top, 22 * u)
+                VStack(spacing: 2 * u) {
+                    ForEach(flow.notes, id: \.self) { Text($0) }
+                }
+                .font(Theme.ui(18 * u)).foregroundStyle(Theme.text2).lineLimit(1).minimumScaleFactor(0.85)
+                .padding(.top, 16 * u)
+            }
+            .padding(.horizontal, 24 * u)
+            .frame(maxWidth: .infinity, minHeight: 345 * u, maxHeight: 345 * u)
+            .environment(\.colorScheme, dark ? .dark : .light)
+            .benchCard(radius: 44 * u, fill: dark ? Theme.privateCard : Theme.card)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(([button.say, flow.line] + flow.steps.map { "\($0.name) \($0.where)" } + flow.notes)
+            .joined(separator: ", "))
+        .onAppear { withAnimation(reduce ? nil : M.ease(M.lineFade).delay(M.modeFlowDelay)) { shown = true } }
+    }
+
+    /// The path, left to right: the chips arrive in that order.
+    private var path: some View {
+        HStack(spacing: 8 * u) {
+            ForEach(Array(flow.steps.enumerated()), id: \.offset) { i, step in
+                if i > 0 {
+                    Image(systemName: "chevron.right").font(Theme.ui(16 * u, weight: .semibold))
+                        .foregroundStyle(Theme.text2).opacity(shown ? 1 : 0)
+                        .animation(reduce ? nil : M.ease(M.lineFade).delay(M.modeFlowDelay + M.modeFlowStep), value: shown)
+                }
+                chip(step)
+                    .opacity(shown ? 1 : 0).offset(x: shown ? 0 : -M.modeFlowShift * u)
+                    .animation(reduce ? nil : M.ease(M.lineFade).delay(M.modeFlowDelay + Double(i) * 2 * M.modeFlowStep),
+                               value: shown)
+            }
+        }
+    }
+
+    private func chip(_ step: RecordSnapshot.ModeFlow.Step) -> some View {
+        HStack(spacing: 10 * u) {
+            Image(systemName: step.icon).font(Theme.ui(20 * u)).foregroundStyle(Theme.sayTint)
+                .frame(width: 24 * u)
+            VStack(alignment: .leading, spacing: 1 * u) {
+                Text(step.name).font(Theme.ui(19 * u, weight: .semibold)).foregroundStyle(Theme.text1)
+                    .lineLimit(2).minimumScaleFactor(0.85)
+                if !step.where.isEmpty {
+                    Text(step.where).font(Theme.ui(16 * u)).foregroundStyle(Theme.text2).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12 * u)
+        .frame(maxWidth: .infinity, minHeight: 78 * u)
+        .background(RoundedRectangle(cornerRadius: 20 * u, style: .continuous).fill(Theme.flowChip))
     }
 }
 
