@@ -206,11 +206,11 @@ class RecordStore:
         #: Runs an import held for its confirm card (api; None in plain store tests).
         self.spawn_import = None
         self._load_or_seed()
-        self._restore_mode()
 
     # --- persistence / broadcast ---
 
-    def _restore_mode(self) -> None:
+    def restore_mode(self) -> None:
+        """Server start only: a store in a test must not inherit the iPad's choice."""
         saved = self.root / "run_mode.txt"
         if saved.exists():
             set_run_mode(saved.read_text().strip())

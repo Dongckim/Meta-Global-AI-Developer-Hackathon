@@ -9,6 +9,7 @@ enum Log {
     static let voice = Logger(subsystem: Subsystem.id, category: "voice")
     static let audio = Logger(subsystem: Subsystem.id, category: "audio")
     static let view = Logger(subsystem: Subsystem.id, category: "view")
+    static let imports = Logger(subsystem: Subsystem.id, category: "import")
     /// Launch to Main, one line per stage with ms since launch: "[boot] 412ms sse open".
     static let boot = Logger(subsystem: Subsystem.id, category: "boot")
     /// Screen geometry while it settles: "[layout] main 1376x1032 safe(t0 b0) u=1.00".

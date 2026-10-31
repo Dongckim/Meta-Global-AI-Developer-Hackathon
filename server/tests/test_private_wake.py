@@ -247,7 +247,7 @@ st, s = fresh()
 st.spawn_wake = lambda session, gen: None
 tap(st, s, "choose_mode", mode="private")
 tone.set_run_mode(None)
-RecordStore(path=st.path)
+RecordStore(path=st.path).restore_mode()
 assert tone.run_mode() == "private"
 tone.set_run_mode(None)
 print("test_private_wake OK")

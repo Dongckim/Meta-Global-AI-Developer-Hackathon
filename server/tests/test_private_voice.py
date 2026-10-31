@@ -227,6 +227,13 @@ with patch.object(api, "_import_once", fake_once):
 assert extracted == ["Add 20 uL to C3."], extracted
 print("PV11 ok: yes reads the held import, once")
 
+stages = []
+with patch.object(api, "_import_once", fake_once), patch.object(api, "_stage", lambda s, st, **k: stages.append((st, k))):
+    import_text(c, "Add 30 uL to C4.")
+    asyncio.run(after_yes())
+assert ("failed", {"reason": "HTTPException", "say": "I couldn't read that file."}) in stages, stages
+print("PV11b ok: a failed read after the card is said, nobody is waiting on a response")
+
 c = private()
 calls = Calls(chat(("perform", {"action": "mark_done", "wells": ["B7"]})))
 with patch.object(api, "_post", calls):

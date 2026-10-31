@@ -280,6 +280,7 @@
   "confirm_photo": ["Send a photo to answer that?"],
   "confirm_import": ["Send this to the Meta API to read it?"],
   "import_reading": ["Reading it now."],
+  "import_failed": ["I couldn't read that file."],
   "looking_up": ["Looking it up."],
   "still_looking": ["Still looking…"],
   "search_stopped": ["Okay, I stopped looking."],

@@ -50,6 +50,8 @@ struct ContentView: View {
     @State private var importing = false
     /// The import's load pill: shown while reading, "Draft ready" a moment after.
     @State private var importPill: Bool? = nil
+    /// Why the last import stopped, on screen until the next one or a few seconds.
+    @State private var importNote: String?
     @State private var showImporter = false
     @State private var showTextImport = false
     /// Control commands for the screen on top (next page, take it, scroll down…).
@@ -269,6 +271,17 @@ struct ContentView: View {
                 .allowsHitTesting(false)
             }
         }
+        .overlay(alignment: .bottom) {
+            if let note = importNote {
+                Text(note).font(Theme.ui(22)).foregroundStyle(Theme.text1)
+                    .multilineTextAlignment(.center).lineLimit(3)
+                    .padding(.horizontal, 28).padding(.vertical, 16)
+                    .background(Capsule().fill(Theme.card))
+                    .padding(.horizontal, 40).padding(.bottom, 40)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
         // hidden from the first frame on and never toggled: a status bar
         // appearing with Main changed the safe area under it (the bands)
         .statusBarHidden(true)
@@ -392,18 +405,31 @@ struct ContentView: View {
             } else if lab.view.current.screen == "import_file" {
                 // our file list (voice can't drive the iOS picker)
                 stage { u in
-                    FileListScreen(files: files, buttons: buttons("import_file"), u: u,
-                                   onPick: { sendAction("pick", ["n": $0]) }, perform: performButton)
-                        .disabled(importing).opacity(importing ? 0.5 : 1)
+                    if lab.cards.isEmpty {
+                        FileListScreen(files: files, buttons: buttons("import_file"), u: u,
+                                       onPick: { sendAction("pick", ["n": $0]) }, perform: performButton)
+                            .disabled(importing).opacity(importing ? 0.5 : 1)
+                    } else {
+                        // "Send this to the Meta API?", "Already saved as..."
+                        ConfirmScreen(lab: lab, buttons: registry.cards, u: u, onAnswer: answer(id:ok:),
+                                      onAnswerAll: answerAll, onChoice: choose(id:answer:))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             } else if lab.view.current.screen == "import_photo", let cam = camera {
                 // our camera: "take it", "one more", "done"
                 stage { u in
-                    CameraScreen(source: cam, commands: commands, buttons: buttons("import_photo"), u: u,
-                                 perform: performButton,
-                                 onPages: { n in report("import_photo", (0..<n).map { ("p\($0 + 1)", "page \($0 + 1)") }) },
-                                 onDone: importPhotos, onSystemSheet: { voice.systemSheet($0) })
-                        .disabled(importing).opacity(importing ? 0.5 : 1)
+                    if lab.cards.isEmpty {
+                        CameraScreen(source: cam, commands: commands, buttons: buttons("import_photo"), u: u,
+                                     perform: performButton,
+                                     onPages: { n in report("import_photo", (0..<n).map { ("p\($0 + 1)", "page \($0 + 1)") }) },
+                                     onDone: importPhotos, onSystemSheet: { voice.systemSheet($0) })
+                            .disabled(importing).opacity(importing ? 0.5 : 1)
+                    } else {
+                        ConfirmScreen(lab: lab, buttons: registry.cards, u: u, onAnswer: answer(id:ok:),
+                                      onAnswerAll: answerAll, onChoice: choose(id:answer:))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             } else if lab.view.current.screen == "web_source",
                       let url = URL(string: lab.view.slots["url"] ?? "") {
@@ -1013,17 +1039,22 @@ struct ContentView: View {
         voice.systemSheet(false)
         switch res {
         case .failure(let e):
-            say("Pick failed: \(e.localizedDescription)")
+            importFailed("Pick failed: \(e.localizedDescription)")
         case .success(let url):
+            Log.imports.info("[import] picked \(url.lastPathComponent, privacy: .public)")
             guard url.startAccessingSecurityScopedResource() else {
-                say("Can't read that file")
+                importFailed("No access to \(url.lastPathComponent)")
                 return
             }
             defer { url.stopAccessingSecurityScopedResource() }
-            guard let data = try? Data(contentsOf: url) else {
-                say("Can't read that file")
+            let data: Data
+            do {
+                data = try Data(contentsOf: url)
+            } catch {
+                importFailed("Can't read \(url.lastPathComponent): \(error.localizedDescription)")
                 return
             }
+            Log.imports.info("[import] read \(data.count) bytes")
             let oid = UUID().uuidString
             if url.pathExtension.lowercased() == "pdf" {
                 OriginalStore.save(data, protocolId: oid)
@@ -1045,9 +1076,10 @@ struct ContentView: View {
     /// A file from the app's folder: the same import as a picked one.
     private func importLocal(_ f: LocalFile) {
         guard let data = try? Data(contentsOf: f.url) else {
-            say("Can't read that file")
+            importFailed("Can't read \(f.url.lastPathComponent)")
             return
         }
+        Log.imports.info("[import] read local \(f.url.lastPathComponent, privacy: .public) \(data.count) bytes")
         let oid = UUID().uuidString
         if f.kind == "PDF" { OriginalStore.save(data, protocolId: oid) }
         upload(files: [(f.url.lastPathComponent, data)], oid: oid)
@@ -1068,23 +1100,46 @@ struct ContentView: View {
                         oid: String = UUID().uuidString) {
         guard !importing else { return }  // one import at a time; the server joins repeats too
         importing = true
+        importNote = nil
         withAnimation { importPill = false }
+        Log.imports.info("[import] upload files=\(files.count) bytes=\(files.reduce(0) { $0 + $1.1.count }) text=\(text.count)")
         Task { @MainActor in
             do {
                 let r = try await PipClient.importProtocol(
                     files: files.map { (name: $0.0, data: $0.1) }, text: text,
                     filename: filename, originalId: oid)
+                Log.imports.info("[import] response draft=\(r.draft != nil) reply=\"\(r.reply, privacy: .public)\"")
                 lab.draft = r.draft
                 say(r.reply)
                 importing = false
+                guard r.draft != nil else {
+                    // no draft: a card asks instead (send it? already saved?), so no "done"
+                    Log.imports.info("[import] screen card, cards=\(lab.cards.count)")
+                    withAnimation { importPill = nil }
+                    sayAloud(r.speak)
+                    return
+                }
+                Log.imports.info("[import] screen draft ready")
                 importPill = true
                 try? await Task.sleep(for: .milliseconds(900))
                 withAnimation { importPill = nil }
             } catch {
-                say("Import failed: \(error.localizedDescription)")
                 importing = false
                 withAnimation { importPill = nil }
+                importFailed("Import failed: \(error.localizedDescription)")
             }
+        }
+    }
+
+    /// An import that stopped is never silent: the reason on screen, Milo says so.
+    private func importFailed(_ why: String) {
+        Log.imports.error("[import] failed: \(why, privacy: .public)")
+        say(why)
+        withAnimation { importNote = why }
+        sayAloud("I couldn't import that file.")
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(8))
+            withAnimation { if importNote == why { importNote = nil } }
         }
     }
 

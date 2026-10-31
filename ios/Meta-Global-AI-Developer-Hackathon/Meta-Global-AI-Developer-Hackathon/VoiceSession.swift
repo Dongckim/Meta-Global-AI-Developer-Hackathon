@@ -524,6 +524,10 @@ final class VoiceSession {
             stage = nil
             serverBusy = nil
             if state == .thinking || state == .searching { state = restState }
+            if let line = s.say, !line.isEmpty {  // no reply is coming: an import after its card
+                showAside(line)
+                speak(line)
+            }
             return
         }
         if state != .speaking, let busy = serverBusy { state = busy }

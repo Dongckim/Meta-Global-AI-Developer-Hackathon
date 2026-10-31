@@ -340,6 +340,7 @@ def git_commit() -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    store.restore_mode()
     print(f"pip-server commit={git_commit()} tools={len(TOOLS)} "
           f"ph={prefix_hash()} memory={'chain' if CHAIN_ENABLED else 'summary'}", flush=True)
 
@@ -2302,6 +2303,7 @@ async def protocol_import(file: list[UploadFile] = File(default=[]), text: str =
     sess = get_session(session)
     uploads = [(f.filename or "", await f.read()) for f in file]
     h = lib.source_hash([raw for _, raw in uploads], text)
+    print(f"[import] recv {h} mode={run_mode()} files={[(n, len(b)) for n, b in uploads]} text={len(text)}", flush=True)
     draft = store.r.get("draft")
     if draft and (draft.get("meta") or {}).get("content_hash") == h:
         print(f"import {h}: case 3, its draft is in review", flush=True)
@@ -2317,6 +2319,7 @@ async def protocol_import(file: list[UploadFile] = File(default=[]), text: str =
     if (section("modes").get(run_mode()) or {}).get("confirm_import"):
         _held_import[:] = [sess, uploads, text, filename, original_id, h]
         card = store.ask_import(sess)
+        print(f"[import] {h} waits for card {card['id']}", flush=True)
         return {"draft": None, "review": [], "errors": [], "reply": card["question"],
                 "speak": speak_text(card["question"]), "card": card, "ms": 0,
                 "record_version": store.r["version"]}
@@ -2332,15 +2335,18 @@ def _spawn_import() -> None:
     """A yes to the import card: the extraction runs on its own, like a tap on Import."""
     args, _held_import[:] = list(_held_import), []
     if args:
-        task = asyncio.get_running_loop().create_task(_extract_import(*args))
+        task = asyncio.get_running_loop().create_task(_import_after_card(args))
         _wake_tasks.add(task)
-        task.add_done_callback(_import_done)
+        task.add_done_callback(_wake_tasks.discard)
 
 
-def _import_done(task: asyncio.Task) -> None:
-    _wake_tasks.discard(task)
-    if not task.cancelled() and task.exception():  # its stage said failed
-        print(f"import after card failed: {task.exception()!r}", flush=True)
+async def _import_after_card(args: list) -> None:
+    """Nobody waits on this one's response: a failure is told here."""
+    try:
+        await _extract_import(*args)
+    except Exception as e:
+        print(f"[import] after card failed: {e!r}", flush=True)
+        _stage(args[0], "failed", reason=type(e).__name__, say=say("import_failed", args[0]))
 
 
 store.spawn_import = _spawn_import
