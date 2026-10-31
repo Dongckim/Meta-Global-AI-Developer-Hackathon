@@ -309,7 +309,12 @@ class CountSam:
         return [{"box": (0, 0, 9, 9), "w": W, "h": H, "c": n / 100, "mask": None}] if n >= 5 else []
 
 
-fdir = sw.frames_dir(clip)
+fdir = sw.frames_dir(clip, [0, 7])
+assert sorted(f.name for f in fdir.glob("*.png")) == ["00001.png", "00008.png"]
+# a frame asked for later is that same frame
+whole = Path(tempfile.mkdtemp())
+subprocess.run(["ffmpeg", "-v", "error", "-i", str(clip), "-vsync", "0", str(whole / "%05d.png")], check=True)
+assert all(sw.frame_png(fdir, n).read_bytes() == (whole / f"{n + 1:05d}.png").read_bytes() for n in (0, 3, 7, 40))
 found = sw.best_detect(CountSam(), "pen", fdir, FPS * SECS, FPS)
 assert len(calls) == len(set(calls)) and found[0] == 6 + 2 * (sw.BEST_OF - 1), (calls, found[0])
 print("SW11 ok: the first find asks once a frame")

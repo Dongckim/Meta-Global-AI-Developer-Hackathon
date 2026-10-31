@@ -4,7 +4,7 @@ reads the tip end's well. Test only: eval/sam_video_wells.py and the
 Diagnostics "SAM well test" (server/lab_sam.py) share this; the product
 flow never calls it.
 
-1. ffmpeg pulls every frame of the clip. SAM (image) finds "96-well plate"
+1. ffmpeg pulls the sampled frames (SAM sees every frame in the clip itself). SAM (image) finds "96-well plate"
    and "pipette tip": the first frames that have one, then the most
    confident of the next few sampled frames.
 2. Those boxes prompt one SAM video request (objects 1 plate, 2 tip),
@@ -27,6 +27,7 @@ import math
 import os
 import random
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -387,13 +388,28 @@ def ffprobe(clip: Path) -> dict:
             "duration_s": float(j.get("format", {}).get("duration") or frames / fps)}
 
 
-def frames_dir(clip: Path) -> Path:
+def frames_dir(clip: Path, frames: list) -> Path:
+    """A temp folder with these frames of the clip; frame_png pulls any other when asked."""
     d = Path(tempfile.mkdtemp(prefix="samwells_"))
-    subprocess.run(["ffmpeg", "-v", "error", "-i", str(clip), "-vsync", "0", str(d / "%05d.png")], check=True)
+    (d / "clip.txt").write_text(str(clip))
+    pull(d, frames)
     return d
 
 
+def pull(d: Path, frames: list) -> None:
+    """These frames as PNGs named by frame number (one ffmpeg run, whatever the count)."""
+    want = sorted(n for n in set(frames) if not (d / f"{n + 1:05d}.png").exists())
+    if not want:
+        return
+    pick = "+".join(f"eq(n\\,{n})" for n in want)
+    subprocess.run(["ffmpeg", "-v", "error", "-i", (d / "clip.txt").read_text(), "-vf", f"select='{pick}'",
+                    "-vsync", "0", str(d / "got%05d.png")], check=True)
+    for i, n in enumerate(want):
+        (d / f"got{i + 1:05d}.png").rename(d / f"{n + 1:05d}.png")
+
+
 def frame_png(d: Path, n: int) -> Path:
+    pull(d, [n])
     return d / f"{n + 1:05d}.png"
 
 
@@ -520,10 +536,14 @@ def expand(saved: dict) -> dict:
     return {int(n): {int(oid): m for oid, m in r.items()} for n, r in saved.items()}
 
 
+def scan_step(fps: float) -> int:
+    return max(1, round(fps * SCAN_S))
+
+
 def best_detect(sam, target: str, fdir: Path, nframes: int, fps: float, start: int = 0, say=_quiet):
     """(frame, match): the first sampled frame from `start` with the target,
     then the most confident of it and the next BEST_OF - 1 samples."""
-    step = max(1, round(fps * SCAN_S))
+    step = scan_step(fps)
     best = None
     for n in range(start, nframes, step):
         say(f"Looking for the {target}", n, nframes)
@@ -535,6 +555,7 @@ def best_detect(sam, target: str, fdir: Path, nframes: int, fps: float, start: i
         return None
     say(f"Most confident {target} near frame {best[0]}", best[0], nframes)
     rest = list(range(best[0] + step, min(nframes, best[0] + step * BEST_OF), step))
+    pull(fdir, rest)  # here, not from the threads below: they'd write the same temp names
     with ThreadPoolExecutor(BEST_OF) as pool:
         for n, got in zip(rest, pool.map(lambda n: sam.image(target, frame_png(fdir, n)), rest)):
             if got and got[0]["c"] > best[1]["c"]:
@@ -650,9 +671,8 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
         raise ClipTooLong(f"clip is {info['duration_s']:.0f} s (max {MAX_CLIP_S} s)")
     t0 = time.perf_counter()
     out_dir.mkdir(parents=True, exist_ok=True)
-    fdir = frames_dir(clip)
-    nframes = len(list(fdir.glob("*.png")))
-    fps = info["fps"]
+    nframes, fps = info["frames"], info["fps"]
+    fdir = frames_dir(clip, list(range(0, nframes, scan_step(fps))))
     t["frames_s"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
@@ -719,6 +739,7 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
         pick.setdefault(n, "fail")
     img_dir = out_dir / "images"
     img_dir.mkdir(exist_ok=True)
+    pull(fdir, list(pick))
     for i, (n, why) in enumerate(sorted(pick.items())):
         say("Drawing check images", i, len(pick))
         plate, tip, quad, h, end, well = per.get(n, (None,) * 6)
@@ -728,9 +749,7 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
         draw(frame_png(fdir, n), img_dir / name, plate, tip, quad, h, end, well,
              f"frame {n} ({n / fps:.1f}s) {why}  tip well={well}")
         images.append(name)
-    for f in fdir.glob("*.png"):
-        f.unlink()
-    fdir.rmdir()
+    shutil.rmtree(fdir)
     t["images_s"] = time.perf_counter() - t0
 
     pitches.sort()
