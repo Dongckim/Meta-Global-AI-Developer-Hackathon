@@ -184,9 +184,9 @@ def main() -> None:
         moved = {k: (was.get(k), v) for k, v in now.items() if was and was.get(k) != v}
         if moved and not a.why:
             sys.exit("a judging value changed: say why with --why")
-        if moved or not was:
+        if moved or not was or a.why:
             with open(CHANGES, "a") as f:
-                what = ", ".join(f"{k} {o} -> {n}" for k, (o, n) in moved.items()) or f"start: {now}"
+                what = ", ".join(f"{k} {o} -> {n}" for k, (o, n) in moved.items()) or ("no judging value moved" if was else f"start: {now}")
                 f.write(f"\n## {time.strftime('%Y-%m-%d')}\n- {what}\n- why: {a.why or 'first baseline'}\n")
         BASELINE.write_text(json.dumps({"values": now, "clips": {r["clip"]: {"hits": r["hits"], "false": len(r["false"]), "bent": r["bent"]}
                                                                  for r in rows}}, indent=2) + "\n")

@@ -197,6 +197,7 @@ final class WellCam: @unchecked Sendable {
     private var refused = 0
     private var late = 0
     private var worstGap = 0.0
+    private var firstArrival: Double?
     private var lastArrival: Double?
     private var sizes = Set<String>()
 
@@ -212,7 +213,6 @@ final class WellCam: @unchecked Sendable {
 
     func frame(_ sb: CMSampleBuffer) {
         guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
-        let pts = CMSampleBufferGetPresentationTimeStamp(sb)
         queue.sync {
             size = (CVPixelBufferGetWidth(pb), CVPixelBufferGetHeight(pb))
             let now = CACurrentMediaTime()
@@ -226,8 +226,11 @@ final class WellCam: @unchecked Sendable {
                 if now - a > 1.5 / Double(fps) { late += 1 }
             }
             lastArrival = now
-            if writer == nil { open(width: size.0, height: size.1, at: pts) }
+            firstArrival = firstArrival ?? now
+            if writer == nil { open(width: size.0, height: size.1) }
             guard let input, let adaptor, input.isReadyForMoreMediaData else { refused += 1; return }
+            // frame number x 1/fps, not arrival: a constant frame rate file, however the stream wavers
+            let pts = CMTime(value: CMTimeValue(written), timescale: CMTimeScale(fps))
             if adaptor.append(pb, withPresentationTime: pts) {
                 written += 1
                 last = pts
@@ -240,13 +243,16 @@ final class WellCam: @unchecked Sendable {
     private var pendingURL: URL?
     private var fps = 2
 
-    private func open(width: Int, height: Int, at pts: CMTime) {
+    private func open(width: Int, height: Int) {
         guard let url = pendingURL, let w = try? AVAssetWriter(outputURL: url, fileType: .mp4) else { return }
         let settings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height,
             // ~0.6 bits a pixel a frame (3.9 Mbps at 720×1280, 7 fps): the frames come
             // already compressed for Bluetooth, so more adds only size
-            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: max(500_000, width * height * 6 * fps / 10)],
+            // a keyframe a second and no reordering: easy to seek, whichever way SAM reads it
+            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: max(500_000, width * height * 6 * fps / 10),
+                                              AVVideoMaxKeyFrameIntervalKey: fps,
+                                              AVVideoAllowFrameReorderingKey: false],
         ]
         let i = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         i.expectsMediaDataInRealTime = true
@@ -254,8 +260,8 @@ final class WellCam: @unchecked Sendable {
         guard w.canAdd(i) else { return }
         w.add(i)
         w.startWriting()
-        w.startSession(atSourceTime: pts)
-        (writer, input, adaptor, first) = (w, i, a, pts)
+        w.startSession(atSourceTime: .zero)
+        (writer, input, adaptor, first) = (w, i, a, .zero)
     }
 
     /// Starts writing from the next frame to a temp file.
@@ -264,7 +270,7 @@ final class WellCam: @unchecked Sendable {
             self.fps = fps
             pendingURL = FileManager.default.temporaryDirectory.appending(path: "samwell-\(UUID().uuidString).mp4")
             writer = nil; input = nil; adaptor = nil; first = nil; last = nil; written = 0
-            arrived = 0; refused = 0; late = 0; worstGap = 0; lastArrival = nil; sizes = []
+            arrived = 0; refused = 0; late = 0; worstGap = 0; firstArrival = nil; lastArrival = nil; sizes = []
             recording = true
         }
     }
@@ -272,15 +278,16 @@ final class WellCam: @unchecked Sendable {
     /// Stops; the clip moved into Documents (Files app) named with its size
     /// and frame rate, or nil when no frame came.
     func stop() async -> Clip? {
-        let (w, i, n, f, l, sz, got, no, slow, gap, seen, asked) = queue.sync {
+        let (w, i, n, began, ended, sz, got, no, slow, gap, seen, asked, span) = queue.sync {
             recording = false
-            return (writer, input, written, first, last, size, arrived, refused, late, worstGap, sizes, self.fps)
+            return (writer, input, written, first, last, size, arrived, refused, late, worstGap, sizes, self.fps,
+                    (lastArrival ?? 0) - (firstArrival ?? 0))
         }
-        guard let w, let i, n > 1, let f, let l else { return nil }
+        guard let w, let i, n > 1, began != nil, ended != nil else { return nil }
         i.markAsFinished()
         await w.finishWriting()
         guard w.status == .completed else { return nil }
-        let fps = Double(n - 1) / max(0.001, (l - f).seconds)
+        let fps = Double(got - 1) / max(0.001, span)  // as it arrived: the file's own rate is fixed
         let df = DateFormatter()
         df.dateFormat = "yyyyMMdd-HHmmss"
         let stamp = df.string(from: .now)
@@ -289,7 +296,6 @@ final class WellCam: @unchecked Sendable {
         let name = "samwell_\(stamp)_\(sz.0)x\(sz.1)_\(String(format: "%.1f", fps))fps_\(hfp ? "hfp" : "nohfp").mp4"
         let dest = URL.documentsDirectory.appending(path: name)
         try? FileManager.default.moveItem(at: w.outputURL, to: dest)
-        let span = (l - f).seconds
         let bytes = (try? dest.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         let report = "\(seen.sorted().joined(separator: ", ")) · HFP \(hfp ? "on" : "off") · \(String(format: "%.2f", fps)) fps of \(asked) "
             + "· \(got) frames over \(String(format: "%.1f", span)) s · \(n) written, \(no) refused, \(slow) late "

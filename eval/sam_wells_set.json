@@ -8,5 +8,8 @@
   {"clip": "20261030-221821-473a/1", "where": "hand", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
   {"clip": "20261031-003424-d471/1", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
   {"clip": "20261031-004939-5d8e/1", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
-  {"clip": "20261031-011204-2206/1", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"}
+  {"clip": "20261031-011204-2206/1", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
+  {"clip": "20261031-015621-19c5/1", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
+  {"clip": "20261031-020045-e545/1", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
+  {"clip": "20261031-020045-e545/2", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"}
 ]

@@ -416,6 +416,15 @@ def ffprobe(clip: Path) -> dict:
             "duration_s": float(j.get("format", {}).get("duration") or frames / fps)}
 
 
+def for_sam(clip: Path, out: Path, fps: float) -> None:
+    """The clip as SAM's video request gets it. Some files as the app writes them make SAM
+    fail (server_error) when it turns back from the prompt: a keyframe a second, no B-frames.
+    Every frame stays, so frame numbers still match the clip."""
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(clip), "-an", "-c:v", "libx264", "-crf", "18",
+                    "-preset", "veryfast", "-g", str(max(1, round(fps))), "-bf", "0", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                    "-vsync", "0", str(out)], check=True)
+
+
 def frames_dir(clip: Path, frames: list) -> Path:
     """A temp folder with these frames of the clip; frame_png pulls any other when asked."""
     d = Path(tempfile.mkdtemp(prefix="samwells_"))
@@ -864,8 +873,12 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
 
     t0 = time.perf_counter()
     say("Uploading the clip to SAM")
-    part = sam.upload(clip)
-    t["upload_s"] = time.perf_counter() - t0
+    sent = out_dir / "clip_sam.mp4"
+    for_sam(clip, sent, fps)
+    t["encode_s"] = time.perf_counter() - t0
+    part = sam.upload(sent)
+    sent.unlink()
+    t["upload_s"] = time.perf_counter() - t0 - t["encode_s"]
     t["video_s"], t["video_first_frame_s"], t["refind_s"] = 0.0, 0.0, 0.0
     gap = max(2, round(fps * GAP_S))
     rounds = 0

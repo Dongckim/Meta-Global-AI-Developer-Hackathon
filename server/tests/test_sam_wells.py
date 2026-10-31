@@ -327,4 +327,12 @@ assert all(sw.frame_png(fdir, n).read_bytes() == (whole / f"{n + 1:05d}.png").re
 found = sw.best_detect(CountSam(), "pen", fdir, FPS * SECS, FPS)
 assert len(calls) == len(set(calls)) and found[0] == 6 + 2 * (sw.BEST_OF - 1), (calls, found[0])
 print("SW11 ok: the first find asks once a frame")
+# SW12. What SAM's video request gets: every frame, a keyframe a second, no B-frames.
+sent = tmp / "sent.mp4"
+sw.for_sam(clip, sent, FPS)
+kinds = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=pict_type",
+                        "-of", "csv=p=0", str(sent)], capture_output=True, text=True).stdout.replace(",", "").split()
+assert len(kinds) == FPS * SECS and "B" not in kinds, kinds
+assert [i for i, k in enumerate(kinds) if k == "I"][:3] == [0, FPS, 2 * FPS], kinds
+print("SW12 ok: the clip for SAM")
 print("ALL PASS")

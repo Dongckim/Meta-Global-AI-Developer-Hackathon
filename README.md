@@ -98,3 +98,13 @@ Ask a question in the context of your experiment and open the answer alongside y
   <sub>Built for the <a href="https://dev.meta.ai/events/global-hackathon">Meta Global AI Developer Hackathon</a>.<br />
   Images: <a href="https://x.com/MetaforDevs/status/2103237819993137592/photo/1">Meta for Developers</a> · <a href="https://about.fb.com/news/2026/04/introducing-muse-spark-meta-superintelligence-labs/">Meta</a> · <a href="https://www.oakley.com/en-us/product/W0OW8001">Oakley</a></sub>
 </p>
+
+## SAM well test
+
+The Diagnostics SAM well test needs ffmpeg on the server's machine (it also runs
+`ffprobe`), and OpenCV from `server/requirements.txt`:
+
+```sh
+brew install ffmpeg          # macOS
+sudo apt install ffmpeg      # Debian, Ubuntu
+```
