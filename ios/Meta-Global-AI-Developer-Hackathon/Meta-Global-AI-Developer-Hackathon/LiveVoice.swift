@@ -18,6 +18,22 @@ enum LiveEvent {
     case closed(why: String)
 }
 
+/// What Diagnostics changed about when a turn ends; nothing set: the server's
+/// defaults (pip_voice.json live.turn_end).
+enum TurnEndTimes {
+    static let defaults = [("quiet_s", 1.2), ("extra_s", 2.5), ("cap_s", 3.0)]
+    private static func key(_ name: String) -> String { "pip.turnEnd.\(name)" }
+    static var chosen: [String: Double] {
+        defaults.reduce(into: [:]) { out, d in
+            if let v = UserDefaults.standard.object(forKey: key(d.0)) as? Double { out[d.0] = v }
+        }
+    }
+    static func value(_ name: String) -> Double {
+        chosen[name] ?? defaults.first { $0.0 == name }?.1 ?? 0
+    }
+    static func set(_ name: String, _ v: Double) { UserDefaults.standard.set(v, forKey: key(name)) }
+}
+
 /// Seam for tests; LiveLink is the real one.
 @MainActor
 protocol LiveControlling: AnyObject {
@@ -157,36 +173,24 @@ final class LiveMic {
 
 /// Private: hears the owner on the iPad (requiresOnDeviceRecognition) and
 /// hands over words; no audio leaves. One more sink on the MicEngine tap. The
-/// server reads each partial like a live turn and says how to end it
-/// (`endpoint`); new words restart the wait, so a word still settling never
-/// ends a turn. Then a fresh task starts.
+/// server decides when a turn is over (live_session.turn_end) and says so
+/// (`end_turn`); a fresh task starts then.
 @MainActor
 final class DeviceEars {
-    /// Seconds of silence that end a turn (Diagnostics).
-    static var quietSeconds: Double {
-        get { UserDefaults.standard.object(forKey: "pip.quietSeconds") as? Double ?? 1.5 }
-        set { UserDefaults.standard.set(newValue, forKey: "pip.quietSeconds") }
-    }
-    /// Words said exactly as a button or answer still get this to settle.
-    private static let settle = 0.25
-    private var reason = "silence"
-    private var wait = DeviceEars.quietSeconds
-    private var changedAt = Date()
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private let live = RequestBox()
     private var task: SFSpeechRecognitionTask?
     private var sinkID: UUID?
     private var generation = 0
     private var text = ""
-    private var quietWatch: Task<Void, Never>?
     private var restarts = RestartGate(limit: 5, window: 10)
-    private var heard: ((String, Bool, String, Double) -> Void)?
+    private var heard: ((String, Int) -> Void)?
     private var failed: (() -> Void)?
     private var muted: FlagBox?
     /// What the recognizer should expect; the next task picks it up.
     var hints: [String] = []
 
-    func start(muted: FlagBox, heard: @escaping (String, Bool, String, Double) -> Void,
+    func start(muted: FlagBox, heard: @escaping (String, Int) -> Void,
                failed: @escaping () -> Void) async throws {
         guard let recognizer, recognizer.supportsOnDeviceRecognition else { throw WakeError.noRecognizer }
         self.muted = muted
@@ -198,7 +202,6 @@ final class DeviceEars {
 
     func stop() {
         generation += 1
-        quietWatch?.cancel()
         task?.cancel()
         task = nil
         live.current?.endAudio()
@@ -252,9 +255,7 @@ final class DeviceEars {
         guard gen == generation else { return }
         if let words, words != text {
             text = words
-            changedAt = Date()
-            heard?(text, false, "", 0)
-            armQuiet(reason: "silence", wait: Self.quietSeconds)
+            heard?(text, gen)
         }
         if done {
             finishTurn()
@@ -269,28 +270,8 @@ final class DeviceEars {
         }
     }
 
-    /// The server's reading of these words, if they're still the latest.
-    func endpoint(text said: String, reason: String, extra: Double) {
-        guard said == text else { return }
-        armQuiet(reason: reason, wait: reason == "exact-match" ? Self.settle : Self.quietSeconds + extra)
-    }
-
-    /// The wait counts from the last new word, however late its reading came.
-    private func armQuiet(reason: String, wait: Double) {
-        self.reason = reason
-        self.wait = wait
-        quietWatch?.cancel()
-        let left = max(0, wait - Date().timeIntervalSince(changedAt))
-        quietWatch = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(left))
-            guard !Task.isCancelled else { return }
-            self?.finishTurn()
-        }
-    }
-
-    private func finishTurn() {
-        quietWatch?.cancel()
-        if !text.isEmpty { heard?(text, true, reason, (wait * 100).rounded() / 100) }
+    /// The turn is over (the server's call), or the recognizer ended its task.
+    func finishTurn() {
         task?.cancel()
         live.current?.endAudio()
         beginTask()
@@ -339,6 +320,8 @@ enum LiveError: Error, LocalizedError {
 final class LiveLink: LiveControlling {
     var onEvent: ((LiveEvent) -> Void)?
     private var task: URLSessionWebSocketTask?
+    /// RMS under this is a quiet mic (tuned on the iPad; a noisy room just ends turns at the cap).
+    private static let quietLevel: Float = 0.012
     private let mic = LiveMic()
     private let ears = DeviceEars()
     private var session = ""
@@ -383,7 +366,9 @@ final class LiveLink: LiveControlling {
         let t = URLSession.shared.webSocketTask(with: PipClient.liveURL)
         task = t
         t.resume()
-        try await t.send(.string(#"{"type":"start","session":"\#(session)"}"#))
+        var opening: [String: Any] = ["type": "start", "session": session]
+        for (key, value) in TurnEndTimes.chosen { opening[key] = value }
+        try await t.send(.string(String(decoding: try JSONSerialization.data(withJSONObject: opening), as: UTF8.self)))
         let first = try await withThrowingTaskGroup(of: URLSessionWebSocketTask.Message.self) { g in
             g.addTask { try await t.receive() }
             g.addTask { try await Task.sleep(for: .seconds(6)); throw LiveError.timeout }
@@ -400,8 +385,8 @@ final class LiveLink: LiveControlling {
         do {
             if obj["transcribe"] as? String == "device" {
                 ears.hints = obj["hints"] as? [String] ?? []
-                try await ears.start(muted: mic.muted, heard: { text, final, reason, waited in
-                    Self.sendHeard(t, text, final: final, reason: reason, waited: waited)
+                try await ears.start(muted: mic.muted, heard: { text, task in
+                    Self.send(t, ["type": "heard", "text": text, "task": task])
                 }, failed: { [weak self] in self?.finish("error") })
             } else {
                 try await mic.start { [weak self] data in
@@ -422,11 +407,24 @@ final class LiveLink: LiveControlling {
         }
         lastHeard = Date()
         Task { await receiveLoop(t) }
+        Task { await micWatch(t) }
     }
 
-    private static func sendHeard(_ t: URLSessionWebSocketTask, _ text: String, final: Bool,
-                                  reason: String, waited: Double) {
-        let msg: [String: Any] = ["type": "heard", "text": text, "final": final, "reason": reason, "waited_s": waited]
+    /// Mic quiet or not, on change: half of how the server hears a turn's end.
+    /// While the agent speaks there's nothing to report.
+    private func micWatch(_ t: URLSessionWebSocketTask) async {
+        var quiet: Bool?
+        while !finished, task === t {
+            try? await Task.sleep(for: .milliseconds(100))
+            let now = MicEngine.shared.level < Self.quietLevel
+            if now != quiet, !mic.muted.value {
+                quiet = now
+                Self.send(t, ["type": "mic", "quiet": now])
+            }
+        }
+    }
+
+    private static func send(_ t: URLSessionWebSocketTask, _ msg: [String: Any]) {
         guard let d = try? JSONSerialization.data(withJSONObject: msg) else { return }
         t.send(.string(String(decoding: d, as: UTF8.self))) { _ in }
     }
@@ -477,9 +475,9 @@ final class LiveLink: LiveControlling {
             onEvent?(.partial(obj["text"] as? String ?? ""))
         case "hints":
             ears.hints = obj["hints"] as? [String] ?? []
-        case "endpoint":
-            ears.endpoint(text: obj["text"] as? String ?? "", reason: obj["reason"] as? String ?? "silence",
-                          extra: obj["extra_s"] as? Double ?? 0)
+        case "end_turn":
+            Log.voice.info("[voice] turn ended by server: \(obj["reason"] as? String ?? "?", privacy: .public)")
+            ears.finishTurn()
         case "ignored":
             Log.voice.info("[voice] ignored speaker=\(obj["speaker"] as? String ?? "?", privacy: .public) text=\"\(obj["text"] as? String ?? "", privacy: .public)\"")
             onEvent?(.ignored(line: obj["line"] as? String ?? ""))

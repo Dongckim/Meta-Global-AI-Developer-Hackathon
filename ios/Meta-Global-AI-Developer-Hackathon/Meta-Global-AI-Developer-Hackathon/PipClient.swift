@@ -184,7 +184,7 @@ enum PipError: Error, LocalizedError {
 
 enum PipClient {
     /// Must match server API_VERSION (test_snapshot_schema pins both sides).
-    static let EXPECTED_API_VERSION = 27
+    static let EXPECTED_API_VERSION = 28
     /// A server link silent this long is dead: three missed keepalives
     /// (server HEARTBEAT_S = 15) on /events and /voice/live.
     static let idleTimeout: TimeInterval = 45

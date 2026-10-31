@@ -342,15 +342,17 @@ the key stays on the server (handshake `authorization.accessToken`).
   barge-in; the mic button still interrupts). Silence is processed audio.
 - Max 60 min (docs): at 55 min close at the next turn boundary (no hand-off).
 - Partials go to the app as WS messages (not snapshots) -> top line.
+- A turn's end, Full and Private alike (`live_session.turn_end`, Diagnostics
+  sliders, every turn logs `[turn-end]`): exactly a button, card answer or
+  control ends it at once; cut off ("D2 to", "and", a bare row letter) waits up
+  to 2.5 s more; else the ASR's final, or 1.2 s of quiet mic with an unchanged
+  transcript; 3 s after the last word it always ends. Milo speaking never
+  counts. If the ASR's final later says more, the rest is its own turn.
 - Private: the iPad transcribes (SFSpeechRecognizer with
   requiresOnDeviceRecognition; contextualStrings = wells A1–H12, this
   screen's buttons, protocol short titles) and sends `heard` text. No audio
   leaves, Meta realtime never opens, and there are no speaker labels: every
-  voice counts as the owner's, so nothing is ignored. New words restart the
-  wait; the server reads each partial with Full's own rules (`device_endpoint`):
-  1.5 s of silence (Diagnostics, 0.8–3.0), 2.5 s more if it ends unfinished
-  ("D2 to", "and", a bare row letter), at once if it's exactly a button, card
-  answer or control. `[private-asr]` logs each turn. The mic button transcribes its recording the
+  voice counts as the owner's, so nothing is ignored. The mic button transcribes its recording the
   same way. Changing mode closes the session (`mode`) and the app reopens
   it the new way; audio to Meta stops the moment the mode changes.
 - Edge "session idle": dim, slow while open and quiet; listening when the

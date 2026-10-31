@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import server.api as api  # noqa: E402
 from server import tone  # noqa: E402
-from server.live_session import LiveConversation, live_keywords, strip_wake  # noqa: E402
+from server.live_session import LiveConversation, TurnEndTimes, live_keywords, strip_wake, turn_end, turn_end_line  # noqa: E402
 from server.runs import done_wells  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
@@ -296,17 +296,15 @@ with c.websocket_connect("/voice/live") as ws:
 assert heard == ["I wanna I want to see I want I want to see all the notes"], heard
 assert len(turns) == 1, turns
 heard.clear()
-api.LIVE_HOLD_S, hold = 0.2, api.LIVE_HOLD_S
 FakeMeta.script = FakeMeta.script[:3]  # only the cut-off turn
 with c.websocket_connect("/voice/live") as ws:
-    ws.send_json({"type": "start", "session": "live-hold-2"})
+    ws.send_json({"type": "start", "session": "live-hold-2", "extra_s": 0.2})
     assert check(ws.receive_json())["type"] == "ready"
     while check(ws.receive_json())["type"] != "turn":
         pass
     ws.send_json({"type": "end"})
     while check(ws.receive_json())["type"] != "closed":
         pass
-api.LIVE_HOLD_S = hold
 api._handle_text = real_handle
 assert heard == ["I wanna I want to see"], heard
 print("LV7 ok: cut-off turns wait for the rest, then go alone")
@@ -325,12 +323,13 @@ tone.set_run_mode("private")
 api.store.wake.begin()
 api.store.wake.finish(True)
 with c.websocket_connect("/voice/live") as ws:
-    ws.send_json({"type": "start", "session": "live-device"})
+    ws.send_json({"type": "start", "session": "live-device", "quiet_s": 0.15})
     ready = check(ws.receive_json())
     assert ready["transcribe"] == "device" and "H12" in ready["hints"], ready
     ws.send_bytes(b"\x00" * 2560)
-    ws.send_json({"type": "heard", "text": "B2", "final": False})
-    ws.send_json({"type": "heard", "text": "Hey Milo, B2 done.", "final": True, "reason": "silence", "waited_s": 1.5})
+    ws.send_json({"type": "mic", "quiet": True})
+    ws.send_json({"type": "heard", "text": "B2", "task": 1})
+    ws.send_json({"type": "heard", "text": "Hey Milo, B2 done.", "task": 1})
     got = []
     while not any(m["type"] == "turn" for m in got):
         got.append(check(ws.receive_json()))
@@ -338,8 +337,8 @@ with c.websocket_connect("/voice/live") as ws:
     while got[-1]["type"] != "closed":
         got.append(check(ws.receive_json()))
 assert FakeMeta.last is None, "Private never opens Meta"
-assert "B2" in done_wells(api.store.r) and got[0] == {"type": "endpoint", "text": "B2", "reason": "silence", "extra_s": 0}, got
-assert {"type": "partial", "text": "B2"} in got, got
+assert "B2" in done_wells(api.store.r) and {"type": "partial", "text": "B2"} in got, got
+assert {"type": "end_turn", "reason": "silence"} in got, "the server ended it, and told the iPad"
 print("LV-device ok: heard text runs the same turn, Meta never opened")
 
 # the mode changing mid-session closes it `mode`: no audio to Meta from that moment
@@ -356,6 +355,38 @@ with c.websocket_connect("/voice/live") as ws:
 assert got[-1]["why"] == "mode" and FakeMeta.last.sent == [], (got[-1], FakeMeta.last.sent)
 tone.set_run_mode(None)
 print("LV-mode ok: a mode change closes the session, nothing more goes to Meta")
+
+
+# One rule for when a turn is over ------------------------------------------
+T = TurnEndTimes()
+end = lambda reading, word, mic=9.0, final=False, speaking=False: turn_end(reading, word, mic, final, speaking, T)  # noqa: E731
+assert end("exact-match", 0.3) == "exact-match" and end("exact-match", 0.1) is None, "a word still settling"
+assert end("plain", 0.2, final=True) == "asr-final", "the ASR's final, at once"
+assert end("plain", 1.2) == "silence" and end("plain", 1.1) is None
+assert end("plain", 1.5, mic=0.5) is None, "words stopped but the mic still hears someone"
+assert end("plain", 3.0, mic=0.0) == "cap", "the cap ends it whatever else"
+assert end("unfinished-extended", 2.0, final=True) is None, "cut off: a final doesn't end it"
+assert end("unfinished-extended", 3.0) == "cap", "3 s after the last word, always"
+assert turn_end("unfinished-extended", 3.8, 9, False, False, TurnEndTimes(cap_s=9)) == "unfinished-extended"
+assert end("plain", 9.0, speaking=True) is None and end("exact-match", 9.0, speaking=True) is None, "Milo's silence isn't a pause"
+assert TurnEndTimes.from_({"quiet_s": 1.2, "extra_s": 2.5}, {"quiet_s": 0.9, "session": "x"}).quiet_s == 0.9
+print("TE1 ok: exact, final, silence, unfinished, cap; Milo speaking doesn't count")
+
+conv = LiveConversation(opened_at=0.0)
+conv.feed({"type": "speechStart", "turnId": 7}, 1.0)
+conv.feed({"type": "transcript", "transcript": "note C3"}, 1.2)
+conv.feed({"type": "transcript", "transcript": "note C3"}, 1.9)
+assert round(conv.since_word(conv.open_turn(), 2.2), 1) == 1.0, "an unchanged partial isn't a new word"
+out = conv.force_end(2.4)
+assert out == [{"type": "owner", "text": "note C3", "turn": 7}] and conv.open_turn() is None, out
+assert conv.feed({"type": "speechComplete", "turnId": 7, "transcript": "note C3 cloudy near the edge"}, 3.0) == \
+    [{"type": "owner", "text": "cloudy near the edge", "turn": 7}], "what the ASR heard after we ended it is a turn too"
+assert conv.feed({"type": "speechComplete", "turnId": 7, "transcript": "note C3"}, 3.1) == []
+print("TE2 ok: we can end a turn; a late final loses nothing and repeats nothing")
+
+line = turn_end_line("silence", conv.tracker.turns[7], 1.2, 2.4)
+assert line.startswith('[turn-end] turn=7 reason=silence last_partial=0.20 asr_end=- asr_final=2.10 decided=1.40 text="'), line
+print("TE3 ok: the [turn-end] line")
 
 
 class ClosingWS:

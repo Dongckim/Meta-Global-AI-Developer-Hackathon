@@ -244,18 +244,26 @@ struct DiagnosticsView: View {
     @State private var recording = false
     @State private var busy = false
     @State private var command = ""
-    @State private var quiet = DeviceEars.quietSeconds
+    @State private var quiet = TurnEndTimes.value("quiet_s")
+    @State private var extra = TurnEndTimes.value("extra_s")
+    @State private var cap = TurnEndTimes.value("cap_s")
+
+    /// When a live turn ends, Full and Private alike; the next session uses it.
+    private func timeSlider(_ title: String, _ value: Binding<Double>, _ range: ClosedRange<Double>,
+                            _ key: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(title): \(value.wrappedValue, format: .number.precision(.fractionLength(1))) s").font(.subheadline)
+            Slider(value: value, in: range, step: 0.1).onChange(of: value.wrappedValue) { _, v in TurnEndTimes.set(key, v) }
+        }
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Private: silence that ends a turn, \(quiet, format: .number.precision(.fractionLength(1))) s")
-                            .font(.subheadline)
-                        Slider(value: $quiet, in: 0.8...3.0, step: 0.1)
-                            .onChange(of: quiet) { _, v in DeviceEars.quietSeconds = v }
-                    }
+                    timeSlider("Silence that ends a turn", $quiet, 0.8...3.0, "quiet_s")
+                    timeSlider("More for an unfinished turn", $extra, 0...4, "extra_s")
+                    timeSlider("Always end after the last word", $cap, 1.5...6, "cap_s")
                     row("Microphone", status: mic) {
                         Button("Check") { checkMic() }.buttonStyle(.bordered).controlSize(.small)
                     }

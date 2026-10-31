@@ -79,7 +79,8 @@ from server import live_asr
 from server import tone
 from server.grammar import match_session_end
 from server.labels import protocol_short
-from server.live_session import LiveSender, LiveConversation, device_hints, live_keywords
+from server.live_session import (LiveSender, LiveConversation, TurnEndTimes, device_hints, live_keywords, turn_end,
+                                 turn_end_line)
 from server.live_session import settings as live_settings
 from server.tone import keys as tone_keys
 from server.modes import explain, route
@@ -97,12 +98,13 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 27
+API_VERSION = 28
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
 #: Seconds a cut-off live owner turn ("I want to") waits for the rest.
-LIVE_HOLD_S = 3.0
+#: How often an open live turn is checked for its end.
+TURN_WATCH_S = 0.1
 
 BASE_URL = "https://api.meta.ai/v1"
 SPARK_MODEL = "muse-spark-1.3"
@@ -969,19 +971,15 @@ def _cut_off(text: str, session: dict) -> bool:
     return not whole_here(text) and unfinished(text, store.prompt_state(session), tone.agent_name())
 
 
-def device_endpoint(text: str, session: dict) -> dict:
-    """How long the iPad should wait on these words before it ends the turn:
-    the same reading as a live turn's hold, said ahead of time because the iPad
-    has no Meta endpointing. reason: exact-match / unfinished-extended / silence."""
+def turn_reading(text: str, session: dict) -> str:
+    """What the words are, for live_session.turn_end."""
     if whole_here(text):
-        return {"reason": "exact-match", "extra_s": 0}
-    if _cut_off(text, session):
-        return {"reason": "unfinished-extended", "extra_s": live_settings()["device_extra_s"]}
-    return {"reason": "silence", "extra_s": 0}
+        return "exact-match"
+    return "unfinished-extended" if _cut_off(text, session) else "plain"
 
 
 def live_unfinished(text: str, session: dict) -> bool:
-    """Hold a live turn for the rest (LIVE_HOLD_S)? Never when it's said whole
+    """Hold a live turn for the rest (extra_s)? Never when it's said whole
     for this screen ("yes", "file"); else the grammar's cut-off rule ("add",
     "I want to")."""
     held = _cut_off(text, session)
@@ -1976,6 +1974,7 @@ async def voice_live(ws: WebSocket):
     meta = live_asr.DeviceStream() if device else live_asr.MetaStream(
         _key(), mode="DIARIZATION", keywords=live_keywords(store.r), language_bias=["English"])
     hints = _device_hints() if device else []
+    times = TurnEndTimes.from_(live_settings().get("turn_end"), start)
     try:
         ok = await meta.open()
     except Exception as e:  # network, handshake timeout
@@ -1997,6 +1996,8 @@ async def voice_live(ws: WebSocket):
     ended = False
     why = ""
     busy = False  # an owner turn is running
+    mic_quiet_at = time.monotonic()  # since when the app's mic has been quiet (None: hearing something)
+    task_seen = 0  # device transcription: words of an older recognition task are late
     # this session's turn stages ride its socket (_stage)
     session["stage_sink"] = lambda m: asyncio.ensure_future(sender.send(m))
 
@@ -2009,6 +2010,7 @@ async def voice_live(ws: WebSocket):
             await meta.end()
 
     async def uplink():
+        nonlocal mic_quiet_at, task_seen
         while True:
             msg = await ws.receive()
             if msg.get("type") == "websocket.disconnect":
@@ -2019,18 +2021,48 @@ async def voice_live(ws: WebSocket):
                 continue
             body = json.loads(msg.get("text") or "{}")
             if body.get("type") == "heard" and device:
-                words = str(body.get("text") or "")
-                if body.get("final"):
-                    print(f'[private-asr] text="{words}" reason={body.get("reason")} waited={body.get("waited_s")}s',
-                          flush=True)
-                else:
-                    await sender.send({"type": "endpoint", "text": words, **device_endpoint(words, session)})
-                meta.heard(words, bool(body.get("final")))
+                if int(body.get("task") or 0) >= task_seen:
+                    task_seen = int(body.get("task") or 0)
+                    meta.heard(str(body.get("text") or ""), False)
+            elif body.get("type") == "mic":
+                mic_quiet_at = (mic_quiet_at or time.monotonic()) if body.get("quiet") else None
             elif body.get("type") == "tts":
                 conv.tts(bool(body.get("speaking")), time.monotonic())
             elif body.get("type") == "end":
                 break
         await end_stream("client")
+
+    def log_turn_end(out: dict, reason: str = "") -> None:
+        turn, now = conv.tracker.turns.get(out.get("turn")), time.monotonic()
+        if turn is None:
+            return
+        reason = reason or turn_end(turn_reading(turn.text or "", session), times.settle_s, times.quiet_s,
+                                    True, False, times) or "unfinished-extended"  # the ASR ended it: held if cut off
+        print(turn_end_line(reason, turn, conv.word_at.get(turn.id), now), flush=True)
+
+    async def turn_watch():
+        """The ASR may never say the turn is over: we decide, on the same rule."""
+        nonlocal task_seen
+        while not ended:
+            await asyncio.sleep(TURN_WATCH_S)
+            turn, now = conv.open_turn(), time.monotonic()
+            if turn is None:
+                continue
+            quiet = now - mic_quiet_at if mic_quiet_at is not None else 0.0
+            reason = turn_end(turn_reading(turn.partial, session), conv.since_word(turn, now), quiet, False,
+                              conv.speaking, times)
+            if reason is None:
+                continue
+            for out in conv.force_end(now):
+                if out["type"] == "ignored":
+                    await sender.send(out)
+                elif out["type"] in ("owner", "here"):
+                    log_turn_end(out, reason)
+                    owner_q.put_nowait(out)
+            if device:
+                meta.turn_over()  # the iPad starts a new task: words of this one are late now
+                task_seen += 1
+                await sender.send({"type": "end_turn", "reason": reason})
 
     async def downlink():
         async for ev in meta.events():
@@ -2039,6 +2071,7 @@ async def voice_live(ws: WebSocket):
                     print("live: search stopped", flush=True)
                     continue
                 if out["type"] in ("owner", "here"):
+                    log_turn_end(out)
                     owner_q.put_nowait(out)
                     continue
                 if out["type"] == "ignored":
@@ -2065,11 +2098,11 @@ async def voice_live(ws: WebSocket):
 
     async def next_owner_item(held: str) -> dict:
         """The next owner turn, with a held cut-off turn joined in front; a
-        held turn alone after LIVE_HOLD_S of silence."""
+        held turn alone after extra_s of silence."""
         if not held:
             return await owner_q.get()
         try:
-            item = await asyncio.wait_for(owner_q.get(), LIVE_HOLD_S)
+            item = await asyncio.wait_for(owner_q.get(), times.extra_s)
         except asyncio.TimeoutError:
             return {"type": "owner", "text": held, "flush": True}
         if item["type"] != "owner":
@@ -2082,7 +2115,7 @@ async def voice_live(ws: WebSocket):
         while True:
             item = await next_owner_item(held)
             held = ""
-            # the iPad already waited out an unfinished turn (device_endpoint)
+            # device turns end only through turn_watch, which already waited
             if item["type"] == "owner" and not item.get("flush") and not device and live_unfinished(item["text"], session):
                 held = item["text"]  # "I want to see": wait for the rest
                 print(f'live hold: "{held}"', flush=True)
@@ -2120,7 +2153,7 @@ async def voice_live(ws: WebSocket):
                 hints = now
                 await sender.send({"type": "hints", "hints": hints})
 
-    tasks = [asyncio.create_task(c()) for c in (uplink, worker, watchdog, heartbeat)]
+    tasks = [asyncio.create_task(c()) for c in (uplink, worker, watchdog, heartbeat, turn_watch)]
     try:
         await downlink()  # ends when Meta closes (1000 after endStream, or an error)
     finally:

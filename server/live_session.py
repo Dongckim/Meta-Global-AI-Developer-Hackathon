@@ -14,10 +14,55 @@ conversation".
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
-from server.live_asr import TurnTracker
+from server.live_asr import Turn, TurnTracker
 from server.tone import persona, section
+
+
+@dataclass
+class TurnEndTimes:
+    """Seconds. Defaults: pip_voice.json live.turn_end; Diagnostics overrides
+    them per session (the `start` frame)."""
+    quiet_s: float = 1.2
+    extra_s: float = 2.5
+    cap_s: float = 3.0
+    settle_s: float = 0.25
+
+    @classmethod
+    def from_(cls, *sources: dict) -> "TurnEndTimes":
+        names = [f.name for f in fields(cls)]
+        merged = {k: v for src in sources for k, v in (src or {}).items()
+                  if k in names and isinstance(v, (int, float))}
+        return cls(**merged)
+
+
+def turn_end(reading: str, since_word: float, mic_quiet: float, asr_final: bool, speaking: bool,
+             t: TurnEndTimes) -> str | None:
+    """Is this turn over, and why? The one rule for Full and Private. `reading`
+    is what the words are (exact-match / unfinished-extended / plain);
+    since_word: seconds since the transcript last changed; mic_quiet: seconds
+    the mic has been quiet. Milo's own speech is never silence."""
+    if speaking:
+        return None
+    if since_word >= t.cap_s:
+        return "cap"
+    if reading == "exact-match":
+        return "exact-match" if since_word >= t.settle_s else None
+    quiet = since_word >= t.quiet_s and mic_quiet >= t.quiet_s
+    if reading == "unfinished-extended":
+        return "unfinished-extended" if quiet and since_word >= t.quiet_s + t.extra_s else None
+    if asr_final:
+        return "asr-final"
+    return "silence" if quiet else None
+
+
+def turn_end_line(reason: str, turn, last_word: float | None, now: float) -> str:
+    """[turn-end]: where a turn waited, seconds from its start ("-": never came)."""
+    t0 = turn.t_start if turn.t_start is not None else now
+    at = lambda t: "-" if t is None else f"{t - t0:.2f}"  # noqa: E731
+    return (f"[turn-end] turn={turn.id} reason={reason} last_partial={at(last_word)} asr_end={at(turn.t_end)} "
+            f"asr_final={at(turn.t_complete)} decided={at(now)} text=\"{turn.text or turn.partial}\"")
 
 
 def settings() -> dict:
@@ -80,6 +125,32 @@ class LiveConversation:
     ref_at: float | None = None      # window clock start (owner turn / speech end)
     speaking: bool = False           # the agent is talking: clock paused
     open_turns: set[int] = field(default_factory=set)
+    word_at: dict[int, float] = field(default_factory=dict)  # turn -> when its words last changed
+    forced: dict[int, str] = field(default_factory=dict)     # turn -> what we ended it on
+
+    def open_turn(self):
+        """The turn being said, once there are words in it; else None."""
+        turn = self.tracker.turns.get(self.tracker.current)
+        return turn if turn and turn.id in self.open_turns and turn.partial.strip() else None
+
+    def since_word(self, turn, now: float) -> float:
+        return now - self.word_at.get(turn.id, now)
+
+    def force_end(self, now: float) -> list[dict]:
+        """We decided the turn is over before the ASR did: end it on what was
+        heard. If the ASR's final later says more, the rest is its own turn."""
+        turn = self.open_turn()
+        if turn is None:
+            return []
+        self.forced[turn.id] = turn.partial
+        return self.feed({"type": "speechComplete", "turnId": turn.id, "transcript": turn.partial}, now)
+
+    def _rest_after_forced(self, ev: dict) -> list[dict]:
+        said, whole = self.forced.pop(ev.get("turnId")), (ev.get("transcript") or "").strip()
+        if not whole.lower().startswith(said.strip().lower()):
+            return []
+        rest = whole[len(said.strip()):].strip(" ,.")
+        return [{"type": "owner", "text": rest, "turn": ev.get("turnId")}] if rest else []
 
     def __post_init__(self):
         if self.ref_at is None:
@@ -88,8 +159,13 @@ class LiveConversation:
     def feed(self, ev: dict, now: float) -> list[dict]:
         """Realtime event -> messages for the app / work for the server:
         {"type": "partial"}, {"type": "ignored"}, {"type": "owner"}."""
-        turn = self.tracker.feed(ev, now)
         kind = ev.get("type")
+        if kind == "speechComplete" and ev.get("turnId") in self.forced and ev.get("turnId") in self.handled:
+            return self._rest_after_forced(ev)
+        before = (self.tracker.turns.get(self.tracker.current) or Turn(0)).partial
+        turn = self.tracker.feed(ev, now)
+        if kind == "transcript" and turn is not None and turn.partial != before:
+            self.word_at[turn.id] = now
         if kind == "speechStart" and turn is not None:
             self.open_turns.add(turn.id)
         if kind == "speechComplete" and turn is not None:

@@ -14,7 +14,7 @@
     "window_s": 60,
     "max_s": 3300,
     "ignored_line": "Another voice — ignored",
-    "device_extra_s": 2.5,
+    "turn_end": {"quiet_s": 1.2, "extra_s": 2.5, "cap_s": 3.0, "settle_s": 0.25},
     "first_close_line": "Call me anytime.",
     "fallback_line": "Live off — one command at a time",
     "more_on_screen": "{n} more on screen.",

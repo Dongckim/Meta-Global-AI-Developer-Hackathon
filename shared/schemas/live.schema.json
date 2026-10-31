@@ -1,12 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Live conversation WebSocket messages (/voice/live)",
-  "description": "App -> server: a `start` text frame, binary PCM16 LE mono 16 kHz frames (silence while the agent speaks), `tts` {speaking} when the agent starts/stops talking (window clock pause), and optionally `end`. When `ready` says transcribe=device (Private) there are no binary frames: the app sends `heard` {text, final} from its on-device recognizer. Server -> app: the messages below. Bump api_version on any change here.",
+  "description": "App -> server: a `start` text frame, binary PCM16 LE mono 16 kHz frames (silence while the agent speaks), `tts` {speaking} when the agent starts/stops talking (window clock pause), and optionally `end`. When `ready` says transcribe=device (Private) there are no binary frames: the app sends `heard` {text, task} from its on-device recognizer. The server ends every turn (live_session.turn_end). Server -> app: the messages below. Bump api_version on any change here.",
   "$defs": {
-    "start": {"type": "object", "required": ["type"], "properties": {"type": {"const": "start"}, "session": {"type": "string"}}},
+    "start": {"type": "object", "required": ["type"], "properties": {"type": {"const": "start"}, "session": {"type": "string"}, "quiet_s": {"type": "number"}, "extra_s": {"type": "number"}, "cap_s": {"type": "number"}}},
     "end": {"type": "object", "required": ["type"], "properties": {"type": {"const": "end"}}},
-    "heard": {"type": "object", "required": ["type", "text", "final"], "properties": {"type": {"const": "heard"}, "text": {"type": "string"}, "final": {"type": "boolean"}, "reason": {"type": "string"}, "waited_s": {"type": "number"}}},
-    "endpoint": {"type": "object", "required": ["type", "text", "reason", "extra_s"], "description": "Device transcription: how the iPad should end the turn on these words. exact-match: as soon as they settle; unfinished-extended: extra_s more silence; silence: the usual wait.", "properties": {"type": {"const": "endpoint"}, "text": {"type": "string"}, "reason": {"enum": ["exact-match", "unfinished-extended", "silence"]}, "extra_s": {"type": "number"}}},
+    "heard": {"type": "object", "required": ["type", "text", "task"], "properties": {"type": {"const": "heard"}, "text": {"type": "string"}, "task": {"type": "integer"}}},
+    "end_turn": {"type": "object", "required": ["type", "reason"], "description": "Device transcription: the server ended the turn; the iPad starts a new recognition task.", "properties": {"type": {"const": "end_turn"}, "reason": {"enum": ["silence", "unfinished-extended", "exact-match", "cap"]}}},
+    "mic": {"type": "object", "required": ["type", "quiet"], "description": "App -> server, on change: the mic went quiet or heard something (level, not words).", "properties": {"type": {"const": "mic"}, "quiet": {"type": "boolean"}}},
     "tts": {"type": "object", "required": ["type", "speaking"], "properties": {"type": {"const": "tts"}, "speaking": {"type": "boolean"}}},
     "ready": {"type": "object", "required": ["type", "session_id", "transcribe", "hints"], "properties": {"type": {"const": "ready"}, "session_id": {"type": ["string", "null"]}, "transcribe": {"enum": ["server", "device"]}, "hints": {"type": "array", "items": {"type": "string"}}}},
     "hints": {"type": "object", "required": ["type", "hints"], "description": "Device transcription only: what the recognizer should now expect (the screen changed).", "properties": {"type": {"const": "hints"}, "hints": {"type": "array", "items": {"type": "string"}}}},
@@ -25,5 +26,5 @@
     "error": {"type": "object", "required": ["type", "message"], "properties": {"type": {"const": "error"}, "message": {"type": "string"}}},
     "closed": {"type": "object", "required": ["type", "code", "reason", "why"], "properties": {"type": {"const": "closed"}, "code": {"type": ["integer", "null"]}, "reason": {"type": "string"}, "why": {"enum": ["window", "max_duration", "end_session", "client", "server", "error", "mode"]}}}
   },
-  "oneOf": [{"$ref": "#/$defs/ready"}, {"$ref": "#/$defs/hints"}, {"$ref": "#/$defs/endpoint"}, {"$ref": "#/$defs/partial"}, {"$ref": "#/$defs/ignored"}, {"$ref": "#/$defs/turn"}, {"$ref": "#/$defs/stage"}, {"$ref": "#/$defs/ping"}, {"$ref": "#/$defs/error"}, {"$ref": "#/$defs/closed"}]
+  "oneOf": [{"$ref": "#/$defs/ready"}, {"$ref": "#/$defs/hints"}, {"$ref": "#/$defs/end_turn"}, {"$ref": "#/$defs/partial"}, {"$ref": "#/$defs/ignored"}, {"$ref": "#/$defs/turn"}, {"$ref": "#/$defs/stage"}, {"$ref": "#/$defs/ping"}, {"$ref": "#/$defs/error"}, {"$ref": "#/$defs/closed"}]
 }

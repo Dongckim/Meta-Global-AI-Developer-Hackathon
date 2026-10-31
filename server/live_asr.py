@@ -191,14 +191,16 @@ class DeviceStream:
     async def open(self) -> bool:
         return True
 
-    def heard(self, text: str, final: bool) -> None:
+    def heard(self, text: str, final: bool = False) -> None:
         if not self.speaking:
             self.turn += 1
             self.speaking = True
             self.q.put_nowait({"type": "speechStart", "turnId": self.turn})
-        kind = "speechComplete" if final else "transcript"
-        self.q.put_nowait({"type": kind, "turnId": self.turn, "transcript": text})
-        self.speaking = not final
+        self.q.put_nowait({"type": "transcript", "turnId": self.turn, "transcript": text})
+
+    def turn_over(self) -> None:
+        """The server ended this turn (LiveConversation.force_end)."""
+        self.speaking = False
 
     async def end(self) -> None:
         self.q.put_nowait(None)
