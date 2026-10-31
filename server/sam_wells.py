@@ -11,7 +11,9 @@ flow never calls it.
    propagated both ways. When the tip goes missing for a while, it's found
    again after the gap and prompted there too (same id), and the request
    runs again.
-3. Each frame: plate mask -> four edges -> four corners -> homography to the plate's
+3. The plate is found once: its four edges cross at four corners on the frame that shows it
+   most (follow_plate), and features matched to that frame carry those corners to the others; a
+   frame that can't be matched finds its own edges. Each frame: corners -> homography to the plate's
    footprint in mm (SBS: 127.76 x 85.48, A1 at 14.38 / 11.24, pitch 9) ->
    the tip end's well. The tip end is the mask's long-axis end over the
    plate; both or neither: the one nearer the last frame's tip end (the
@@ -63,6 +65,16 @@ CORNERS = ("tl", "tr", "br", "bl")
 #: Plate edges: within this share of the plate's diagonal is on the line; tries per edge; fewest
 #: points to fit; most degrees between opposite edges.
 EDGE_TOL, FIT_TRIES, MIN_EDGE_POINTS, MAX_SKEW = 0.01, 200, 8, 25.0
+#: A grid past these isn't a view of a plate (degrees between opposite sides; their length ratio).
+MAX_VIEW_SKEW, MAX_VIEW_RATIO = 20.0, 1.35
+#: Following the plate from its best frame: ORB features, how far from the last frame's place a
+#: match may be (in well pitches: the wells repeat, so a wider search lands one well over), and
+#: the fewest inliers and share of them to trust; below that the frame finds its own edges.
+ORB_FEATURES, MATCH_PITCHES, MIN_INLIERS, MIN_INLIER_SHARE = 2000, 1.0, 15, 0.3
+MAX_BITS = 64  # of ORB's 256: a further pair isn't the same spot
+#: The area around the plate features come from (x its size), and a frame fit to be the reference
+#: shows at least this share of the clip's usual plate size.
+PLATE_MARGIN, MIN_BASE_SIZE = 1.15, 0.85
 
 
 class ClipTooLong(ValueError):
@@ -108,7 +120,7 @@ def judge(targets: list, found: list) -> dict:
             "all_in_order": len(hits) == len(targets) and order_ok}
 
 
-# ---------- geometry (pure python: .venv has no numpy) ----------
+# ---------- geometry ----------
 
 def solve(a: list, b: list) -> list:
     """Gaussian elimination with partial pivoting."""
@@ -273,6 +285,19 @@ def plate_corners(points: list) -> list:
             edges[weak] = edge_points(sides[weak], tol, along_strong) or edges[weak]
     lines = [long_axis(e) for e in edges]
     return [crossing(lines[i - 1], lines[i]) for i in range(4)]
+
+
+def area_of(loop: list) -> float:
+    return abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(loop, loop[1:] + loop[:1]))) / 2
+
+
+def distorted(q: list) -> bool:
+    """Too bent for any real view of a plate: opposite sides far from parallel or from equal."""
+    sides = [(q[(i + 1) % 4][0] - q[i][0], q[(i + 1) % 4][1] - q[i][1]) for i in range(4)]
+    units = [(x / (math.hypot(x, y) or 1), y / (math.hypot(x, y) or 1)) for x, y in sides]
+    long = [math.hypot(*e) or 1 for e in sides]
+    return (skew(units[0], units[2]) > MAX_VIEW_SKEW or skew(units[1], units[3]) > MAX_VIEW_SKEW
+            or max(long[0] / long[2], long[2] / long[0], long[1] / long[3], long[3] / long[1]) > MAX_VIEW_RATIO)
 
 
 def plate_quad(img_corners: list, a1: str) -> list:
@@ -523,11 +548,25 @@ def decode_masks(recs: dict, say=_quiet) -> None:
         print(f"sam wells: mask workers failed ({e}); one at a time", flush=True)
 
 
+def shown(match: dict) -> float:
+    """The share of the mask's convex hull the mask fills: what a hand or pen leaves of the plate."""
+    if "shown" in match:
+        return match["shown"]
+    pts = mask_points(match, 2)
+    if not match.get("mask"):
+        return 0.0
+    rows, cols = map(int, match["mask"]["data"].split(",")[:2])
+    x1, y1, x2, y2 = match["box"]
+    cell = (x2 - x1 + 1) / cols * (y2 - y1 + 1) / rows
+    return len(pts) * 4 * cell / (area_of(hull(outline(pts))) or 1)
+
+
 def compact(recs: dict) -> dict:
     """SAM's records as locate() reads them without decoding masks: JSON-ready. The plate
-    keeps only its outline (all plate_corners uses), the tip every other pixel (as locate)."""
-    return {str(n): {str(oid): {"box": m["box"],
-                                "points": outline(mask_points(m, 2)) if oid == 1 else mask_points(m, 2)}
+    keeps its outline (all plate_corners uses) and how much of it shows, the tip every
+    other pixel (as locate)."""
+    return {str(n): {str(oid): ({"box": m["box"], "points": outline(mask_points(m, 2)), "shown": shown(m)} if oid == 1
+                                else {"box": m["box"], "points": mask_points(m, 2)})
                      for oid, m in r.items()} for n, r in recs.items()}
 
 
@@ -625,10 +664,102 @@ def draw(png: Path, out: Path, plate, tip, quad, h, end, well, title: str) -> No
     img.save(out, "JPEG", quality=85)
 
 
+# ---------- the plate, found once ----------
+
+def best_frame(recs: dict) -> int:
+    """The frame showing the most of the plate, among those where it's about its usual size."""
+    size = {n: area_of(hull(outline(mask_points(r[1], 2)))) for n, r in recs.items() if 1 in r}
+    usual = sorted(size.values())[len(size) // 2]
+    return max((n for n in size if size[n] >= MIN_BASE_SIZE * usual), key=lambda n: shown(recs[n][1]))
+
+
+def _region(gray, quad: list, tip: list | None):
+    """ORB's mask: the plate and a margin around it, without the tip."""
+    import cv2
+    import numpy as np
+    mid = np.mean(quad, axis=0)
+    mask = np.zeros(gray.shape, np.uint8)
+    cv2.fillConvexPoly(mask, np.int32((np.array(quad) - mid) * PLATE_MARGIN + mid), 255)
+    if tip:
+        cv2.fillConvexPoly(mask, cv2.convexHull(np.int32(tip)), 0)
+    return mask
+
+
+def _follow(orb, base: tuple, gray, tip: list | None, last, quad0: list, reach: float):
+    """This frame's homography from the reference, or None. A match stays within `reach` px of
+    where the last frame's homography puts it (the wells repeat)."""
+    import cv2
+    import numpy as np
+    pts0, des0 = base
+    guess = cv2.perspectiveTransform(np.float32(quad0).reshape(-1, 1, 2), last).reshape(-1, 2)
+    kps, des = orb.detectAndCompute(gray, _region(gray, guess.tolist(), tip))
+    if des is None or len(kps) < MIN_INLIERS:
+        return None
+    pts = np.float32([k.pt for k in kps])
+    moved = cv2.perspectiveTransform(pts0.reshape(-1, 1, 2), last).reshape(-1, 2)
+    i, j = np.nonzero(np.linalg.norm(moved[:, None] - pts[None], axis=2) <= reach)
+    bits = np.bitwise_count(des0[i] ^ des[j]).sum(axis=1)
+    best = {}
+    for a, b, d in zip(i[np.argsort(bits)].tolist(), j[np.argsort(bits)].tolist(), np.sort(bits).tolist()):
+        if d < MAX_BITS:
+            best.setdefault(a, b)
+    if len(best) < MIN_INLIERS:
+        return None
+    h, inliers = cv2.findHomography(pts0[list(best)], pts[list(best.values())], cv2.RANSAC, 3.0)
+    if h is None or inliers.sum() < MIN_INLIERS or inliers.mean() < MIN_INLIER_SHARE:
+        return None
+    return h
+
+
+def follow_plate(clip: Path, recs: dict, nframes: int) -> tuple:
+    """The plate's corners once, on the frame that shows it best, then carried to every frame
+    by matching features to that frame. -> ({frame: corners}, reference frame, frames that
+    couldn't be matched and found their own edges)."""
+    import cv2
+    import numpy as np
+    video, frames = cv2.VideoCapture(str(clip)), {}
+    for n in range(nframes):
+        ok, img = video.read()
+        if not ok:
+            break
+        frames[n] = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    video.release()
+    ref = best_frame(recs)
+    if ref not in frames:
+        return {}, ref, 0
+    quad0 = [tuple(map(float, p)) for p in plate_corners(mask_points(recs[ref][1], 2))]
+    orb = cv2.ORB_create(ORB_FEATURES)
+    tip_at = lambda n: mask_points(recs[n][2], 2) if 2 in recs.get(n, {}) else None  # noqa: E731
+    kps, des = orb.detectAndCompute(frames[ref], _region(frames[ref], quad0, tip_at(ref)))
+    if des is None or len(kps) < MIN_INLIERS:
+        return {}, ref, 0
+    base = (np.float32([k.pt for k in kps]), des)
+    reach = MATCH_PITCHES * pitch_px(plate_h(plate_quad(quad0, "tl")))
+    quads, redone = {ref: quad0}, 0
+    for way in (range(ref + 1, nframes), range(ref - 1, -1, -1)):
+        last = np.eye(3)
+        for n in way:
+            if n not in frames:
+                continue
+            h = _follow(orb, base, frames[n], tip_at(n), last, quad0, reach)
+            if h is not None:
+                quad = [tuple(map(float, p)) for p in
+                        cv2.perspectiveTransform(np.float32(quad0).reshape(-1, 1, 2), h).reshape(-1, 2)]
+                if not distorted(quad):  # a good inlier count on the wrong wells bends the grid
+                    last, quads[n] = h, quad
+                    continue
+            redone += 1
+            own = plate_corners(mask_points(recs[n][1], 2)) if 1 in recs.get(n, {}) else None
+            if own and not distorted(own):  # the next frame looks from here, not from a stale place
+                last = cv2.getPerspectiveTransform(np.float32(quad0), np.float32(own))
+    return quads, ref, redone
+
+
 # ---------- one clip ----------
 
-def locate(recs: dict, nframes: int, a1: str, say=_quiet) -> tuple:
-    """SAM's records -> (track, {frame: what to draw}, well pitches in px, failed frames by why)."""
+def locate(recs: dict, nframes: int, a1: str, say=_quiet, quads: dict | None = None) -> tuple:
+    """SAM's records -> (track, {frame: what to draw}, well pitches in px, failed frames by why).
+    `quads` (follow_plate): each frame's plate corners; a frame without finds its own edges."""
     track, per, pitches, last = [], {}, [], None
     fails = {"no_plate": 0, "no_tip": 0, "bad_grid": 0}
     for n in range(nframes):
@@ -639,7 +770,7 @@ def locate(recs: dict, nframes: int, a1: str, say=_quiet) -> tuple:
             fails["no_plate"] += 1
             continue
         try:
-            quad = plate_quad(plate_corners(mask_points(plate, 2)), a1)
+            quad = plate_quad((quads or {}).get(n) or plate_corners(mask_points(plate, 2)), a1)
             h = plate_h(quad)
             pitches.append(pitch_px(h))
             mid = apply(solve_inv(h), (PLATE_MM[0] / 2, PLATE_MM[1] / 2))
@@ -726,7 +857,11 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
     decode_masks(recs, say)
     t["masks_s"] = time.perf_counter() - t0
     t0 = time.perf_counter()
-    track, per, pitches, fails = locate(recs, nframes, a1, say)
+    say("Following the plate from its best frame")
+    quads, ref, redone = follow_plate(clip, recs, nframes)
+    t["follow_s"] = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    track, per, pitches, fails = locate(recs, nframes, a1, say, quads)
     t["grid_s"] = time.perf_counter() - t0
     found = found_wells(track, fps)
 
@@ -760,6 +895,7 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
             "prompts": {str(k): [n for n, _ in v] for k, v in prompts.items()},
             "track": [[n, mm[0], mm[1], a] for n, mm, a in track],
             "found": [{"well": w, "rep": rep, "f0": f0, "f1": f1} for w, rep, f0, f1 in found],
+            "plate_frame": ref, "plate_redone": redone,
             "pitch_px": pitch, "well_px": pitch * WELL_D_MM / PITCH_MM,
             "fails": fails, "failed_ratio": failed / nframes if nframes else 1.0,
             "timing": t, "images": images}
