@@ -80,7 +80,7 @@ from server.labels import protocol_short
 from server.live_session import LiveSender, LiveConversation, device_hints, live_keywords
 from server.live_session import settings as live_settings
 from server.tone import keys as tone_keys
-from server.private_chat import from_chat, to_chat
+from server.private_chat import STATE_MARK, from_chat, to_chat
 from server.private_wake import wake_up, weights_gb
 from server.tone import run_mode, say, section
 
@@ -537,6 +537,18 @@ async def _post(client: httpx.AsyncClient, name: str, *a, **k) -> httpx.Response
         raise HTTPException(502, f"{name} unreachable: {e}")
 
 
+def _log_private_round(session: dict, t0: float, ms: int, payload: dict) -> None:
+    """Where a Glimmer round's time went. other: network, Modal and the guard."""
+    t = payload.get("timings") or {}
+    session["rounds"] = session.get("rounds", 0) + 1
+    pre = int((t0 - session["turn_t0"]) * 1000) if session["rounds"] == 1 and "turn_t0" in session else 0
+    prefill, decode = int(t.get("prompt_ms") or 0), int(t.get("predicted_ms") or 0)
+    print(f"[private] round={session['rounds']} pre_ms={pre} total_ms={ms} other_ms={ms - prefill - decode} "
+          f"cached_tok={t.get('cache_n')} prefill_tok={t.get('prompt_n')} prefill_ms={prefill} "
+          f"out_tok={t.get('predicted_n')} reasoning_chars={payload.get('reasoning_chars')} decode_ms={decode} "
+          f"draft={t.get('draft_n_accepted')}/{t.get('draft_n')}", flush=True)
+
+
 async def _call_spark(
     client: httpx.AsyncClient, key: str, text: str, state: dict, session: dict,
     model: str = SPARK_MODEL, effort: str = REASONING_EFFORT, lookup: bool = False,
@@ -594,7 +606,7 @@ async def _call_spark(
         body = {
             "model": model,
             "instructions": SYSTEM + (f"\n\nConversation so far: {seed}" if seed else "")
-            + "\n\n현재 상태(JSON):\n" + state_json,
+            + STATE_MARK + state_json,
             "input": req_input,
             "reasoning": {"effort": effort},
             "max_output_tokens": MAX_OUTPUT_TOKENS,
@@ -631,6 +643,7 @@ async def _call_spark(
         if private:
             payload = from_chat(payload)
             store.wake.touch()
+            _log_private_round(session, t0, ms, payload)
         mem.note_response(payload.get("id"))
         usage = payload.get("usage") or {}
         in_tok = usage.get("input_tokens", usage.get("prompt_tokens", "?"))
@@ -864,6 +877,7 @@ async def _turn_search(client, query: str, session: dict) -> tuple:
 async def _turn(client, key, text: str, session: dict, source: str) -> tuple:
     """One owner turn with its stages around it (heard ... done/failed)."""
     _stage(session, "heard", text=text)
+    session["turn_t0"], session["rounds"] = time.perf_counter(), 0
     token = _TURN_DROPS.set([])  # this turn's drops only (a new list every turn)
     try:
         out = await run_utterance(client, key, text, session, source)

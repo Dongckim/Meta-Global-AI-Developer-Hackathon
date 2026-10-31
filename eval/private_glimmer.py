@@ -266,7 +266,7 @@ def voice() -> None:
     """The real turn on the real model: /input in Private, every Meta call counted."""
     from fastapi.testclient import TestClient
     log(f"\n## Private voice end to end ({time.strftime('%F %T')})\n")
-    log("| said | route | ms | calls | cards | Meta calls | reply |\n|---|---|---|---|---|---|---|")
+    log("| said | route | ms | calls | cards | Meta calls | rounds | reply |\n|---|---|---|---|---|---|---|---|")
     bench_system()
     api.tone.set_run_mode("private")
     api.store.wake.begin()
@@ -283,10 +283,13 @@ def voice() -> None:
     for said in VOICE:
         meta.clear()
         t0 = time.perf_counter()
-        j = c.post("/input", json={"text": said, "session": "private-eval"}).json()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            j = c.post("/orchestrate", json={"text": said, "session": "private-eval"}).json()
         ms = int((time.perf_counter() - t0) * 1000)
+        rounds = [x.split("] ", 1)[1] for x in buf.getvalue().splitlines() if x.startswith("[private]")]
         log(f"| {said} | {j.get('route')} | {ms} | {[x['name'] for x in j.get('tool_calls') or []]} | "
-            f"{[x['kind'] for x in j.get('cards') or []]} | {len(meta)} | {j.get('reply', j)!r} |")
+            f"{[x['kind'] for x in j.get('cards') or []]} | {len(meta)} | {'<br>'.join(rounds)} | {j.get('reply', j)!r} |")
     api.tone.set_run_mode(None)
 
 

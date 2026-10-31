@@ -34,7 +34,7 @@ GPU = GPUS[os.environ.get("GLIMMER_GPU", "L40S")]
 #: GLIMMER_KEEP_WARM=1 keeps one container on: no cold start, billed all day.
 MIN_CONTAINERS = 1 if os.environ.get("GLIMMER_KEEP_WARM") == "1" else 0
 TUNING = [
-    "--reasoning-effort", "low", "--reasoning-budget", "0",
+    "--chat-template-kwargs", '{"reasoning_strength":"low"}', "--reasoning-budget", "0",
     "--model-draft", f"{WEIGHTS}/{DRAFT_FILE}", "-ngld", "99", "--spec-type", "draft-dflash",
     "--spec-draft-n-max", "15", "-fa", "on",
 ]
@@ -55,7 +55,7 @@ CTX_SIZE = 16384
 ALLOWED_KEYS = frozenset({
     "model", "messages", "tools", "tool_choice", "parallel_tool_calls",
     "stream", "stream_options", "max_tokens", "temperature", "top_p", "top_k",
-    "reasoning_effort", "response_format",
+    "reasoning_effort", "response_format", "cache_prompt",
 })
 
 app = modal.App("glassistant-glimmer")
