@@ -27,8 +27,9 @@ _LIVE: dict = {}
 
 
 class Live:
-    def __init__(self, sid: str, a1: str, pointer: str):
+    def __init__(self, sid: str, a1: str, pointer: str, targets: list | None = None):
         self.id, self.a1, self.pointer, self.dir = sid, a1, pointer, ROOT / sid
+        self.targets = targets or []  # debug only: what the tester says they'll fill
         self.lock = threading.Lock()
         self.chunks: dict = {}  # n -> {"n", "start", "status", ...}
         self.best = None  # the reference
@@ -43,9 +44,9 @@ class Live:
             return self.best
 
     def offer(self, cand: dict) -> None:
-        """Keeps the first reference, then one clearly better."""
+        """Keeps the first reference, then one with enough wells that's clearly better."""
         with self.lock:
-            if self.best and cand["score"] < self.best["score"] + sw.REF_MARGIN:
+            if self.best and (cand["wells"] < sw.MIN_WELLS or cand["score"] < self.best["score"] + sw.REF_MARGIN):
                 return
             was = self.best
             self.best = cand
@@ -57,15 +58,24 @@ class Live:
     def _judge(self) -> None:
         """The wells on the frames every chunk before has finished (results can land out of order,
         and a late chunk must not change what's shown). An earlier chunk's frame stands. Holds the lock."""
-        joined: dict = {}
+        joined, inliers, holes = {}, {}, {}
         for n in sorted(self.chunks):
             c = self.chunks[n]
             if n and n - 1 not in self.chunks and not self.stopped or c["status"] == "analyzing":
                 break
             for f, x, y, a in c.get("track", ()):
                 joined.setdefault(c["start"] + f, (c["start"] + f, (x, y), a))
+                holes.setdefault(c["start"] + f, c.get("ref_wells", 0))
+            for f, count in c.get("inliers", {}).items():
+                inliers.setdefault(c["start"] + int(f), count)
         if self.fps:
-            self.wells = sw.filled([joined[f] for f in sorted(joined)], self.fps)
+            self.wells = []
+            for w in sw.filled([joined[f] for f in sorted(joined)], self.fps):
+                frames = [f for f in joined if w["f0"] <= f <= w["frame"]]
+                why = sw.not_sure_why(w["off_mm"], holes[w["frame"]], [inliers.get(f, 0) for f in frames])
+                self.wells.append({**w, "confidence": "not_sure" if why else "sure", "why": why,
+                                   "ref_wells": holes[w["frame"]],
+                                   "inliers": sorted(inliers.get(f, 0) for f in frames)[len(frames) // 2]})
 
     def finish(self, n: int, result: dict) -> None:
         with self.lock:
@@ -80,20 +90,32 @@ class Live:
             self._judge()
             self._save()
 
+    def summary(self) -> dict:
+        """Sure and not-sure wells; with a target list, how those compare. to_catch: targets seen only as not sure."""
+        sure = [w["well"] for w in self.wells if w["confidence"] == "sure"]
+        unsure = {w["well"] for w in self.wells if w["confidence"] == "not_sure"}
+        return {"sure": len(sure), "not_sure": sum(w["confidence"] == "not_sure" for w in self.wells),
+                "hit": [w for w in self.targets if w in sure], "outside": [w for w in sure if w not in self.targets] if self.targets else [],
+                "missed": [w for w in self.targets if w not in sure and w not in unsure],
+                "to_catch": [w for w in self.targets if w not in sure and w in unsure]}
+
     def out(self) -> dict:
         return {"id": self.id, "a1": self.a1, "pointer": self.pointer, "fps": self.fps, "wells": self.wells,
+                "targets": self.targets, "summary": self.summary(),
                 "stopped": self.stopped, "done": self.stopped and all(c["status"] != "analyzing" for c in self.chunks.values()),
-                "chunks": [{k: v for k, v in c.items() if k != "track"} for _, c in sorted(self.chunks.items())],
+                "chunks": [{k: v for k, v in c.items() if k not in ("track", "inliers")} for _, c in sorted(self.chunks.items())],
                 "references": self.refs}
 
     def _save(self) -> None:
         (self.dir / "live.json").write_text(json.dumps({**self.out(), "tracks": {
-            n: {"start": c["start"], "track": c.get("track", [])} for n, c in self.chunks.items()}}))
+            n: {"start": c["start"], "track": c.get("track", []), "inliers": c.get("inliers", {})}
+            for n, c in self.chunks.items()}}))
 
 
 class LiveIn(BaseModel):
     a1: str = "tl"
     pointer: str = "pen"
+    targets: str = ""
 
 
 @router.post("")
@@ -102,8 +124,12 @@ def new_live(body: LiveIn):
         raise HTTPException(400, f"a1 is one of {', '.join(sw.CORNERS)}")
     if body.pointer not in sw.POINTERS:
         raise HTTPException(400, f"pointer is one of {', '.join(sw.POINTERS)}")
+    try:
+        targets = sw.parse_targets(body.targets) if body.targets.strip() else []
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     sid = time.strftime("%Y%m%d-%H%M%S-") + os.urandom(2).hex()
-    live = _LIVE[sid] = Live(sid, body.a1, body.pointer)
+    live = _LIVE[sid] = Live(sid, body.a1, body.pointer, targets)
     live.dir.mkdir(parents=True)
     return live.out()
 

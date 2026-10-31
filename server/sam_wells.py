@@ -98,6 +98,9 @@ SINK_RATIO, SINK_BACK_S = None, 2.0
 #: A chunk's frame replaces the session's reference when its score (share of the plate showing +
 #: share of the 96 wells SAM finds) beats it by this much.
 REF_MARGIN = 0.15
+#: A continuous well is "sure" with a reference of at least MIN_WELLS wells, at least SURE_INLIERS ORB
+#: inliers on its stay (the median), and the tip within SURE_OFF_MM of the well's center.
+SURE_INLIERS, SURE_OFF_MM = 70, 3.0  # 70: the lowest 5th percentile of matched frames on the iPad sessions
 #: A chunk's looks for the tip. SAM's image calls run about one at a time however many are sent
 #: (1.6 s each), and a chunk closes every 9 s: 40 a chunk took 270 s, and dropped connections.
 CHUNK_TIP_LOOKS = 3
@@ -440,10 +443,19 @@ def filled(track: list, fps: float, sink: float | None = SINK_RATIO) -> list:
         if sum(r[2] for r in here) < FILL_S - 1e-9 or (out and out[-1]["well"] == well):
             continue
         if sink is None or _sunk(track, here[0][0], [r[3] for r in here], fps, sink):
-            out.append({"well": well, "frame": q[0], "f0": here[0][0]})
+            mid = well_center_mm(ROWS.index(well[0]), int(well[1:]) - 1)
+            off = sorted(math.dist(r[3][1], mid) for r in here)
+            out.append({"well": well, "frame": q[0], "f0": here[0][0], "off_mm": off[len(off) // 2]})
             spot = q[1]
             recent.clear()
     return out
+
+
+def not_sure_why(off_mm: float, ref_wells: int, inliers: list) -> list:
+    """What's unsure about a well, by name; empty: sure. inliers: the stay's frames (0: not matched)."""
+    middle = sorted(inliers)[len(inliers) // 2] if inliers else 0
+    return [why for why, bad in (("reference", ref_wells < MIN_WELLS), ("matching", middle < SURE_INLIERS),
+                                 ("off center", off_mm > SURE_OFF_MM)) if bad]
 
 
 def compare_settings(attempts: list) -> dict:
@@ -810,8 +822,8 @@ def _region(gray, quad: list, tip: list | None, plate: list | None):
 
 
 def _follow(orb, base: tuple, gray, tip: list | None, plate: list | None, last, quad0: list, reach: float):
-    """This frame's homography from the reference, or None. A match stays within `reach` px of
-    where the last frame's homography puts it (the wells repeat)."""
+    """(this frame's homography from the reference, its inliers), or None. A match stays within
+    `reach` px of where the last frame's homography puts it (the wells repeat)."""
     import cv2
     import numpy as np
     pts0, des0 = base
@@ -833,7 +845,7 @@ def _follow(orb, base: tuple, gray, tip: list | None, plate: list | None, last, 
     h, inliers = cv2.findHomography(pts0[list(best)], pts[list(best.values())], cv2.RANSAC, 3.0)
     if h is None or inliers.sum() < MIN_INLIERS or inliers.mean() < MIN_INLIER_SHARE:
         return None
-    return h
+    return h, int(inliers.sum())
 
 
 def fit_wells(gray, quad: list, find) -> tuple:
@@ -963,9 +975,10 @@ def _carry(orb, base: tuple, frames: dict, recs: dict, quad0: list, ways: tuple,
             found = _follow(orb, base, frames[n], _tip_at(recs, n), _plate_at(recs, n, plate_tracked), last, quad0,
                             reach * (LOST_REACH if lost else 1))
             if found is not None:
-                quad = [tuple(map(float, p)) for p in cv2.perspectiveTransform(corners0, found).reshape(-1, 2)]
+                quad = [tuple(map(float, p)) for p in cv2.perspectiveTransform(corners0, found[0]).reshape(-1, 2)]
                 if not distorted(quad):  # a good inlier count on the wrong wells bends the grid
-                    last, out["quads"][n], stuck = found, quad, 0
+                    last, out["quads"][n], stuck = found[0], quad, 0
+                    out.setdefault("inliers", {})[n] = found[1]
                     continue
             plate = recs.get(n, {}).get(1)
             own = plate_corners(mask_points(plate, 2)) if plate and (lost or shown(plate) >= MIN_SHOWN) \
@@ -1068,7 +1081,8 @@ def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) 
     track, *_ = locate(recs, nframes, a1, quads=followed["quads"])
     t["total_s"] = time.perf_counter() - t_all
     return {"frames": nframes, "fps": fps, "track": [[n, mm[0], mm[1], a] for n, mm, a in track], "timing": t,
-            "rounds": rounds, "redone": followed["redone"], "kept": followed["kept"]}
+            "rounds": rounds, "redone": followed["redone"], "kept": followed["kept"], "ref_wells": ref["wells"],
+            "inliers": followed.get("inliers", {})}
 
 
 # ---------- one clip ----------

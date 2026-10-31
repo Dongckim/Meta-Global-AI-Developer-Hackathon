@@ -438,9 +438,16 @@ assert s16["done"] and [w["well"] for w in s16["wells"]] == ["B3", "D5"], s16
 assert [c["status"] for c in s16["chunks"]] == ["done", "done", "empty"], s16
 assert s16["references"][-1]["chunk"] == "2", s16["references"]
 one16 = live.Live("x", "tl", "pen")
-for score, name in ((0.5, "a"), (0.6, "b"), (1.0, "c")):  # 0.6 isn't clearly better than 0.5
-    one16.offer({"chunk": name, "frame": 0, "wells": 0, "score": score})
-assert [r["chunk"] for r in one16.refs] == ["a", "c"]
+for score, wells, name in ((0.5, 0, "a"), (0.6, 40, "b"), (1.0, 5, "c"), (1.0, 40, "d")):
+    one16.offer({"chunk": name, "frame": 0, "wells": wells, "score": score})  # b: not clearly better; c: too few wells
+assert [r["chunk"] for r in one16.refs] == ["a", "d"]
+assert sw.not_sure_why(1.0, 40, [100] * 8) == []
+assert sw.not_sure_why(3.5, 0, [0] * 8) == ["reference", "matching", "off center"]
+one16.targets, one16.wells = ["B3", "C4", "D5"], [{"well": w, "confidence": c} for w, c in
+                                                  (("B3", "sure"), ("E9", "sure"), ("C4", "not_sure"), ("G2", "not_sure"))]
+sm16 = one16.summary()
+assert (sm16["sure"], sm16["not_sure"]) == (2, 2) and sm16["hit"] == ["B3"] and sm16["outside"] == ["E9"], sm16
+assert sm16["to_catch"] == ["C4"] and sm16["missed"] == ["D5"], sm16
 sw.track_chunk = real16
 print("SW16 ok: a continuous session joins its chunks")
 
