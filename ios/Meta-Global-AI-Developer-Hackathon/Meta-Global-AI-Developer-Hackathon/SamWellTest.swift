@@ -274,7 +274,7 @@ final class WellCam: @unchecked Sendable {
     func stop() async -> Clip? {
         let (w, i, n, f, l, sz, got, no, slow, gap, seen, asked) = queue.sync {
             recording = false
-            return (writer, input, written, first, last, size, arrived, refused, late, worstGap, sizes, fps)
+            return (writer, input, written, first, last, size, arrived, refused, late, worstGap, sizes, self.fps)
         }
         guard let w, let i, n > 1, let f, let l else { return nil }
         i.markAsFinished()
@@ -289,11 +289,11 @@ final class WellCam: @unchecked Sendable {
         let name = "samwell_\(stamp)_\(sz.0)x\(sz.1)_\(String(format: "%.1f", fps))fps_\(hfp ? "hfp" : "nohfp").mp4"
         let dest = URL.documentsDirectory.appending(path: name)
         try? FileManager.default.moveItem(at: w.outputURL, to: dest)
-        let seconds = (l - f).seconds
+        let span = (l - f).seconds
         let bytes = (try? dest.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         let report = "\(seen.sorted().joined(separator: ", ")) · HFP \(hfp ? "on" : "off") · \(String(format: "%.2f", fps)) fps of \(asked) "
-            + "· \(got) frames over \(String(format: "%.1f", seconds)) s · \(n) written, \(no) refused, \(slow) late "
-            + "· worst gap \(Int(gap * 1000)) ms · file \(String(format: "%.1f", Double(bytes) * 8 / max(0.001, seconds) / 1_000_000)) Mbps"
+            + "· \(got) frames over \(String(format: "%.1f", span)) s · \(n) written, \(no) refused, \(slow) late "
+            + "· worst gap \(Int(gap * 1000)) ms · file \(String(format: "%.1f", Double(bytes) * 8 / max(0.001, span) / 1_000_000)) Mbps"
         Log.dat.info("[samwell] clip \(report, privacy: .public)")
         return Clip(url: dest, width: sz.0, height: sz.1, fps: fps, report: report)
     }
