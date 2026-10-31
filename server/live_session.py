@@ -57,12 +57,13 @@ def turn_end(reading: str, since_word: float, mic_quiet: float, asr_final: bool,
     return "silence" if quiet else None
 
 
-def turn_end_line(reason: str, turn, last_word: float | None, now: float) -> str:
+def turn_end_line(reason: str, turn, last_word: float | None, now: float, mic_threshold: float | None = None) -> str:
     """[turn-end]: where a turn waited, seconds from its start ("-": never came)."""
     t0 = turn.t_start if turn.t_start is not None else now
     at = lambda t: "-" if t is None else f"{t - t0:.2f}"  # noqa: E731
     return (f"[turn-end] turn={turn.id} reason={reason} last_partial={at(last_word)} asr_end={at(turn.t_end)} "
-            f"asr_final={at(turn.t_complete)} decided={at(now)} text=\"{turn.text or turn.partial}\"")
+            f"asr_final={at(turn.t_complete)} decided={at(now)} mic_threshold={mic_threshold or '-'} "
+            f"text=\"{turn.text or turn.partial}\"")
 
 
 def settings() -> dict:

@@ -98,7 +98,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 28
+API_VERSION = 29
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -1997,6 +1997,7 @@ async def voice_live(ws: WebSocket):
     why = ""
     busy = False  # an owner turn is running
     mic_quiet_at = time.monotonic()  # since when the app's mic has been quiet (None: hearing something)
+    mic_threshold = None  # the app's quiet level, measured from the room
     task_seen = 0  # device transcription: words of an older recognition task are late
     # this session's turn stages ride its socket (_stage)
     session["stage_sink"] = lambda m: asyncio.ensure_future(sender.send(m))
@@ -2010,7 +2011,7 @@ async def voice_live(ws: WebSocket):
             await meta.end()
 
     async def uplink():
-        nonlocal mic_quiet_at, task_seen
+        nonlocal mic_quiet_at, mic_threshold, task_seen
         while True:
             msg = await ws.receive()
             if msg.get("type") == "websocket.disconnect":
@@ -2026,6 +2027,7 @@ async def voice_live(ws: WebSocket):
                     meta.heard(str(body.get("text") or ""), False)
             elif body.get("type") == "mic":
                 mic_quiet_at = (mic_quiet_at or time.monotonic()) if body.get("quiet") else None
+                mic_threshold = body.get("threshold", mic_threshold)
             elif body.get("type") == "tts":
                 conv.tts(bool(body.get("speaking")), time.monotonic())
             elif body.get("type") == "end":
@@ -2038,7 +2040,7 @@ async def voice_live(ws: WebSocket):
             return
         reason = reason or turn_end(turn_reading(turn.text or "", session), times.settle_s, times.quiet_s,
                                     True, False, times) or "unfinished-extended"  # the ASR ended it: held if cut off
-        print(turn_end_line(reason, turn, conv.word_at.get(turn.id), now), flush=True)
+        print(turn_end_line(reason, turn, conv.word_at.get(turn.id), now, mic_threshold), flush=True)
 
     async def turn_watch():
         """The ASR may never say the turn is over: we decide, on the same rule."""

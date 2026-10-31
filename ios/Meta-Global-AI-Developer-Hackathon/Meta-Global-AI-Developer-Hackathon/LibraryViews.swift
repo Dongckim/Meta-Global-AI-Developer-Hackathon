@@ -264,6 +264,11 @@ struct DiagnosticsView: View {
                     timeSlider("Silence that ends a turn", $quiet, 0.8...3.0, "quiet_s")
                     timeSlider("More for an unfinished turn", $extra, 0...4, "extra_s")
                     timeSlider("Always end after the last word", $cap, 1.5...6, "cap_s")
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Text(QuietGauge.shown.map { String(format: "Mic floor %.4f · quiet under %.4f", $0.floor, $0.threshold) }
+                             ?? "Mic floor: measured when a live session opens")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                     row("Microphone", status: mic) {
                         Button("Check") { checkMic() }.buttonStyle(.bordered).controlSize(.small)
                     }

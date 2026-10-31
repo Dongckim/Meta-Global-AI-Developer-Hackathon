@@ -766,3 +766,30 @@ private extension VoiceSession {
     /// Tests always run with the toggle on (restored by the runner default).
     static func sharedWakeOn() { wakeEnabled = true }
 }
+
+struct QuietGaugeTests {
+    @Test func aRoomSetsTheThresholdAboveItsFloor() {
+        var g = QuietGauge()
+        for _ in 0..<(QuietGauge.samples - 1) { #expect(g.feed(0.01, muted: false) == nil) }
+        #expect(g.feed(0.01, muted: false) == 0.01)
+        #expect(abs(g.threshold - 0.03) < 0.0001)
+    }
+
+    @Test func aSilentRoomKeepsTheLeast() {
+        var g = QuietGauge()
+        for _ in 0..<QuietGauge.samples { _ = g.feed(0.0001, muted: false) }
+        #expect(g.threshold == QuietGauge.least)
+    }
+
+    @Test func miloSpeakingIsNotMeasured() {
+        var g = QuietGauge()
+        for _ in 0..<50 { #expect(g.feed(0.5, muted: true) == nil) }
+        #expect(g.threshold == 0.012)
+    }
+
+    @Test func aWordDuringTheMeasureDoesNotSetTheFloor() {
+        var g = QuietGauge()
+        for i in 0..<QuietGauge.samples { _ = g.feed(i < 3 ? 0.2 : 0.01, muted: false) }
+        #expect(abs(g.threshold - 0.03) < 0.0001)
+    }
+}

@@ -327,7 +327,7 @@ with c.websocket_connect("/voice/live") as ws:
     ready = check(ws.receive_json())
     assert ready["transcribe"] == "device" and "H12" in ready["hints"], ready
     ws.send_bytes(b"\x00" * 2560)
-    ws.send_json({"type": "mic", "quiet": True})
+    ws.send_json({"type": "mic", "quiet": True, "threshold": 0.018})
     ws.send_json({"type": "heard", "text": "B2", "task": 1})
     ws.send_json({"type": "heard", "text": "Hey Milo, B2 done.", "task": 1})
     got = []
@@ -384,8 +384,10 @@ assert conv.feed({"type": "speechComplete", "turnId": 7, "transcript": "note C3 
 assert conv.feed({"type": "speechComplete", "turnId": 7, "transcript": "note C3"}, 3.1) == []
 print("TE2 ok: we can end a turn; a late final loses nothing and repeats nothing")
 
-line = turn_end_line("silence", conv.tracker.turns[7], 1.2, 2.4)
-assert line.startswith('[turn-end] turn=7 reason=silence last_partial=0.20 asr_end=- asr_final=2.10 decided=1.40 text="'), line
+line = turn_end_line("silence", conv.tracker.turns[7], 1.2, 2.4, 0.018)
+assert line.startswith('[turn-end] turn=7 reason=silence last_partial=0.20 asr_end=- asr_final=2.10 decided=1.40 '
+                       'mic_threshold=0.018 text="'), line
+assert "mic_threshold=- " in turn_end_line("silence", conv.tracker.turns[7], 1.2, 2.4), "not measured yet"
 print("TE3 ok: the [turn-end] line")
 
 

@@ -18,6 +18,38 @@ enum LiveEvent {
     case closed(why: String)
 }
 
+/// What counts as a quiet mic here: a second of the room, measured at the
+/// session's start and when the audio route changes. Milo's voice isn't the
+/// room: nothing is measured while the mic is muted.
+struct QuietGauge {
+    static let least: Float = 0.006
+    static let aboveFloor: Float = 3
+    /// One second of the 100 ms checks.
+    static let samples = 10
+    /// Latest for Diagnostics.
+    @MainActor static var shown: (floor: Float, threshold: Float)?
+
+    /// Until the first measure.
+    private(set) var threshold: Float = 0.012
+    private var window: [Float] = []
+
+    /// Starts a measure; the threshold stays until it's done.
+    mutating func restart() { window = [] }
+
+    private var measuring: Bool { window.count < Self.samples }
+
+    /// One check of the mic level; the new floor when this completes a measure.
+    /// The median: someone speaking for part of the second doesn't set it.
+    mutating func feed(_ level: Float, muted: Bool) -> Float? {
+        guard !muted, measuring else { return nil }
+        window.append(level)
+        guard !measuring else { return nil }
+        let floor = window.sorted()[Self.samples / 2]
+        threshold = max(Self.least, floor * Self.aboveFloor)
+        return floor
+    }
+}
+
 /// What Diagnostics changed about when a turn ends; nothing set: the server's
 /// defaults (pip_voice.json live.turn_end).
 enum TurnEndTimes {
@@ -320,8 +352,8 @@ enum LiveError: Error, LocalizedError {
 final class LiveLink: LiveControlling {
     var onEvent: ((LiveEvent) -> Void)?
     private var task: URLSessionWebSocketTask?
-    /// RMS under this is a quiet mic (tuned on the iPad; a noisy room just ends turns at the cap).
-    private static let quietLevel: Float = 0.012
+    private var gauge = QuietGauge()
+    private var routeWatch: Task<Void, Never>?
     private let mic = LiveMic()
     private let ears = DeviceEars()
     private var session = ""
@@ -343,6 +375,13 @@ final class LiveLink: LiveControlling {
         self.session = session
         try await connect()
         Task { await idleWatch() }
+        #if os(iOS)
+        routeWatch = Task { [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: AVAudioSession.routeChangeNotification) {
+                self?.gauge.restart()
+            }
+        }
+        #endif
     }
 
     /// The server closed for a mode change: same session on the VoiceSession
@@ -411,15 +450,22 @@ final class LiveLink: LiveControlling {
     }
 
     /// Mic quiet or not, on change: half of how the server hears a turn's end.
-    /// While the agent speaks there's nothing to report.
+    /// While the agent speaks there's nothing to report or measure.
     private func micWatch(_ t: URLSessionWebSocketTask) async {
+        gauge.restart()
         var quiet: Bool?
         while !finished, task === t {
             try? await Task.sleep(for: .milliseconds(100))
-            let now = MicEngine.shared.level < Self.quietLevel
+            let level = MicEngine.shared.level
+            if let floor = gauge.feed(level, muted: mic.muted.value) {
+                QuietGauge.shown = (floor, gauge.threshold)
+                Log.audio.info("[audio] mic floor \(floor) threshold \(self.gauge.threshold)")
+                quiet = nil  // the server hears the new threshold
+            }
+            let now = level < gauge.threshold
             if now != quiet, !mic.muted.value {
                 quiet = now
-                Self.send(t, ["type": "mic", "quiet": now])
+                Self.send(t, ["type": "mic", "quiet": now, "threshold": Double(gauge.threshold)])
             }
         }
     }
@@ -510,6 +556,7 @@ final class LiveLink: LiveControlling {
     private func finish(_ why: String) {
         guard !finished else { return }
         finished = true
+        routeWatch?.cancel()
         mic.stop()
         ears.stop()
         task?.cancel(with: .normalClosure, reason: nil)
