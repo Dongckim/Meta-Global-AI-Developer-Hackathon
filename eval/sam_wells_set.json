@@ -1,10 +1,9 @@
 [
-  {"clip": "20261030-230954-47c9/1", "where": "desk", "targets": ["B1", "B2", "B3", "B4"]},
-  {"clip": "20261030-220905-72d8/1", "where": "desk", "targets": ["B4", "C6", "E8"]},
-  {"clip": "20261030-220122-4031/2", "where": "desk", "targets": ["F5", "B10", "C11", "F4"]},
-  {"clip": "20261030-220122-4031/1", "where": "desk", "targets": ["D11", "E5", "B3", "B8"]},
-  {"clip": "20261030-225924-3b53/1", "where": "hand", "targets": ["B1", "B2", "B3", "B4"]},
-  {"clip": "20261030-224115-0320/1", "where": "hand", "targets": ["B1", "B2", "B3", "B4"]},
-  {"clip": "20261030-222302-244a/1", "where": "hand", "targets": ["B1", "B2", "B3", "B4"]},
-  {"clip": "20261030-221821-473a/1", "where": "hand", "targets": ["B1", "B2", "B3", "B4"]}
+  {"clip": "20261030-230954-47c9/1", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune"},
+  {"clip": "20261030-220905-72d8/1", "where": "desk", "targets": ["B4", "C6", "E8"], "use": "tune"},
+  {"clip": "20261030-220122-4031/2", "where": "desk", "targets": ["F5", "B10", "C11", "F4"], "use": "tune"},
+  {"clip": "20261030-225924-3b53/1", "where": "hand", "targets": ["B1", "B2", "B3", "B4"], "use": "tune"},
+  {"clip": "20261030-224115-0320/1", "where": "hand", "targets": ["B1", "B2", "B3", "B4"], "use": "tune"},
+  {"clip": "20261030-222302-244a/1", "where": "hand", "targets": ["B1", "B2", "B3", "B4"], "use": "tune"},
+  {"clip": "20261030-221821-473a/1", "where": "hand", "targets": ["B1", "B2", "B3", "B4"], "use": "tune"}
 ]

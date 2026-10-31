@@ -128,6 +128,9 @@ recs = {n: {1: plate_small, 2: {"box": b, "mask": None}} for n, b in enumerate(p
 recs[0][2] = {"box": (310, 150, 900, 154), "mask": None}  # neither end on the plate
 track4c, per4c, *_ = sw.locate(recs, 2, "tl")
 assert per4c[0][4][0] == 310 and per4c[1][4][0] == 120, per4c
+# the cache gives locate the same answer as SAM's records
+saved = sw.expand(sw.json.loads(sw.json.dumps(sw.compact(recs))))
+assert sw.locate(saved, 2, "tl")[0] == track4c
 print("SW4c ok: the tip end keeps to the same end from frame to frame")
 
 # SW5. Endpoints on a real (tiny) clip, SAM faked: the tip stops on each target.

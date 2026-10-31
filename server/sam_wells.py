@@ -463,7 +463,10 @@ def video_records(text: str) -> dict:
 
 
 def mask_points(match: dict, step: int = 1) -> list:
-    """Mask pixels as source-pixel points (cell centers); the box corners when unreadable."""
+    """Mask pixels as source-pixel points (cell centers); the box corners when unreadable.
+    A match from the cache (compact()) already has its points."""
+    if "points" in match:
+        return [tuple(p) for p in match["points"]]
     x1, y1, x2, y2 = match["box"]
     try:
         from meta_sam_parser import decode_mask_to_raster
@@ -476,6 +479,19 @@ def mask_points(match: dict, step: int = 1) -> list:
     pts = [(x1 + (c + 0.5) * sx, y1 + (r + 0.5) * sy)
            for r in range(0, rows, step) for c in range(0, cols, step) if raster[r * cols + c]]
     return pts or [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+
+
+def compact(recs: dict) -> dict:
+    """SAM's records as locate() reads them without decoding masks: JSON-ready. The plate
+    keeps only its outline (all plate_corners uses), the tip every other pixel (as locate)."""
+    return {str(n): {str(oid): {"box": m["box"],
+                                "points": outline(mask_points(m, 2)) if oid == 1 else mask_points(m, 2)}
+                     for oid, m in r.items()} for n, r in recs.items()}
+
+
+def expand(saved: dict) -> dict:
+    """compact()'s JSON back in video_records' shape."""
+    return {int(n): {int(oid): m for oid, m in r.items()} for n, r in saved.items()}
 
 
 def _quiet(stage: str, done: int | None = None, total: int | None = None) -> None:
@@ -590,7 +606,7 @@ def locate(recs: dict, nframes: int, a1: str, say=_quiet) -> tuple:
         if not tip:
             fails["no_tip"] += 1
             continue
-        pts = mask_points(tip)
+        pts = mask_points(tip, 2)
         ends = tip_ends(pts)
         over = [e for e in ends if on_plate(apply(h, e))]
         last = min(over if len(over) == 1 else ends, key=lambda e: math.dist(e, last or mid))
@@ -657,6 +673,9 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
         prompts[2].append(again)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "sam_video.txt").write_text(text)
+    (out_dir / "detections.json").write_text(json.dumps(
+        {oid: [{"frame": n, **{k: m[k] for k in ("box", "w", "h", "c")}} for n, m in items]
+         for oid, items in prompts.items()}))
 
     track, per, pitches, fails = locate(recs, nframes, a1, say)
     found = found_wells(track, fps)
