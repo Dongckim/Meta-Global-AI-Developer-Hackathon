@@ -438,6 +438,8 @@ assert [c["status"] for c in s16["chunks"]] == ["done", "done", "empty"], s16
 one16 = live.Live("x", "tl", "pen")
 one16.set_reference({"frame": 3, "wells": 40, "covered": False})
 assert one16.ref()["frame"] == 3 and one16.refs[0]["wells"] == 40
+one16.picking = True
+one16.first()  # the reference is in: no wait
 assert sw.not_sure_why(1.0, [100] * 8) == []
 assert sw.not_sure_why(3.5, [0] * 8) == ["matching", "off center"]
 one16.targets, one16.wells = ["B3", "C4", "D5"], [{"well": w, "confidence": c} for w, c in
@@ -457,6 +459,18 @@ class Ref16:
 
     def ref(self):
         return self.got
+
+    def first(self):
+        pass
+
+
+class CountPlates(FakeSam):
+    """Counts plate calls: the middle look is enough when the pen's plate is unbent there."""
+    calls = 0
+
+    def image(self, target, png):
+        CountPlates.calls += target == sw.PLATE
+        return FakeSam.image(self, target, png)
 
 
 class NoTip(FakeSam):
@@ -483,23 +497,42 @@ box17 = [(x, y) for x in range(40, 600, 8) for y in range(60, 435, 8)]
 class Stills(FakeSam):
     """The plate on every still; the pen over it on frames `over`; `wells` holes."""
     def __init__(self, over, plate=True):
-        self.over, self.plate = over, plate
+        self.over, self.plate, self.holes = over, plate, 0
 
     def image(self, target, png):
         if target == sw.PLATE:
             return [{"box": PLATE_BOX, "w": W, "h": H, "c": 0.9, "mask": None, "points": box17, "shown": 1.0}] if self.plate else []
         if target == "pen":
             return [{"box": PLATE_BOX, "c": 0.9}] if int(png.stem) in self.over else []
+        self.holes += 1
         return []
 
 
 ref17 = sw.pick_reference(Stills((0, 6)), stills17, "pen")
-assert ref17["frame"] == 3 and not ref17["covered"], ref17["frame"]  # the clear one, though it's not first
-all17 = sw.pick_reference(Stills((0, 3, 6)), stills17, "pen")
-assert all17 and all17["covered"]  # all covered: the best of them still serves
+assert ref17 and not ref17["covered"]  # only the middle still is asked for the plate and the pen
+all17 = sw.pick_reference(Stills((3,)), stills17, "pen")
+assert all17 and all17["covered"]  # covered still serves
 assert sw.pick_reference(Stills((), plate=False), stills17, "pen") is None
+few17 = Stills(())
+sw.pick_reference(few17, stills17, "pen")
+assert few17.holes == 4, few17.holes  # all three at once, then the best again with too few wells
+good17 = {"box": PLATE_BOX, "points": box17, "shown": 0.8, "mask": None}
+bent17 = {"box": PLATE_BOX, "points": [(100, 100), (500, 110), (560, 400), (60, 200)], "shown": 0.95, "mask": None}
+assert sw.best_plate([bent17, good17], (W, H)) is good17  # unbent beats showing more
+far17 = {"box": (300, 100, 500, 200), "points": [(300, 100), (500, 100), (500, 200), (300, 200)], "shown": 1.0, "mask": None}
+near17 = {"box": (40, 220, 400, 460), "points": [(40, 220), (400, 220), (400, 460), (40, 460)], "shown": 0.8, "mask": None}
+pen17 = {"box": (100, 300, 200, 320), "points": [(100.0 + i, 310.0) for i in range(100)]}
+assert sw.best_plate([far17, near17], (W, H), [pen17]) is near17  # a second plate on the desk shows more but has no pen
+assert sw.best_plate([far17, near17], (W, H)) is near17  # no pen yet: the nearer
 session17 = Ref16(ref17)
 r17 = sw.track_chunk(clip, "tl", FakeSam(), out17 / "1", "pen", session17)
-assert r17["track"] and r17["plate_found"], r17
+assert r17["track"] and r17["corrected"] and r17["kept"] + r17["redone"] < r17["frames"], r17
+assert sw.track_chunk(clip, "tl", FakeSam(), out17 / "2", "pen", Ref16(None))["corrected"] is False  # no correction yet: no wait
+outline17 = [(10.0, 10.0), (110.0, 10.0), (110.0, 60.0), (10.0, 60.0)]
+moved17 = [(x + 5, y + 2) for x, y in outline17]
+fit17 = sw.outline_fit(outline17, moved17)  # the grid sits 5, 2 px off this outline
+twice17 = [(2 * x + 100, 2 * y + 50) for x, y in outline17]  # the plate nearer, elsewhere: the offset scales with it
+assert all(sw.math.dist(a, (2 * x + 100, 2 * y + 50)) < 0.01 for a, (x, y) in zip(sw.corrected(twice17, fit17), moved17))
+assert sw.corrected(outline17, None) == outline17
 print("SW17 ok: a chunk without a tip is empty, one with a tip tracks")
 print("ALL PASS")

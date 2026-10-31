@@ -23,8 +23,8 @@ router = APIRouter(prefix="/lab/sam-wells/live")
 ROOT = Path(__file__).resolve().parent / "data" / "lab" / "sam_live"
 REFS = ROOT.parent / "sam_refs"
 MAX_CHUNK_BYTES = 100_000_000
-#: How long a chunk waits for the reference.
-REF_WAIT_S = 60
+#: Longest a chunk's image calls stay behind the session's first ones.
+REF_FIRST_S = 30
 _SID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
 #: Open sessions, in memory (the reference holds an image).
 _LIVE: dict = {}
@@ -38,6 +38,7 @@ class Live:
         self.chunks: dict = {}  # n -> {"n", "start", "status", ...}
         self.best = None  # the session's one reference, from the frames at Record
         self.ready = threading.Event()
+        self.picking = False
         self.refs: list = []
         self.stopped = False
         self.fps = None
@@ -45,9 +46,13 @@ class Live:
         self.created = time.time()
 
     def ref(self) -> dict | None:
-        """The reference, waiting for it: the stills went up as recording began."""
-        self.ready.wait(REF_WAIT_S)
+        """The session's grid correction, if it's in yet; a chunk doesn't wait for it."""
         return self.best
+
+    def first(self) -> None:
+        """While the stills are being worked on, a chunk's image calls wait: those run first."""
+        if self.picking:
+            self.ready.wait(REF_FIRST_S)
 
     def set_reference(self, ref: dict | None) -> None:
         self.best = ref
@@ -86,7 +91,6 @@ class Live:
             self._save()
 
     def stop(self) -> None:
-        self.ready.set()
         with self.lock:
             self.stopped = True
             self._judge()
@@ -151,6 +155,7 @@ def _pick(live: Live, stills: list) -> None:
     """Background: the session's reference, saved as an image. stills: [(frame, jpeg or png bytes)]."""
     import cv2
     import numpy as np
+    live.picking = True
     try:
         d = live.dir / "stills"
         d.mkdir()
