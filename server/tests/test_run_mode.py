@@ -1,5 +1,5 @@
-"""A run is always in the chosen mode: a protocol's or a run's past has no say,
-and the header says where a turn really goes.
+"""A run owns its mode from its start; the app follows the run that's open,
+and the header always says where a turn really goes.
 
 Run: python -m server.tests.test_run_mode (runs on import).
 """
@@ -19,7 +19,7 @@ import httpx  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import server.api as api  # noqa: E402
-from server import tone  # noqa: E402
+from server import library as lib, tone  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 
 
@@ -40,101 +40,167 @@ class Route:
             {"type": "function_call", "call_id": "c", **call}]})
 
 
-def fresh(mode):
-    tone.set_run_mode(mode)
-    api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
-    api.store.spawn_wake = lambda session, gen: None
-    api.store.spawn_handoff = lambda *a, **k: None
+def fresh():
+    tone.set_run_mode("full")
+    st = api.store = RecordStore(path=tempfile.mkdtemp() + "/r.json")
+    st.spawn_wake = lambda session, gen: None
+    st.spawn_handoff = lambda *a, **k: None
     api._SESSIONS.clear()
-    return api.store, api.get_session("m")
+    lib.ensure_demo_seed(st.root)
+    return st, api.get_session("m"), lib.find_by_name("Demo protocol", st.root)["id"]
 
 
-def choose(st, session, mode):
-    """As the Mode screen does; its wake-up isn't what's under test."""
-    with st._lock:
-        st._save_mode(mode)
-        st._commit()
+def act(st, s, name, **args):
+    return st.apply_calls([{"name": name, "args": args}], "tap", "", "tap", s)
 
 
-def pause(st):
-    with st._lock:
-        st._finish_locked("paused")
+def screen(st):
+    return st.r["view"]["current"]["screen"]
 
 
-def resume(st, session, run_id):
-    return st.apply_calls([{"name": "resume_run", "args": {"target": run_id}}], "tap", "", "tap", session)
+def awake(st, s):
+    """What the wake-up task does when the model answers."""
+    assert st.wake_done(st.wake.gen, True, s) or st.wake.fresh()
+
+
+def start(st, s, pid, mode):
+    """Start run, then the Mode screen, the only way in."""
+    act(st, s, "start_run", target=pid)
+    assert screen(st) == "mode", screen(st)
+    act(st, s, "choose_mode", mode=mode)
+    if st.wake.state == "warming":
+        assert screen(st) == "private_wait"
+        awake(st, s)
+    assert screen(st) == "main", screen(st)
+    assert st.r["run"]["mode"] == mode
+
+
+def home(st, s):
+    act(st, s, "navigate", screen="home")
+    assert screen(st) == "home"
 
 
 def agrees(st, mode):
-    """The header, the run, the transcription and the model all say `mode`."""
-    assert st.header_mode("main")["id"] == mode and st.r["run"]["mode"] == mode, (st.header_mode("main"), st.r["run"])
-    st.wake.begin()
-    st.wake.finish(True)
-    snap = TestClient(api.app).get("/record").json()
-    assert snap["header"]["mode"]["id"] == mode or snap["header"]["mode"] is None, snap["header"]
+    """Header, open run, transcription and model all say `mode`."""
+    assert st.r["run"]["mode"] == mode and st.header_mode("main")["id"] == mode, (st.r["run"], tone.run_mode())
+    c = TestClient(api.app)
+    snap = c.get("/record").json()
+    assert snap["header"]["mode"]["id"] == mode, snap["header"]
     assert snap["transcribe"] == ("device" if mode == "private" else "server"), snap["transcribe"]
     route = Route()
     with patch.object(api, "_post", route):
-        TestClient(api.app).post("/input", json={"text": "the seventh in row B, tick it off", "session": "m"})
+        c.post("/input", json={"text": "the seventh in row B, tick it off", "session": "m"})
     assert route.to == ["glimmer" if mode == "private" else "spark"], route.to
 
 
-# A protocol run in Full, started again in Private, and the other way
-for before, now in (("full", "private"), ("private", "full")):
-    st, s = fresh(before)
-    st.start_demo_run()
-    with st._lock:
-        st._finish_locked("finished")
-    choose(st, s, now)
-    st.start_demo_run()
-    agrees(st, now)
-    assert not st.r["run"].get("mode_changes"), "a new run has no past"
-print("RM1 ok: a new run takes the chosen mode, not its protocol's last run")
+# The reported bug: a Full past doesn't make a new Private run Full
+st, s, pid = fresh()
+start(st, s, pid, "full")
+home(st, s)
+start(st, s, pid, "private")
+assert [r["mode"] for r in TestClient(api.app).get("/runs").json()["runs"]].count("full") == 1, "the old run keeps its own"
+agrees(st, "private")
+print("RM1 ok: a protocol run in Full before starts Private and stays Private")
 
-# A paused run picks up in the chosen mode, and keeps a line about it
-for before, now, line in (("full", "private", "Switched to Private at step 3"),
-                          ("private", "full", "Switched to Full at step 3")):
-    st, s = fresh(before)
-    st.start_demo_run()
-    st.r["step_index"] = 2
-    rid = st.r["run"]["run_id"]
-    pause(st)
-    choose(st, s, now)
-    res = resume(st, s, rid)
-    assert not res["cards"], "picking up never asks"
-    assert [c["line"] for c in st.r["run"]["mode_changes"]] == [line], st.r["run"]
-    agrees(st, now)
-    pause(st)
-    j = TestClient(api.app).get(f"/runs/{rid}").json()
-    assert j["mode_changes"] == [line], j["mode_changes"]
-print("RM2 ok: resuming follows the chosen mode, the switch stays on the record")
+# Home is Full; Continue goes back to the run's own mode through the wait
+home(st, s)
+assert tone.run_mode() == "full" and st.r["run"]["mode"] == "private"
+assert TestClient(api.app).get("/record").json()["transcribe"] == "server"
+st.wake = type(st.wake)()  # gone to sleep meanwhile
+act(st, s, "navigate", screen="main")
+assert screen(st) == "private_wait" and tone.run_mode() == "private", screen(st)
+assert [b["say"] for b in api.buttons_for("private_wait", st.view_slots("private_wait", "main"))] == [], "no way to Full"
+awake(st, s)
+assert screen(st) == "main"
+agrees(st, "private")
+print("RM2 ok: home is Full; Continue wakes Private and opens the Bench")
 
-# Same mode: nothing to note. A switch mid-run is noted and followed at once
-st, s = fresh("private")
-st.start_demo_run()
+# A paused Private run: Continue goes Private; a failure offers Home, never Full
 rid = st.r["run"]["run_id"]
-pause(st)
-resume(st, s, rid)
-assert not st.r["run"].get("mode_changes")
-choose(st, s, "full")
-assert st.r["run"]["mode"] == "full" and len(st.r["run"]["mode_changes"]) == 1
-agrees(st, "full")
-print("RM3 ok: only a real change is noted; mid-run follows too")
+with st._lock:
+    st._finish_locked("paused")
+home(st, s)
+st.wake = type(st.wake)()
+act(st, s, "navigate", screen="run_view", target=rid)
+assert screen(st) == "run_view" and tone.run_mode() == "private" and st.wake.state == "warming"
+act(st, s, "resume_run", target=rid)
+assert screen(st) == "private_wait", screen(st)
+assert st.wake_done(st.wake.gen, False, s)
+says = [b["say"] for b in api.buttons_for("private_wait", st.view_slots("private_wait", "main"))]
+assert says == ["Try again", "Back to Home"], says
+act(st, s, "choose_mode", mode="private")
+assert st.wake.state == "warming" and screen(st) == "private_wait"
+assert st.wake_done(st.wake.gen, False, s)
+act(st, s, "navigate", screen="home")
+assert screen(st) == "home" and tone.run_mode() == "full" and st.r["run"]["mode"] == "private"
+print("RM3 ok: a paused Private run wakes first; failing leaves Try again and Home only")
 
-# Hand off goes by the mode the run ends in
-for started, ended, offered in (("full", "private", False), ("private", "full", True)):
-    st, s = fresh(started)
-    st.start_demo_run()
-    choose(st, s, ended)
-    res = st.apply_calls([{"name": "end_run", "args": {}}], "tap", "", "tap", s)
-    card = next(iter(st.r["cards"].values()), None)
-    if card:
-        st.confirm(card["id"], True, "card", s)
-    doc = st.all_run_docs()[0]
-    assert doc["record"]["run"]["mode"] == ended, doc["record"]["run"]
-    on_screen = st.r["view"]["current"]["screen"]
-    assert (on_screen == "final_protocol") == offered, (on_screen, started, ended)
-print("RM4 ok: hand off goes by the mode the run ends in")
+# A Full run opens in Full, whatever was open before
+st, s, pid = fresh()
+start(st, s, pid, "full")
+rid = st.r["run"]["run_id"]
+with st._lock:
+    st._finish_locked("paused")
+home(st, s)
+act(st, s, "navigate", screen="run_view", target=rid)
+assert tone.run_mode() == "full" and st.wake.state == "idle"
+act(st, s, "resume_run", target=rid)
+assert screen(st) == "main"
+agrees(st, "full")
+print("RM4 ok: a Full run stays Full")
+
+# A finished Private run: the record opens now, the model wakes behind it
+st, s, pid = fresh()
+start(st, s, pid, "private")
+rid = st.r["run"]["run_id"]
+with st._lock:
+    st._finish_locked("finished")
+home(st, s)
+st.wake = type(st.wake)()
+act(st, s, "navigate", screen="run_view", target=rid)
+assert screen(st) == "run_view" and tone.run_mode() == "private" and st.wake.state == "warming"
+c = TestClient(api.app)
+route = Route()
+with patch.object(api, "_post", route):
+    j = c.post("/input", json={"text": "how did the cells look overall", "session": "m"}).json()
+    assert j["route"] == "wait" and not route.to and screen(st) == "run_view", j
+    assert j["reply"] == "One moment, the private model is waking up.", j
+    assert api.get_session("m").get("wake_pending"), "kept for after ready"
+    j = c.post("/input", json={"text": "back", "session": "m"}).json()
+assert j["route"] != "wait", "grammar doesn't wait"
+print("RM5 ok: a finished Private run opens at once; model turns park, grammar doesn't")
+
+# The mode is chosen on the Mode screen only
+st, s, pid = fresh()
+start(st, s, pid, "full")
+res = act(st, s, "choose_mode", mode="private")
+assert res["messages"] == ["A run keeps the mode it started in. Pick one when you start a new run."], res
+agrees(st, "full")
+print("RM6 ok: nothing but the Mode screen changes a mode")
+
+# Hand off goes by the run's mode, and lists carry it
+st, s, pid = fresh()
+start(st, s, pid, "private")
+rid = st.r["run"]["run_id"]
+with st._lock:
+    st._finish_locked("paused")
+home(st, s)
+assert [r["mode"] for r in TestClient(api.app).get("/runs").json()["runs"]] == ["private"]
+doc = st.all_run_docs()[0]
+assert st.r["cards"] == {} and not api.route("handoff", st._run_mode_of(doc))
+print("RM7 ok: the run list gives each run's mode; hand off goes by it")
+
+# A restart: the mode of what's open
+st, s, pid = fresh()
+start(st, s, pid, "private")
+tone.set_run_mode(None)
+again = RecordStore(path=st.path)
+again.restore_mode()
+assert tone.run_mode() == "private"
+home(st, s)
+RecordStore(path=st.path).restore_mode()
+assert tone.run_mode() == "full"
+print("RM8 ok: after a restart the app is in the mode of what's open")
 
 tone.set_run_mode(None)
 print("ALL PASS")

@@ -97,7 +97,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 25
+API_VERSION = 26
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -2655,9 +2655,7 @@ async def run_get(run_id: str):
     doc = {**doc, "record": {**(doc.get("record") or {}), "bench": store.bench_view(doc.get("record") or {})}}
     # the robot code it became, step by step (Home: Run record, Code tab)
     code = store.handoff_code(doc)
-    changes = ((doc["record"].get("run") or {}).get("mode_changes") or [])
-    return {"run": doc, "label": lab["display"], "spoken": lab["spoken"], "handoff": code, "has_code": code is not None,
-            "mode_changes": [c["line"] for c in changes]}
+    return {"run": doc, "label": lab["display"], "spoken": lab["spoken"], "handoff": code, "has_code": code is not None}
 
 
 @app.delete("/protocols/draft")

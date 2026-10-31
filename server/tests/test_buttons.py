@@ -118,6 +118,7 @@ def fresh(sid: str, b: dict | None = None) -> RecordStore:
     if sid == "private_wait":  # its buttons show once the wake-up failed
         st.wake.begin()
         st.wake.finish(False)
+        target = "main" if ((b or {}).get("when") or {}).get("opening") == "run" else "import_choice"
     st.r["view"]["current"] = {"screen": sid, "target": target}  # said on its own screen
     return st
 
@@ -170,6 +171,8 @@ for said in ("Continue", "continue.", "okay continue"):
 api.store = fresh("run_view", {"when": {"status": "finished"}})
 before = api.store.r["run"]["run_id"]
 j = c.post("/input", json={"text": "Start run", "session": "bt"}).json()
+assert api.store.r["view"]["current"]["screen"] == "mode", j  # every run picks its mode
+j = c.post("/input", json={"text": "Full", "session": "bt"}).json()
 assert not j["cards"] and api.store.r["run"]["run_id"] != before and api.store.r["view"]["current"]["screen"] == "main", j
 api.store = fresh("home")
 j = c.post("/input", json={"text": "Continue", "session": "bt"}).json()

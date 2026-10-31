@@ -266,6 +266,7 @@ assert j["card"]["kind"] == "import_too_long" and not calls.glimmer and not call
 assert j["reply"] == "This file is too long for Private mode. Switch to Full?", j
 say(c, "no")
 assert tone.run_mode() == "private" and not extracted
+api.store.r["view"]["current"] = {"screen": "import_text", "target": ""}  # where an import starts
 with patch.object(api, "_post", calls):
     j = post_import(c, data={"text": long_text}).json()
 stages = []
@@ -274,7 +275,6 @@ with patch.object(api, "_import_once", fake_once), patch.object(api, "_stage", l
     api.store.spawn_import = lambda: None  # the task needs a running loop: run it below
     c.post("/input", json={"text": "yes", "session": "t"})
     assert tone.run_mode() == "full" and not calls.meta
-    tone.set_run_mode("full")
     asyncio.run(after_yes())
 assert extracted == ["full"], extracted
 assert ("failed", {"reason": "HTTPException", "say": "I couldn't read that file."}) in stages, stages

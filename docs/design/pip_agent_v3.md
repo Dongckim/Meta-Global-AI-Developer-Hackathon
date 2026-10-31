@@ -437,6 +437,12 @@ the key stays on the server (handshake `authorization.accessToken`).
   What goes to Meta then: a search sends its cleaned query and question; a
   photo question the whole photo to SAM, then the crop and the cleaned question.
   Never the record: Glimmer ties the answer to the run on our server.
+  A run owns its mode: chosen on the Mode screen when it starts (Start run and
+  imports both pass there), never changed after. The app follows what's open:
+  Home is Full; opening a Private run goes Private: Continue waits for the model
+  (Try again / Back to Home, no Full), a finished record opens at once and wakes
+  it behind, parking model turns (grammar runs). A restart takes the mode of
+  what's open.
   A document too long for Glimmer asks to switch to Full. Which model runs
   what is one setting, `modes` in pip_voice.json, read by the routing and the
   Mode card alike (server/modes.py): never a mode check in code.

@@ -221,7 +221,8 @@
   "run_paused": [
     "{run} is paused."
   ],
-  "mode_switched": ["Switched to {label} at step {step}"],
+  "mode_fixed": ["A run keeps the mode it started in. Pick one when you start a new run."],
+  "wake_parked": ["One moment, the private model is waking up."],
   "run_resumed": [
     "{run} picks up at step {step}."
   ],

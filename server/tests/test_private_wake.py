@@ -239,17 +239,9 @@ api._stage = real_stage
 
 # the app's buttons: both words, and "Try again" only once failed
 st, s = fresh()
-assert [b["say"] for b in api.buttons_for("private_wait", {"wake": "warming"})] == ["Use Full mode", "Full mode"]
-assert [b["say"] for b in api.buttons_for("private_wait", {"wake": "failed"})][:2] == ["Try again", "Use Full mode"]
+assert [b["say"] for b in api.buttons_for("private_wait", {"wake": "warming", "opening": "new"})] == ["Use Full mode", "Full mode"]
+assert [b["say"] for b in api.buttons_for("private_wait", {"wake": "failed", "opening": "new"})][:2] == ["Try again", "Use Full mode"]
 
-# the chosen mode outlives a restart and a new record
-st, s = fresh()
-st.spawn_wake = lambda session, gen: None
-tap(st, s, "choose_mode", mode="private")
-tone.set_run_mode(None)
-RecordStore(path=st.path).restore_mode()
-assert tone.run_mode() == "private"
-tone.set_run_mode(None)
 # the ring's time scale: recent real cold starts, kept across a restart
 st, s = fresh()
 assert st.wake.expected_s() == section("private")["expected_s"]

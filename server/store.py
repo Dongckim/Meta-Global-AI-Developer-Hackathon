@@ -210,29 +210,43 @@ class RecordStore:
 
     # --- persistence / broadcast ---
 
-    def _save_mode(self, mode: str) -> None:
-        set_run_mode(mode)
-        (self.root / "run_mode.txt").write_text(mode)  # outlives the record: a new run keeps it
-        self._follow_mode()
+    def _run_mode_of(self, doc: dict | None) -> str:
+        return (((doc or {}).get("record") or {}).get("run") or {}).get("mode") or "full"
 
-    def _follow_mode(self) -> None:
-        """A run is always in the chosen mode, whatever it started in; a change
-        stays on its record. Neither a protocol nor an old run has a say."""
-        run, mode = self.r.get("run"), run_mode()
-        if not run or run.get("mode") == mode:
+    def _view_mode(self) -> str | None:
+        """The mode this screen runs in, None to keep the mode as it is. A run
+        owns its mode from its start; the app follows the run that's open."""
+        v = self.r["view"]["current"]
+        if v["screen"] in ("home", "protocol_detail", "web_searches", "sync", "mode"):
+            return "full"
+        if v["screen"] in self._RUN_SCREENS:
+            return (self.r.get("run") or {}).get("mode") or "full"
+        if v["screen"] == "run_view" or v["screen"] in self.HANDOFF_SCREENS:
+            target = v["target"].split(":", 1)[0]
+            return self._run_mode_of(runlog.resolve(target, self.all_run_docs()) if target else None)
+        return None
+
+    def _settle_mode(self, session: dict) -> None:
+        """After every action: the mode follows the screen. Opening a Private
+        run wakes its model, in front of a bench and behind a record."""
+        want = self._view_mode()
+        if want is None or (want == run_mode() and self.wake.state != "warming"):
             return
-        if run.get("mode"):
-            label = (section("modes").get(mode) or {}).get("label") or mode.capitalize()
-            run.setdefault("mode_changes", []).append(
-                {"mode": mode, "ts": time.time(), "line": say("mode_switched", None, label=label, step=self.current_step())})
-        run["mode"] = mode
+        set_run_mode(want)
+        if route("commands", want) != "glimmer":
+            if self.wake.state != "ready":  # a warm model stays known for a quick way back
+                self.wake.reset()
+            session.pop("wake_pending", None)
+        elif not self.wake.fresh():
+            if self.r["view"]["current"]["screen"] in self._RUN_SCREENS:
+                self._wait_for_private(session, self.r["view"]["current"]["screen"])
+            elif self.wake.state != "warming":
+                self._start_wake(session)
+        self._commit()
 
     def restore_mode(self) -> None:
-        """Server start only: a store in a test must not inherit the iPad's choice."""
-        saved = self.root / "run_mode.txt"
-        if saved.exists():
-            set_run_mode(saved.read_text().strip())
-            self._follow_mode()
+        """Server start only: the mode of what's open, Full if nothing is."""
+        set_run_mode(self._view_mode() or "full")
 
     def _load_or_seed(self):
         if self.path.exists():
@@ -373,6 +387,9 @@ class RecordStore:
 
     # --- run mode, the private model's wake-up ---
 
+    #: Screens of the run that's going: they need its model awake.
+    _RUN_SCREENS = ("main", "well_card", "notes", "label_check")
+
     def _start_wake(self, session: dict) -> None:
         gen = self.wake.begin()
         if self.spawn_wake:
@@ -391,27 +408,48 @@ class RecordStore:
             return
         then = v["current"]["target"]
         v["current"] = v["stack"].pop() if v["stack"] else {"screen": then, "target": ""}
-        if then != v["current"]["screen"]:
+        if then.startswith("start:"):
+            self._started(*self._request_start_locked(then[6:], session), session, res)
+        elif then != v["current"]["screen"]:
             self._navigate_locked(res, session, then, "")
 
+    def _ask_mode(self, res: dict, session: dict, protocol_id: str) -> None:
+        """Every run picks its mode: Start run opens the Mode screen, then
+        starts. A protocol that can't start says so here, not after the choice."""
+        doc = lib.get(protocol_id, self.root)
+        if doc is None or self._protocol_off(doc, session):
+            self._started(*self._request_start_locked(protocol_id, session), session, res)
+            return
+        self._push_view("mode", f"start:{protocol_id}")
+        res["messages"].append(self.screen_line("mode", ""))
+
     def _choose_mode(self, res: dict, session: dict, mode) -> None:
-        """Full or Private, then the import flow. Private waits for its model;
-        leaving it drops a turn parked for it: those words were meant to stay private."""
+        """Full or Private, on the Mode screen only: the one place a mode is
+        chosen, for the run about to start. Then the import flow, or the run
+        it was opened for (target `start:<protocol>`). Private waits for its
+        model; leaving it drops a turn parked for it: those words were meant
+        to stay private."""
         if mode not in section("modes"):
             res["messages"].append("Full or Private?")
             return
-        self._save_mode(mode)
-        waiting = self.r["view"]["current"]["screen"] == "private_wait"
-        if route("commands", mode) == "glimmer" and not self.wake.fresh():
-            self._wait_for_private(session, "import_choice")
+        v = self.r["view"]["current"]
+        if v["screen"] not in ("mode", "private_wait"):
+            res["messages"].append(say("mode_fixed", session))
             return
-        if mode == "full":
+        then = v["target"] if v["target"].startswith("start:") or v["screen"] == "private_wait" else "import_choice"
+        set_run_mode(mode)
+        if route("commands", mode) == "glimmer" and not self.wake.fresh():
+            self._wait_for_private(session, then)
+            return
+        if route("commands", mode) != "glimmer":
             self.wake.reset()
             session.pop("wake_pending", None)
-        if waiting:
+        if v["screen"] == "private_wait":
             self._leave_wait(res, session)
+        elif then.startswith("start:"):
+            self._started(*self._request_start_locked(then[6:], session), session, res)
         else:
-            self._navigate_locked(res, session, "import_choice", "")
+            self._navigate_locked(res, session, then, "")
 
     def park_for_private(self, text: str, session: dict, source: str) -> str:
         """A turn for the model before it's awake: kept until ready (the latest
@@ -420,6 +458,11 @@ class RecordStore:
             session["wake_pending"] = (text, source)
             if self.wake.state == "failed":
                 return section("private")["failed_line"]
+            screen = self.r["view"]["current"]["screen"]
+            if screen == "run_view" or screen in self.HANDOFF_SCREENS:  # a record: it stays open, the turn waits behind it
+                if self.wake.state != "warming":
+                    self._start_wake(session)
+                return say("wake_parked", session)
             self._wait_for_private(session, self.r["view"]["current"]["screen"])
             self._commit()
             return ""
@@ -598,7 +641,9 @@ class RecordStore:
             if out["sources"] > 1:
                 out["second"] = "2"
         elif screen == "private_wait":
-            out = {"wake": self.wake.state}
+            # a run being opened can only go on in its own mode; a new one can still pick
+            opening = target in self._RUN_SCREENS or target == "run_view" or target in self.HANDOFF_SCREENS
+            out = {"wake": self.wake.state, "opening": "run" if opening else "new"}
         elif screen in self.HANDOFF_SCREENS:
             out = self._handoff_slots(screen, target)
         elif screen in self.DRAFT_SCREENS and (draft := self.r.get("draft")):
@@ -647,6 +692,7 @@ class RecordStore:
             out.append({**runlog.summarize(d), "label": lab["display"], "spoken": lab["spoken"],
                         "has_code": self.handoff_code(d) is not None,
                         "number": lab["number"], "day": lab["day"], "step": lab["step"],
+                        "mode": self._run_mode_of(d),
                         "of": lab["of"], "state": lab["state"]})
         return out
 
@@ -771,7 +817,6 @@ class RecordStore:
         run = self.r.get("run")
         if not run:
             return None
-        self._follow_mode()  # hand off goes by the mode the run ends in
         if status == "finished":
             self._log_timers(self.r["timers"], time.time())
             self.r["timers"] = []
@@ -1482,7 +1527,9 @@ class RecordStore:
     def apply_calls(self, calls, source: str, origin: str, route: str, session: dict,
                     reads_text: str = "") -> dict:
         with self._lock:
-            return self._apply_calls_locked(calls, source, origin, route, session, reads_text)
+            res = self._apply_calls_locked(calls, source, origin, route, session, reads_text)
+            self._settle_mode(session)
+            return res
 
     def _apply_calls_locked(self, calls, source: str, origin: str, route: str, session: dict,
                             reads_text: str = "") -> dict:
@@ -2156,7 +2203,6 @@ class RecordStore:
         draft, version, epoch = self.r.get("draft"), self.r.get("version", 0), self.r.get("epoch")
         self.r = json.loads(json.dumps(doc["record"]))
         self.r["run"] = {**(self.r.get("run") or {}), "run_id": doc["run_id"]}
-        self._follow_mode()
         self.r["version"], self.r["epoch"] = version, epoch or uuid.uuid4().hex[:16]
         self.r["view"] = self._default_view(True)
         self.r["cards"] = {}
@@ -2174,7 +2220,7 @@ class RecordStore:
         if name == "start_run" and run is not None and run.get("status") != "active" \
                 and not (args.get("target") or "").strip():
             # a finished run can't go on: its protocol's next run starts (draft or not)
-            self._started(*self._request_start_locked(run.get("protocol_id") or "", session), session, res)
+            self._ask_mode(res, session, run.get("protocol_id") or "")
             return
         named = (args.get("target") or "").strip()
         if name == "start_run" and (not draft or named or v.get("screen") in ("protocol_detail", "home", "run_view")):
@@ -2189,7 +2235,7 @@ class RecordStore:
                 res["messages"].append(labels.which_one([labels.protocol_label(c)["spoken"] for c in cands])
                                        if cands else "I couldn't find that protocol.")
                 return
-            self._started(*self._request_start_locked(doc["id"], session), session, res)
+            self._ask_mode(res, session, doc["id"])
             return
         if not draft:
             res["messages"].append("No draft open — import a protocol from Home.")
@@ -2254,7 +2300,7 @@ class RecordStore:
         if doc is None:
             res["messages"].append(say("handoff_none", session))
             return
-        if not route("handoff", ((doc.get("record") or {}).get("run") or {}).get("mode") or "full"):
+        if not route("handoff", self._run_mode_of(doc)):
             res["messages"].append(say("handoff_private", session))
             return
         h = doc.get("handoff") or {}
@@ -2705,7 +2751,9 @@ class RecordStore:
 
     def confirm(self, card_id: str, ok: bool, source: str, session: dict, answer: str = ""):
         with self._lock:
-            return self._confirm_locked(card_id, ok, source, session, answer)
+            out = self._confirm_locked(card_id, ok, source, session, answer)
+            self._settle_mode(session)
+            return out
 
     def _confirm_locked(self, card_id: str, ok: bool, source: str, session: dict, answer: str = ""):
         card = self.r["cards"].get(card_id)
@@ -2789,7 +2837,7 @@ class RecordStore:
         elif op == "web_search":
             res["messages"].append(say("looking_up", session))
         elif op == "import_full":
-            self._save_mode("full")
+            set_run_mode("full")
             self.wake.reset()
             self.spawn_import()
             res["messages"].append(say("import_reading", session))
@@ -2803,7 +2851,7 @@ class RecordStore:
                 name = (self.r.get("run") or {}).get("protocol_name") or "run"
                 doc = self._finish_locked("finished")
                 res["messages"].append(f"Run finished: {name}.")
-                if doc and route("handoff"):  # hand off: the run as it went, for the robot
+                if doc and route("handoff", self._run_mode_of(doc)):  # hand off: the run as it went, for the robot
                     self._open_handoff(res, session, doc["run_id"])
         else:
             res["messages"].append("That card is gone.")

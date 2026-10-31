@@ -141,8 +141,6 @@ struct RunDetailResponse: Decodable {
     let handoff: RunCode?
     /// Server: the run has robot code (no Code tab without it).
     let has_code: Bool?
-    /// "Switched to Private at step 3", in order.
-    let mode_changes: [String]?
 }
 
 /// A finished run's protocol.py and where each final protocol step sits in
@@ -186,7 +184,7 @@ enum PipError: Error, LocalizedError {
 
 enum PipClient {
     /// Must match server API_VERSION (test_snapshot_schema pins both sides).
-    static let EXPECTED_API_VERSION = 25
+    static let EXPECTED_API_VERSION = 26
     /// A server link silent this long is dead: three missed keepalives
     /// (server HEARTBEAT_S = 15) on /events and /voice/live.
     static let idleTimeout: TimeInterval = 45
