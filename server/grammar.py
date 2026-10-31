@@ -1000,6 +1000,10 @@ _CLAUSE_SPLIT = re.compile(r"[.!?;]+\s*|,?\s+(?:and|then)\s+|,\s*", re.IGNORECAS
 _ASKING = re.compile(r"(?:how|what|which|when|where|who|why|is|are|did|does|has|have)\b")
 
 
+def asks_record(text) -> bool:
+    return bool(_ASKING.match((text or "").strip().lower()))
+
+
 def request_parts(text, actions) -> list[dict]:
     """Clauses of one utterance that ask for an action, in order: a clause
     asks for every action in `actions` whose registry verbs it says.

@@ -159,6 +159,17 @@ with patch.object(api, "_post", calls):
 assert len(calls.glimmer) == 2 and "log" not in j["reply"], j
 print("PV-lost3 ok: a read turn isn't asked about")
 
+# An answer about the record comes from a read --------------------------------
+c = private()
+calls = Calls(chat(text="You've finished 2 wells: C2 and C3 are marked done."),
+              chat(("read_record", {"kind": "wells", "filter": "C2-C8"})),
+              chat(text="None of the 7 wells are done yet."))
+with patch.object(api, "_post", calls):
+    j = say(c, "how many wells have I finished so far")
+assert calls.glimmer[1]["tool_choice"] == "required" and "tool_choice" not in calls.glimmer[0], calls.glimmer[0].keys()
+assert j["reply"] == "None of the 7 wells are done yet.", j
+print("PV-read ok: a claim with no read gets one forced read")
+
 # Nothing reaches Meta before its card --------------------------------------
 c = private()
 calls = Calls(chat(("web_search", {"query": "max DMSO for HeLa cells"})))

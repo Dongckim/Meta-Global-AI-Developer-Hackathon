@@ -30,7 +30,8 @@ def to_chat(body: dict) -> dict:
         messages[1]["content"] = f"Current state (JSON):\n{state}\n\nThe owner said: {messages[1]['content']}"
     tools = [{"type": "function", "function": {k: t[k] for k in ("name", "description", "parameters")}}
              for t in body["tools"]]
-    return {"messages": messages, "tools": tools, "max_tokens": body["max_output_tokens"],
+    choice = {"tool_choice": body["tool_choice"]} if "tool_choice" in body else {}
+    return {**choice, "messages": messages, "tools": tools, "max_tokens": body["max_output_tokens"],
             "cache_prompt": True, "parallel_tool_calls": True}  # llama.cpp allows one call without it
 
 

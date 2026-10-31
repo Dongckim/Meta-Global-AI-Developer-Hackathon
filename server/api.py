@@ -51,6 +51,7 @@ from server.grammar import (
     bare_completion,
     answer_or_filler,
     unfinished,
+    asks_record,
     unserved_parts,
     untouched_wells,
     relevant_plan_numbers,
@@ -552,7 +553,7 @@ def _log_private_round(session: dict, t0: float, ms: int, payload: dict) -> None
 async def _call_spark(
     client: httpx.AsyncClient, key: str, text: str, state: dict, session: dict,
     model: str = SPARK_MODEL, effort: str = REASONING_EFFORT, lookup: bool = False,
-    echo_calls: list | None = None, nudge: str = "",
+    echo_calls: list | None = None, nudge: str = "", must_call: bool = False,
 ) -> tuple[list, str, int, bool, dict, list]:
     """Returns (calls, text, ms, truncated, usage). Chat calls never search
     (web search is its own call: server/search.py). In Private the model is
@@ -614,6 +615,7 @@ async def _call_spark(
             "prompt_cache_key": CACHE_KEY,
             "prompt_cache_retention": CACHE_RETENTION,
             **mem.params(),
+            **({"tool_choice": "required"} if must_call else {}),
         }
         t0 = time.perf_counter()
         if private:
@@ -1144,6 +1146,11 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     _stage(session, "thinking")
     calls, texts, ms, cut, _ = await _call_spark(
         client, key, text, store.model_state(session), session)
+    if not cut and not calls and asks_record(text) and any(ungrounded_targets(_short_text(texts)).values()):
+        # answered from memory: an answer about the record comes from a read
+        calls, texts, ms2, cut, _ = await _call_spark(
+            client, key, text, store.model_state(session), session, must_call=True)
+        ms += ms2
     if cut:
         return [], [], say("didnt_catch", session), ms, "spark", [], {"dropped": 0, "drop_reasons": []}, []
     raw_count = len(calls)
