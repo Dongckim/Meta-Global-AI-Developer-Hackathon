@@ -595,6 +595,27 @@ def _norm_id(raw) -> str:
     return normalize_group(raw)
 
 
+_EVERY_WELL = re.compile(r"\b(?:each|every|all)(?: of the)?(?: used| in-use)? wells?\b")
+_NOT_EVERY_WELL = re.compile(r"\b(?:except|excluding|but|other than|remaining|rest)\b")
+
+
+def settle_other_target(target: dict, text: str, conditions: dict) -> dict:
+    """A target the model left as `other`, from its words (the value, else the
+    step's text): one condition's wells, every used well, or still `other`
+    for review. Same for every model: this runs on the extraction."""
+    if target.get("type") != "other":
+        return target
+    said = " ".join(str(target.get("value") or text or "").lower().split())
+    names = {key: [n.lower() for n in (c.get("label") or "", key.replace("_", " ")) if n]
+             for key, c in conditions.items()}
+    named = [key for key, ns in names.items() if any(re.search(rf"\b{re.escape(n)}\b", said) for n in ns)]
+    if len(named) == 1 and any(re.search(rf"\b{re.escape(n)} wells?\b", said) for n in names[named[0]]):
+        return {"type": "condition", "value": named[0]}
+    if not named and _EVERY_WELL.search(said) and not _NOT_EVERY_WELL.search(said):
+        return {"type": "all_used", "value": None}
+    return target
+
+
 def build_draft(raw: dict, evidence: dict, source: str) -> dict:
     """Normalize extraction -> auto layout -> validate. Returns the draft."""
     liquids: dict[str, dict] = {}
@@ -636,6 +657,9 @@ def build_draft(raw: dict, evidence: dict, source: str) -> dict:
                          "mix": p.get("mix"), "repeat": p.get("repeat")} if p else None),
             "wells": [],
         })
+    for s in steps:
+        if s["pipette"]:
+            s["pipette"]["target"] = settle_other_target(s["pipette"]["target"], s["text"], conditions)
     draft = {"plan": {"title": (raw.get("title") or "").strip(),
                       "short_title": (raw.get("short_title") or "").strip(), "liquids": liquids,
                       "conditions": conditions, "steps": steps, "backups": []},

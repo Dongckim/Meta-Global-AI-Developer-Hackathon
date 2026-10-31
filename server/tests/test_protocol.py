@@ -669,4 +669,19 @@ with patch("httpx.AsyncClient", ScriptClient):
     j = said("review again")
     assert j["reply"] == f"I can't open the review for {short}: no steps saved.", j["reply"]
 print("P19 ok: review again without a review copy")
+
+GROUPS = {"control": {"label": "Control"}, "drug_a": {"label": "Drug A"}}
+OTHER = {"type": "other", "value": None}
+ALL_USED = {"type": "all_used", "value": None}
+CONTROL = {"type": "condition", "value": "control"}
+settled = lambda value, text="": proto.settle_other_target({"type": "other", "value": value}, text, GROUPS)  # noqa: E731
+for said in ("every well that will be used", "all used wells", "each well (in use)", "all wells in the plan"):
+    assert settled(said) == ALL_USED, said
+assert settled("each Control well") == CONTROL
+assert settled("Drug A wells") == {"type": "condition", "value": "drug_a"}
+assert settled(None, "add 100 uL media to all wells.") == ALL_USED, "the step's text when there's no value"
+for said in ("all wells except Control", "the remaining wells", "Control and Drug A wells", "the waste tray", None):
+    assert settled(said)["type"] == "other", said
+assert proto.settle_other_target(CONTROL, "all wells", GROUPS) == CONTROL, "only `other` moves"
+print("P20 ok: other targets settle from their words, else stay for review")
 print("ALL PASS")

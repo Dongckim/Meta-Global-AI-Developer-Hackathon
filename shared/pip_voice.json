@@ -318,8 +318,8 @@
   },
   "modes": {
     "_note": "Run modes: header label, the line under each choice on the Mode screen, an optional smaller detail under it.",
-    "full": {"label": "Full", "line": "Cloud model · fastest answers", "confirm_search": false, "confirm_photo": false},
-    "private": {"label": "Private", "line": "Voice commands run on our own Meta model (Glimmer).", "detail": "Voice commands and imported protocols run on our own Meta model (Glimmer). Search and photo questions ask before using the Meta API.", "confirm_search": true, "confirm_photo": true}
+    "full": {"label": "Full", "line": "Meta API · fastest", "confirm_search": false, "confirm_photo": false},
+    "private": {"label": "Private", "line": "On our own Meta model", "detail": "Voice commands and imported protocols run on our own Meta model (Glimmer). Search and photo questions ask before using the Meta API.", "confirm_search": true, "confirm_photo": true}
   },
   "also_ask": [
     "Should I also {what}?",

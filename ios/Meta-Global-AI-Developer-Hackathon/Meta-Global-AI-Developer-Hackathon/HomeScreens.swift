@@ -452,12 +452,13 @@ struct ChoiceCard: View {
                 Text(line).font(Theme.ui(28 * u)).foregroundStyle(Theme.text2).lineLimit(2)
                     .multilineTextAlignment(.center).minimumScaleFactor(0.6).padding(.top, 22 * u)
                 if !detail.isEmpty {
-                    Text(detail).font(Theme.ui(22 * u)).foregroundStyle(Theme.text3).lineLimit(4)
-                        .multilineTextAlignment(.center).minimumScaleFactor(0.6).padding(.top, 10 * u)
+                    Text(detail).font(Theme.ui(22 * u)).foregroundStyle(Theme.text3)
+                        .multilineTextAlignment(.center).padding(.top, 10 * u)
                 }
             }
             .padding(.horizontal, 24 * u)
-            .frame(maxWidth: .infinity, minHeight: 345 * u)
+            .padding(.vertical, 24 * u)
+            .frame(maxWidth: .infinity, minHeight: 345 * u, maxHeight: .infinity)
             .benchCard(radius: 44 * u, fill: Theme.cardGlass)
             .overlay(RoundedRectangle(cornerRadius: 44 * u, style: .continuous)
                 .strokeBorder(Theme.card, lineWidth: 2 * u))
@@ -487,6 +488,7 @@ struct ModeScreen: View {
                         .enter(i == 0 ? .left : .right, i + 1, u: u)
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)  // a long detail grows both cards, never cuts
             .frame(width: 1122 * u)
         }
         .padding(.bottom, Theme.Layout.choiceLift * u)
@@ -582,6 +584,7 @@ struct ImportChoiceScreen: View {
                         .enter(.rise, i + 1, u: u)
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
             .frame(width: 1248 * u)
         }
         .padding(.bottom, Theme.Layout.choiceLift * u)

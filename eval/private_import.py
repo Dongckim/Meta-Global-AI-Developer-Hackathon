@@ -107,6 +107,8 @@ def main() -> None:
         diffs = [(i + 1, k, key(x)[k], key(y)[k]) for i, (x, y) in enumerate(zip(a, b))
                  for k in key(x) if key(x)[k] != key(y)[k]]
         log(f"\n{name}: {len(a)} vs {len(b)} steps, differences (step, field, glimmer, spark): {diffs or 'none'}")
+        for i, (x, y) in enumerate(zip(a, b)):
+            log(f"  step {i + 1} {x.get('text', '')[:44]!r}: glimmer {key(x)['target']} spark {key(y)['target']}")
         for label in got:
             d = got[label]["body"].get("draft") or {}
             log(f"{label} errors: {[x.get('reason') for x in d.get('errors') or []]} "
