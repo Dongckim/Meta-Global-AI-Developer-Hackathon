@@ -244,11 +244,18 @@ struct DiagnosticsView: View {
     @State private var recording = false
     @State private var busy = false
     @State private var command = ""
+    @State private var quiet = DeviceEars.quietSeconds
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Private: silence that ends a turn, \(quiet, format: .number.precision(.fractionLength(1))) s")
+                            .font(.subheadline)
+                        Slider(value: $quiet, in: 0.8...3.0, step: 0.1)
+                            .onChange(of: quiet) { _, v in DeviceEars.quietSeconds = v }
+                    }
                     row("Microphone", status: mic) {
                         Button("Check") { checkMic() }.buttonStyle(.bordered).controlSize(.small)
                     }

@@ -1067,11 +1067,21 @@ _OPEN_END = {"to", "want", "wanna", "see", "the", "a", "an", "and", "or", "of", 
              "in", "at", "um", "uh", "so", "but", "about", "me", "is", "are", "what"}
 
 
+#: Words nothing ends on, whatever came before ("mark D2 to", "C3 and"), and a
+#: row letter still waiting for its number ("mark D").
+_ALWAYS_OPEN = {"and", "or", "to", "through", "the", "of", "a", "an", "with", "for"}
+_ROW_LETTER = re.compile(r"[b-h]")
+
+
 def unfinished(text, state: dict, name: str = "") -> bool:
-    """A live owner turn cut off mid-thought: nothing to act on (no card
-    answer, session end, grammar command, action verb or well) and it ends on
-    an open word or is one or two words. Decided here, without the model."""
+    """A live owner turn cut off mid-thought: it ends on a word that can't end
+    a sentence or a bare row letter; or nothing to act on (no card answer,
+    session end, grammar command, action verb or well) and it ends on an open
+    word or is one or two words. Decided here, without the model."""
     t = text or ""
+    tokens = re.findall(r"[a-z0-9']+", t.lower())
+    if tokens and not t.rstrip().endswith("?") and (tokens[-1] in _ALWAYS_OPEN or _ROW_LETTER.fullmatch(tokens[-1])):
+        return True
     words = re.findall(r"[a-z']+", t.lower())
     if not words or find_well_mentions(t) or match_card_answer(t) \
             or match_session_end(t, name) or match_grammar(t, state) is not None \

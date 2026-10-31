@@ -32,7 +32,7 @@ def mode_view(mode: str) -> dict:
     cfg = section("modes")[mode]
     asks, direct, robot = _meta_use(mode)
     notes = [" · ".join(direct) + ": Meta API"] if direct else []
-    notes += [" · ".join(asks) + ": asks first"] if asks else []
+    notes += [" & ".join(asks).capitalize() + ": Milo checks with you first."] if asks else []
     notes += [] if robot else ["Robot code: Full only"]
     return {"id": mode, "label": cfg["label"], "line": cfg["line"],
             "steps": [_step("asr", mode), _step("commands", mode)], "notes": notes}
@@ -43,7 +43,7 @@ def all_modes() -> list[str]:
 
 
 def _named(step: dict) -> str:
-    return f"{step['name']} ({step['where']})" if step.get("where") else step["name"]
+    return f"{step['name']} {step.get('said') or step['where']}".strip()
 
 
 def explain() -> str:

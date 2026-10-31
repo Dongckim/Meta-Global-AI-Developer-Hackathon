@@ -14,6 +14,7 @@
     "window_s": 60,
     "max_s": 3300,
     "ignored_line": "Another voice — ignored",
+    "device_extra_s": 2.5,
     "first_close_line": "Call me anytime.",
     "fallback_line": "Live off — one command at a time",
     "more_on_screen": "{n} more on screen.",
@@ -337,7 +338,7 @@
     },
     "commands": {
       "spark": {"icon": "sparkle", "name": "Muse Spark", "where": "Meta API"},
-      "glimmer": {"icon": "sparkle", "name": "Muse Glimmer", "where": "our server"}
+      "glimmer": {"icon": "sparkle", "name": "Muse Glimmer", "where": "Private GPU · Modal", "said": "on a private GPU on Modal"}
     }
   },
   "also_ask": [

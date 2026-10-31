@@ -330,7 +330,7 @@ with c.websocket_connect("/voice/live") as ws:
     assert ready["transcribe"] == "device" and "H12" in ready["hints"], ready
     ws.send_bytes(b"\x00" * 2560)
     ws.send_json({"type": "heard", "text": "B2", "final": False})
-    ws.send_json({"type": "heard", "text": "Hey Milo, B2 done.", "final": True})
+    ws.send_json({"type": "heard", "text": "Hey Milo, B2 done.", "final": True, "reason": "silence", "waited_s": 1.5})
     got = []
     while not any(m["type"] == "turn" for m in got):
         got.append(check(ws.receive_json()))
@@ -338,7 +338,8 @@ with c.websocket_connect("/voice/live") as ws:
     while got[-1]["type"] != "closed":
         got.append(check(ws.receive_json()))
 assert FakeMeta.last is None, "Private never opens Meta"
-assert "B2" in done_wells(api.store.r) and got[0] == {"type": "partial", "text": "B2"}, got
+assert "B2" in done_wells(api.store.r) and got[0] == {"type": "endpoint", "text": "B2", "reason": "silence", "extra_s": 0}, got
+assert {"type": "partial", "text": "B2"} in got, got
 print("LV-device ok: heard text runs the same turn, Meta never opened")
 
 # the mode changing mid-session closes it `mode`: no audio to Meta from that moment

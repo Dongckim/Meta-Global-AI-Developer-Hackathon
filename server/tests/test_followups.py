@@ -182,6 +182,19 @@ for said in ("add", "I want to"):
     assert api.live_unfinished(said, {}), said
 st.r["view"]["current"] = {"screen": "draft_page", "target": "1"}
 assert not api.live_unfinished("page 2", {}) and not api.live_unfinished("zoom in", {})
+# The end of a turn, read once: Full's hold and the iPad's wait agree on any words
+READ = [("mark D2 to", "unfinished-extended"), ("mark C2 and", "unfinished-extended"), ("mark the row D", "unfinished-extended"),
+        ("add this to the", "unfinished-extended"), ("C4 through", "unfinished-extended"), ("note C3 looks cloudy", "silence"),
+        ("mark D2 to D8 done", "silence"), ("what is on B2?", "silence")]
+for said, reason in READ:
+    got = api.device_endpoint(said, {})
+    assert got["reason"] == reason, (said, got)
+    assert api.live_unfinished(said, {}) == (reason == "unfinished-extended"), said
+    assert got["extra_s"] == (2.5 if reason == "unfinished-extended" else 0), got
+assert api.device_endpoint("page 2", {})["reason"] == "exact-match", "exactly a control: at once"
+st.r["view"]["current"] = {"screen": "import_choice", "target": ""}
+assert api.device_endpoint("file", {})["reason"] == "exact-match"
+print("FU-end ok: Full and Private read the end of a turn with one function")
 print("FU7 ok: whole for this screen goes now; a cut-off word still waits")
 
 # FV. What the screen is about (registry `viewing`) is in the model's state, and an

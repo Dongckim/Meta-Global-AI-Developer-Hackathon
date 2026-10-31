@@ -5,7 +5,8 @@
   "$defs": {
     "start": {"type": "object", "required": ["type"], "properties": {"type": {"const": "start"}, "session": {"type": "string"}}},
     "end": {"type": "object", "required": ["type"], "properties": {"type": {"const": "end"}}},
-    "heard": {"type": "object", "required": ["type", "text", "final"], "properties": {"type": {"const": "heard"}, "text": {"type": "string"}, "final": {"type": "boolean"}}},
+    "heard": {"type": "object", "required": ["type", "text", "final"], "properties": {"type": {"const": "heard"}, "text": {"type": "string"}, "final": {"type": "boolean"}, "reason": {"type": "string"}, "waited_s": {"type": "number"}}},
+    "endpoint": {"type": "object", "required": ["type", "text", "reason", "extra_s"], "description": "Device transcription: how the iPad should end the turn on these words. exact-match: as soon as they settle; unfinished-extended: extra_s more silence; silence: the usual wait.", "properties": {"type": {"const": "endpoint"}, "text": {"type": "string"}, "reason": {"enum": ["exact-match", "unfinished-extended", "silence"]}, "extra_s": {"type": "number"}}},
     "tts": {"type": "object", "required": ["type", "speaking"], "properties": {"type": {"const": "tts"}, "speaking": {"type": "boolean"}}},
     "ready": {"type": "object", "required": ["type", "session_id", "transcribe", "hints"], "properties": {"type": {"const": "ready"}, "session_id": {"type": ["string", "null"]}, "transcribe": {"enum": ["server", "device"]}, "hints": {"type": "array", "items": {"type": "string"}}}},
     "hints": {"type": "object", "required": ["type", "hints"], "description": "Device transcription only: what the recognizer should now expect (the screen changed).", "properties": {"type": {"const": "hints"}, "hints": {"type": "array", "items": {"type": "string"}}}},
@@ -24,5 +25,5 @@
     "error": {"type": "object", "required": ["type", "message"], "properties": {"type": {"const": "error"}, "message": {"type": "string"}}},
     "closed": {"type": "object", "required": ["type", "code", "reason", "why"], "properties": {"type": {"const": "closed"}, "code": {"type": ["integer", "null"]}, "reason": {"type": "string"}, "why": {"enum": ["window", "max_duration", "end_session", "client", "server", "error", "mode"]}}}
   },
-  "oneOf": [{"$ref": "#/$defs/ready"}, {"$ref": "#/$defs/hints"}, {"$ref": "#/$defs/partial"}, {"$ref": "#/$defs/ignored"}, {"$ref": "#/$defs/turn"}, {"$ref": "#/$defs/stage"}, {"$ref": "#/$defs/ping"}, {"$ref": "#/$defs/error"}, {"$ref": "#/$defs/closed"}]
+  "oneOf": [{"$ref": "#/$defs/ready"}, {"$ref": "#/$defs/hints"}, {"$ref": "#/$defs/endpoint"}, {"$ref": "#/$defs/partial"}, {"$ref": "#/$defs/ignored"}, {"$ref": "#/$defs/turn"}, {"$ref": "#/$defs/stage"}, {"$ref": "#/$defs/ping"}, {"$ref": "#/$defs/error"}, {"$ref": "#/$defs/closed"}]
 }

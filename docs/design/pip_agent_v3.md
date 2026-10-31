@@ -346,8 +346,11 @@ the key stays on the server (handshake `authorization.accessToken`).
   requiresOnDeviceRecognition; contextualStrings = wells A1–H12, this
   screen's buttons, protocol short titles) and sends `heard` text. No audio
   leaves, Meta realtime never opens, and there are no speaker labels: every
-  voice counts as the owner's, so nothing is ignored. A turn ends after
-  0.9 s without new words. The mic button transcribes its recording the
+  voice counts as the owner's, so nothing is ignored. New words restart the
+  wait; the server reads each partial with Full's own rules (`device_endpoint`):
+  1.5 s of silence (Diagnostics, 0.8–3.0), 2.5 s more if it ends unfinished
+  ("D2 to", "and", a bare row letter), at once if it's exactly a button, card
+  answer or control. `[private-asr]` logs each turn. The mic button transcribes its recording the
   same way. Changing mode closes the session (`mode`) and the app reopens
   it the new way; audio to Meta stops the moment the mode changes.
 - Edge "session idle": dim, slow while open and quiet; listening when the

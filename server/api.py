@@ -97,7 +97,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 26
+API_VERSION = 27
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -965,13 +965,26 @@ def whole_here(text: str) -> bool:
         or control_call(text, cur["screen"], store.screen_items.get(cur["screen"])) is not None
 
 
+def _cut_off(text: str, session: dict) -> bool:
+    return not whole_here(text) and unfinished(text, store.prompt_state(session), tone.agent_name())
+
+
+def device_endpoint(text: str, session: dict) -> dict:
+    """How long the iPad should wait on these words before it ends the turn:
+    the same reading as a live turn's hold, said ahead of time because the iPad
+    has no Meta endpointing. reason: exact-match / unfinished-extended / silence."""
+    if whole_here(text):
+        return {"reason": "exact-match", "extra_s": 0}
+    if _cut_off(text, session):
+        return {"reason": "unfinished-extended", "extra_s": live_settings()["device_extra_s"]}
+    return {"reason": "silence", "extra_s": 0}
+
+
 def live_unfinished(text: str, session: dict) -> bool:
     """Hold a live turn for the rest (LIVE_HOLD_S)? Never when it's said whole
     for this screen ("yes", "file"); else the grammar's cut-off rule ("add",
     "I want to")."""
-    if whole_here(text):
-        return False
-    held = unfinished(text, store.prompt_state(session), tone.agent_name())
+    held = _cut_off(text, session)
     if held:
         print(f"live unfinished: {text!r} (words={button_words(text)!r} screen="
               f"{store.r['view']['current']['screen']})", flush=True)
@@ -2006,7 +2019,13 @@ async def voice_live(ws: WebSocket):
                 continue
             body = json.loads(msg.get("text") or "{}")
             if body.get("type") == "heard" and device:
-                meta.heard(str(body.get("text") or ""), bool(body.get("final")))
+                words = str(body.get("text") or "")
+                if body.get("final"):
+                    print(f'[private-asr] text="{words}" reason={body.get("reason")} waited={body.get("waited_s")}s',
+                          flush=True)
+                else:
+                    await sender.send({"type": "endpoint", "text": words, **device_endpoint(words, session)})
+                meta.heard(words, bool(body.get("final")))
             elif body.get("type") == "tts":
                 conv.tts(bool(body.get("speaking")), time.monotonic())
             elif body.get("type") == "end":
@@ -2063,7 +2082,8 @@ async def voice_live(ws: WebSocket):
         while True:
             item = await next_owner_item(held)
             held = ""
-            if item["type"] == "owner" and not item.get("flush") and live_unfinished(item["text"], session):
+            # the iPad already waited out an unfinished turn (device_endpoint)
+            if item["type"] == "owner" and not item.get("flush") and not device and live_unfinished(item["text"], session):
                 held = item["text"]  # "I want to see": wait for the rest
                 print(f'live hold: "{held}"', flush=True)
                 continue
