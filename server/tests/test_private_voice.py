@@ -74,7 +74,7 @@ body = {"instructions": "SYS", "input": [
 out = private_chat.to_chat(body)
 assert [m["role"] for m in out["messages"]] == ["system", "user", "assistant", "tool", "user"], out
 assert out["messages"][3] == {"role": "tool", "tool_call_id": "x", "content": "C6: pending"}
-assert set(out) == {"messages", "tools", "max_tokens", "cache_prompt"} and out["max_tokens"] == 500
+assert set(out) == {"messages", "tools", "max_tokens", "cache_prompt", "parallel_tool_calls"} and out["max_tokens"] == 500
 assert [t["function"]["name"] for t in out["tools"]] == [t["name"] for t in api.TOOLS]
 assert [t["function"]["parameters"] for t in out["tools"]] == [t["parameters"] for t in api.TOOLS], "same tools"
 assert private_chat.to_chat({**body, "input": "hi"})["messages"][1] == {"role": "user", "content": "hi"}

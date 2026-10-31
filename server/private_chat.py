@@ -31,7 +31,7 @@ def to_chat(body: dict) -> dict:
     tools = [{"type": "function", "function": {k: t[k] for k in ("name", "description", "parameters")}}
              for t in body["tools"]]
     return {"messages": messages, "tools": tools, "max_tokens": body["max_output_tokens"],
-            "cache_prompt": True}
+            "cache_prompt": True, "parallel_tool_calls": True}  # llama.cpp allows one call without it
 
 
 def from_chat(payload: dict) -> dict:
