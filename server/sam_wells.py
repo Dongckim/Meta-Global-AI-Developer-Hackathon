@@ -98,8 +98,8 @@ SINK_RATIO, SINK_BACK_S = None, 2.0
 #: A chunk's frame replaces the session's reference when its score (share of the plate showing +
 #: share of the 96 wells SAM finds) beats it by this much.
 REF_MARGIN = 0.15
-#: A continuous well is "sure" with a reference of at least MIN_WELLS wells, at least SURE_INLIERS ORB
-#: inliers on its stay (the median), and the tip within SURE_OFF_MM of the well's center.
+#: A continuous well is "sure" with at least SURE_INLIERS ORB inliers on its stay (the median) and
+#: the tip within SURE_OFF_MM of the well's center.
 SURE_INLIERS, SURE_OFF_MM = 70, 3.0  # 70: the lowest 5th percentile of matched frames on the iPad sessions
 #: A chunk's looks for the tip. SAM's image calls run about one at a time however many are sent
 #: (1.6 s each), and a chunk closes every 9 s: 40 a chunk took 270 s, and dropped connections.
@@ -451,11 +451,10 @@ def filled(track: list, fps: float, sink: float | None = SINK_RATIO) -> list:
     return out
 
 
-def not_sure_why(off_mm: float, ref_wells: int, inliers: list) -> list:
+def not_sure_why(off_mm: float, inliers: list) -> list:
     """What's unsure about a well, by name; empty: sure. inliers: the stay's frames (0: not matched)."""
     middle = sorted(inliers)[len(inliers) // 2] if inliers else 0
-    return [why for why, bad in (("reference", ref_wells < MIN_WELLS), ("matching", middle < SURE_INLIERS),
-                                 ("off center", off_mm > SURE_OFF_MM)) if bad]
+    return [why for why, bad in (("matching", middle < SURE_INLIERS), ("off center", off_mm > SURE_OFF_MM)) if bad]
 
 
 def compare_settings(attempts: list) -> dict:

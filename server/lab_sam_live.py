@@ -72,7 +72,7 @@ class Live:
             self.wells = []
             for w in sw.filled([joined[f] for f in sorted(joined)], self.fps):
                 frames = [f for f in joined if w["f0"] <= f <= w["frame"]]
-                why = sw.not_sure_why(w["off_mm"], holes[w["frame"]], [inliers.get(f, 0) for f in frames])
+                why = sw.not_sure_why(w["off_mm"], [inliers.get(f, 0) for f in frames])
                 self.wells.append({**w, "confidence": "not_sure" if why else "sure", "why": why,
                                    "ref_wells": holes[w["frame"]],
                                    "inliers": sorted(inliers.get(f, 0) for f in frames)[len(frames) // 2]})
