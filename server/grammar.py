@@ -996,6 +996,10 @@ def mentioned_targets(text) -> dict:
 _CLAUSE_SPLIT = re.compile(r"[.!?;]+\s*|,?\s+(?:and|then)\s+|,\s*", re.IGNORECASE)
 
 
+#: A clause that asks about the record: "how many wells have I finished".
+_ASKING = re.compile(r"(?:how|what|which|when|where|who|why|is|are|did|does|has|have)\b")
+
+
 def request_parts(text, actions) -> list[dict]:
     """Clauses of one utterance that ask for an action, in order: a clause
     asks for every action in `actions` whose registry verbs it says.
@@ -1004,7 +1008,7 @@ def request_parts(text, actions) -> list[dict]:
     for part in _CLAUSE_SPLIT.split(text or ""):
         low = (part or "").lower()
         acts = {a for a in actions if re.search(rf"\b{_verb(a)}\b", low)}
-        if acts:
+        if acts and not _ASKING.match(low.strip()):
             out.append({"text": part.strip(" ,"), "actions": acts, **mentioned_targets(part)})
     return out
 
