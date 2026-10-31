@@ -6,6 +6,7 @@
 
 #if DEBUG
 import AVFoundation
+import MWDATCamera
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -28,6 +29,8 @@ enum SamWellAPI {
         let id: String
         let created: Double
         let a1: String
+        /// What goes into the wells: "pipette tip" or "pen" (nil: sessions before the choice).
+        let pointer: String?
         let attempts: [Attempt]
         let summary: Summary?
     }
@@ -41,6 +44,8 @@ enum SamWellAPI {
         let error: String?
         let result: Result?
         let judge: Judge?
+        /// While analysing: the stage, how far (frames), seconds so far.
+        let progress: Progress?
         var id: Int { n }
     }
 
@@ -57,6 +62,13 @@ enum SamWellAPI {
         let timing: [String: Double]
         let images: [String]
         let rounds: Int
+    }
+
+    struct Progress: Decodable {
+        let stage: String
+        let done: Int?
+        let total: Int?
+        let elapsedS: Double
     }
 
     struct Found: Decodable {
@@ -131,11 +143,11 @@ enum SamWellAPI {
 
     static func session(_ id: String) async throws -> Session { try await send(URLRequest(url: url("sessions/\(id)"))) }
 
-    static func newSession(a1: String) async throws -> Session {
+    static func newSession(a1: String, pointer: String) async throws -> Session {
         var req = URLRequest(url: url("sessions"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["a1": a1])
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["a1": a1, "pointer": pointer])
         return try await send(req)
     }
 
@@ -209,13 +221,15 @@ final class WellCam: @unchecked Sendable {
     }
 
     private var pendingURL: URL?
+    private var fps = 2
 
     private func open(width: Int, height: Int, at pts: CMTime) {
         guard let url = pendingURL, let w = try? AVAssetWriter(outputURL: url, fileType: .mp4) else { return }
         let settings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height,
-            // accuracy over size: about 2.5 bits a pixel a second at 15 fps
-            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: max(4_000_000, width * height * 40)],
+            // ~0.6 bits a pixel a frame (3.9 Mbps at 720×1280, 7 fps): the frames come
+            // already compressed for Bluetooth, so more adds only size
+            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: max(500_000, width * height * 6 * fps / 10)],
         ]
         let i = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         i.expectsMediaDataInRealTime = true
@@ -228,8 +242,9 @@ final class WellCam: @unchecked Sendable {
     }
 
     /// Starts writing from the next frame to a temp file.
-    func start() {
+    func start(fps: Int) {
         queue.sync {
+            self.fps = fps
             pendingURL = FileManager.default.temporaryDirectory.appending(path: "samwell-\(UUID().uuidString).mp4")
             writer = nil; input = nil; adaptor = nil; first = nil; last = nil; written = 0
             recording = true
@@ -264,6 +279,7 @@ struct SamWellTestView: View {
     var dat: GlassesDAT?
     @State private var rows: [SamWellAPI.SessionRow] = []
     @State private var a1 = "tl"
+    @State private var pointer = "pen"
     @State private var opened: String?
     @State private var error: String?
 
@@ -274,9 +290,14 @@ struct SamWellTestView: View {
                     ForEach(["tl", "tr", "br", "bl"], id: \.self) { Text(cornerName($0)).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                Picker("What goes into the wells", selection: $pointer) {
+                    Text("Pen").tag("pen")
+                    Text("Pipette tip").tag("pipette tip")
+                }
+                .pickerStyle(.segmented)
                 Button("Start session (5 attempts)") {
                     Task {
-                        do { opened = try await SamWellAPI.newSession(a1: a1).id } catch { self.error = error.localizedDescription }
+                        do { opened = try await SamWellAPI.newSession(a1: a1, pointer: pointer).id } catch { self.error = error.localizedDescription }
                     }
                 }
             }
@@ -315,11 +336,16 @@ struct SamWellSessionView: View {
     let sessionID: String
     var dat: GlassesDAT?
     @State private var session: SamWellAPI.Session?
-    @State private var targets: [String] = []
-    @State private var seconds = 20
+    /// The same wells every attempt (not random): the tester knows them without looking at the screen.
+    private let targets = ["B1", "B2", "B3", "B4"]
+    @State private var seconds = 30
+    /// High (720×1280) at 7 fps: a 0.5 s stay is 3-4 frames (at 2 fps, one lost frame ends it)
+    /// with less compression a frame than 15. SAM gets every frame.
+    private let fps: UInt = 7
     @State private var cam = WellCam()
     @State private var recordingUntil: Date?
     @State private var uploading = false
+    @State private var uploadMB = 0.0
     @State private var showing: Int?  // an attempt's result open; nil: capture the next
     @State private var picking = false
     @State private var pickedClip: URL?
@@ -334,13 +360,13 @@ struct SamWellSessionView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let s = session {
-                    Text("A1 corner: \(cornerName(s.a1)) · attempt \(min(attempts.count + (showing == nil && !full ? 1 : 0), 5)) of 5")
+                    Text("A1 corner: \(cornerName(s.a1)) · \(s.pointer ?? "pipette tip") · attempt \(min(attempts.count + (showing == nil && !full ? 1 : 0), 5)) of 5")
                         .font(.headline)
                 }
                 if let n = showing, let a = attempts.first(where: { $0.n == n }) {
                     AttemptResult(sessionID: sessionID, attempt: a)
                     if !full {
-                        Button("Next attempt") { showing = nil; newTargets() }.buttonStyle(.borderedProminent)
+                        Button("Next attempt") { showing = nil }.buttonStyle(.borderedProminent)
                     }
                 } else if !full {
                     capture
@@ -366,24 +392,24 @@ struct SamWellSessionView: View {
             .padding()
         }
         .navigationTitle("Session")
-        .task { await load(); if targets.isEmpty { newTargets() } }
+        .task { await load() }
         .task(id: analyzing) {
             while analyzing, !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
+                try? await Task.sleep(for: .seconds(1))
                 await load()
             }
         }
         .onAppear {
             let cam = cam
             dat?.frameTap.set { cam.frame($0) }
-            dat?.startLive()
+            live()
         }
         .onDisappear {
             dat?.frameTap.set(nil)
             dat?.stopLive()
         }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.mpeg4Movie, .quickTimeMovie]) { r in
-            if case .success(let url) = r { pickedClip = url; typedTargets = "" }
+            if case .success(let url) = r { pickedClip = url; typedTargets = targets.joined(separator: ", ") }
         }
         .alert("Wells filled in this clip, in order", isPresented: Binding(
             get: { pickedClip != nil }, set: { if !$0 { pickedClip = nil } })) {
@@ -395,8 +421,11 @@ struct SamWellSessionView: View {
 
     @ViewBuilder private var capture: some View {
         if analyzing || uploading {
-            HStack { ProgressView(); Text(uploading ? "Uploading…" : "SAM is analysing every frame…") }
-                .font(.title3)
+            if uploading {
+                HStack { ProgressView(); Text("Uploading \(String(format: "%.0f", uploadMB)) MB to the server…") }.font(.title3)
+            } else {
+                AnalysisProgress(progress: attempts.last { $0.status == "analyzing" }?.progress)
+            }
         } else {
             Text(targets.joined(separator: " → "))
                 .font(.system(size: 54, weight: .bold, design: .rounded))
@@ -404,16 +433,17 @@ struct SamWellSessionView: View {
             ZStack(alignment: .topLeading) {
                 Group {
                     if let img = dat?.liveFrame {
-                        Image(uiImage: img).resizable().scaledToFit()
+                        Color.black.overlay(Image(uiImage: img).resizable().scaledToFill())
                     } else {
-                        Rectangle().fill(.black).overlay(Text("Waiting for the glasses' camera…").foregroundStyle(.white))
-                            .aspectRatio(4 / 3, contentMode: .fit)
+                        Color.black.overlay(Text("Waiting for the glasses' camera…").foregroundStyle(.white))
                     }
                 }
+                // the plate's shape (the middle of the 9:16 frame); the clip keeps the whole frame
+                .aspectRatio(127.76 / 85.48, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
                     HStack {
-                        Text(cam.rate ?? "no frames")
+                        Text((cam.rate ?? "no frames") + " from the glasses (asked 720×1280 · \(fps) fps)")
                         if let until = recordingUntil {
                             Text("● REC \(max(0, Int(until.timeIntervalSince(ctx.date).rounded(.up)))) s").foregroundStyle(.red)
                         }
@@ -423,7 +453,7 @@ struct SamWellSessionView: View {
                     .padding(8)
                 }
             }
-            .frame(maxHeight: 520)
+            .frame(maxWidth: .infinity)
             Picker("Length", selection: $seconds) {
                 ForEach([10, 20, 30], id: \.self) { Text("\($0) s").tag($0) }
             }
@@ -434,24 +464,26 @@ struct SamWellSessionView: View {
                     if recordingUntil == nil { record() } else { recordingUntil = .now }
                 }
                 .buttonStyle(.borderedProminent).tint(.red).disabled(dat?.liveFrame == nil)
-                Button("New targets") { newTargets() }.disabled(recordingUntil != nil)
                 Spacer()
                 Button("Pick a clip") { picking = true }.disabled(recordingUntil != nil)
             }
         }
     }
 
+    /// The glasses' stream at high, held there (no drop to medium), at the chosen fps.
+    private func live() {
+        dat?.stopLive()
+        dat?.startLive(resolution: .high, frameRate: fps, hold: true)
+    }
+
     private func load() async {
         do { session = try await SamWellAPI.session(sessionID) } catch { self.error = error.localizedDescription }
     }
 
-    private func newTargets() {
-        Task { targets = (try? await SamWellAPI.targets()) ?? targets }
-    }
 
     private func record() {
         error = nil
-        cam.start()
+        cam.start(fps: Int(fps))
         let until = Date.now.addingTimeInterval(Double(seconds))
         recordingUntil = until
         Task {
@@ -473,6 +505,7 @@ struct SamWellSessionView: View {
     }
 
     private func send(_ clip: URL, targets: [String], source: String) async {
+        uploadMB = Double((try? clip.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) / 1_000_000
         uploading = true
         defer { uploading = false }
         do {
@@ -491,11 +524,19 @@ struct AttemptResult: View {
     let sessionID: String
     let attempt: SamWellAPI.Attempt
 
+    private func details(_ j: SamWellAPI.Judge, _ r: SamWellAPI.Result) -> String {
+        var parts = ["Order \(j.orderOk ? "matches" : "differs")", "false \(j.falseWells.count)"]
+        parts += ["\(r.w)×\(r.h) · \(Int(r.fps.rounded())) fps", "well \(Int(r.wellPx)) px", "failed frames \(Int(r.failedRatio * 100))%",
+                  "analysis \(Int(r.timing["total_s"] ?? 0)) s"]
+        if r.rounds > 1 { parts.append("tip re-found \(r.rounds - 1)×") }
+        return parts.joined(separator: " · ")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             switch attempt.status {
             case "analyzing":
-                HStack { ProgressView(); Text("SAM is analysing every frame…") }.font(.title3)
+                AnalysisProgress(progress: attempt.progress)
             case "failed":
                 Text("Failed: \(attempt.error ?? "")").foregroundStyle(.red)
             default:
@@ -520,11 +561,7 @@ struct AttemptResult: View {
                             if r.found.isEmpty { Text("nothing").foregroundStyle(.secondary) }
                         }
                     }
-                    Text("Order \(j.orderOk ? "matches" : "differs") · false \(j.falseWells.count) · "
-                         + "\(r.w)×\(r.h) \(String(format: "%.1f", r.fps)) fps · well \(Int(r.wellPx)) px · "
-                         + "failed frames \(Int(r.failedRatio * 100))% · analysis \(Int(r.timing["total_s"] ?? 0)) s"
-                         + (r.rounds > 1 ? " · tip re-found \(r.rounds - 1)×" : ""))
-                        .font(.callout).foregroundStyle(.secondary)
+                    Text(details(j, r)).font(.callout).foregroundStyle(.secondary)
                     TabView {
                         ForEach(r.images, id: \.self) { name in
                             AsyncImage(url: SamWellAPI.imageURL(session: sessionID, attempt: attempt.n, name: name)) {
@@ -538,6 +575,27 @@ struct AttemptResult: View {
                 }
             }
         }
+    }
+}
+
+/// Where the server's analysis is: its stage, a bar when it counts frames, the time so far.
+struct AnalysisProgress: View {
+    let progress: SamWellAPI.Progress?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(progress?.stage ?? "Starting…").font(.title3.bold())
+            if let p = progress, let done = p.done, let total = p.total, total > 0 {
+                ProgressView(value: Double(min(done, total)), total: Double(total))
+                Text("frame \(done) of \(total) · \(Int(p.elapsedS)) s").font(.callout.monospacedDigit())
+            } else {
+                ProgressView()
+                if let p = progress { Text("\(Int(p.elapsedS)) s").font(.callout.monospacedDigit()) }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -571,7 +629,7 @@ struct SummaryView: View {
                     .foregroundStyle(i == s.settings.best ? .green : .primary)
                 }
             }
-            Text("Green: most accurate (most wells, then fewest false). Default is 0.3 s / 2.5 mm.")
+            Text("Green: most accurate (most wells, then fewest false). Default is 0.5 s / 4.5 mm. Every frame is analysed.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .padding()

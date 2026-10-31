@@ -3,7 +3,7 @@ Feasibility only. The logic is server/sam_wells.py (shared with the
 Diagnostics "SAM well test"); this runs it on one clip and logs the result.
 
 Run from repo root (MODEL_API_KEY from .env only):
-    .venv/bin/python eval/sam_video_wells.py CLIP.mp4 --wells C2,C3,C4 [--a1 tl|tr|br|bl]
+    .venv/bin/python eval/sam_video_wells.py CLIP.mp4 --wells C2,C3,C4 [--a1 tl|tr|br|bl] [--pointer pen]
 --a1: the plate corner nearest A1 as seen in the clip (default tl).
 Appends to eval/results/sam_video.md; check images in eval/results/sam_video/<clip>/images/.
 """
@@ -27,6 +27,7 @@ def main() -> None:
     ap.add_argument("clip")
     ap.add_argument("--wells", default="", help="wells actually filled, in order: C2,C3,C4")
     ap.add_argument("--a1", default="tl", choices=sw.CORNERS)
+    ap.add_argument("--pointer", default=sw.TIP, choices=sw.POINTERS)
     a = ap.parse_args()
     load_dotenv()
     key = os.environ.get("MODEL_API_KEY")
@@ -35,7 +36,7 @@ def main() -> None:
     clip = Path(a.clip)
     truth = sw.parse_targets(a.wells) if a.wells else []
     out_dir = OUT / "sam_video" / clip.stem
-    r = sw.analyze(clip, a.a1, sw.MetaSam(key), out_dir)
+    r = sw.analyze(clip, a.a1, sw.MetaSam(key), out_dir, a.pointer)
     names = [f["well"] for f in r["found"]]
     j = sw.judge(truth, names)
     lines = [

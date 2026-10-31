@@ -4,7 +4,7 @@ reads the tip end's well. Test only: eval/sam_video_wells.py and the
 Diagnostics "SAM well test" (server/lab_sam.py) share this; the product
 flow never calls it.
 
-1. ffmpeg pulls every frame at full size. SAM (image) finds "96-well plate"
+1. ffmpeg pulls every frame of the clip. SAM (image) finds "96-well plate"
    and "pipette tip": the first frames that have one, then the most
    confident of the next few sampled frames.
 2. Those boxes prompt one SAM video request (objects 1 plate, 2 tip),
@@ -13,10 +13,12 @@ flow never calls it.
    runs again.
 3. Each frame: plate mask -> four corners -> homography to the plate's
    footprint in mm (SBS: 127.76 x 85.48, A1 at 14.38 / 11.24, pitch 9) ->
-   the tip end's well.
-4. "Went in": the tip end stays within dwell_mm for >= dwell_s. One camera
-   has no depth, so "lowest" is the dwell frame where the least tip shows
-   (the well wall hides it).
+   the tip end's well. The tip end is the mask's long-axis end nearer the
+   last frame's tip end (the first frame: nearer the plate's middle).
+4. "Went in": the tip end stays within dwell_mm for >= dwell_s (up to
+   MAX_MISSING frames without a tip don't break it); the visit's well is the
+   cell it spent the most frames in. One camera has no depth, so "lowest" is
+   the dwell frame where the least tip shows (the well wall hides it).
 """
 
 import json
@@ -26,6 +28,7 @@ import re
 import subprocess
 import tempfile
 import time
+from collections import Counter
 from pathlib import Path
 
 import httpx
@@ -34,11 +37,14 @@ from server import look
 
 BASE_URL = "https://api.meta.ai/v1"
 PLATE, TIP = "96-well plate", "pipette tip"
+#: What goes into the wells (SAM's prompt).
+POINTERS = (TIP, "pen")
 PLATE_MM = (127.76, 85.48)  # ANSI/SLAS footprint
 A1_MM, PITCH_MM, WELL_D_MM = (14.38, 11.24), 9.0, 6.86
-DWELL_S, DWELL_MM = 0.3, 2.5
+#: A visit is where the tip stays >= DWELL_S within DWELL_MM (half the well pitch).
+DWELL_S, DWELL_MM, MAX_MISSING = 0.5, PITCH_MM / 2, 2
 #: The settings the session summary compares (same clips, no new SAM calls).
-DWELL_S_GRID, DWELL_MM_GRID = (0.2, 0.3, 0.5), (2.0, 2.5, 3.5)
+DWELL_S_GRID, DWELL_MM_GRID = (0.5, 1.0, 2.0), (2.5, 3.5, 4.5)
 #: First find: sample every SCAN_S from the start; of the first hit and the
 #: BEST_OF - 1 samples after it, the most confident.
 SCAN_S, BEST_OF = 0.5, 5
@@ -132,13 +138,23 @@ def well_center_mm(r: int, c: int) -> tuple:
     return (A1_MM[0] + PITCH_MM * c, A1_MM[1] + PITCH_MM * r)
 
 
-def well_at(mm: tuple) -> str | None:
-    """The well whose circle holds this point (plate mm), else None."""
+def nearest_well(mm: tuple) -> tuple | None:
+    """(row, col) of the nearest well's center, None off the 8 x 12 grid."""
     c = round((mm[0] - A1_MM[0]) / PITCH_MM)
     r = round((mm[1] - A1_MM[1]) / PITCH_MM)
-    if not (0 <= r < 8 and 0 <= c < 12):
-        return None
-    return f"{ROWS[r]}{c + 1}" if math.dist(mm, well_center_mm(r, c)) <= WELL_D_MM / 2 else None
+    return (r, c) if 0 <= r < 8 and 0 <= c < 12 else None
+
+
+def cell_at(mm: tuple) -> str | None:
+    """The well whose pitch-sized cell holds this point (plate mm), else None."""
+    rc = nearest_well(mm)
+    return f"{ROWS[rc[0]]}{rc[1] + 1}" if rc else None
+
+
+def well_at(mm: tuple) -> str | None:
+    """The well whose circle holds this point (plate mm), else None."""
+    rc = nearest_well(mm)
+    return cell_at(mm) if rc and math.dist(mm, well_center_mm(*rc)) <= WELL_D_MM / 2 else None
 
 
 def corners(points: list) -> list:
@@ -184,7 +200,7 @@ def pitch_px(h: list) -> float:
 
 
 def tip_end(points: list, toward: tuple) -> tuple:
-    """The end of the tip's long axis nearer `toward` (the plate's middle)."""
+    """The end of the tip's long axis nearer `toward`."""
     n = len(points)
     mx, my = sum(p[0] for p in points) / n, sum(p[1] for p in points) / n
     sxx = sum((p[0] - mx) ** 2 for p in points)
@@ -198,16 +214,19 @@ def tip_end(points: list, toward: tuple) -> tuple:
 
 
 def dwells(track: list, fps: float, dwell_s: float = DWELL_S, dwell_mm: float = DWELL_MM) -> list:
-    """track: [(frame, (x_mm, y_mm), tip_area)] in frame order -> [(f0, f1, rep_frame, mm)]."""
+    """track: [(frame, (x_mm, y_mm), tip_area)] in frame order -> [(f0, f1, rep_frame, well)],
+    the well being the cell most of the visit's frames are in (None: all off the grid)."""
     out, i = [], 0
     while i < len(track):
         j = i
-        while (j + 1 < len(track) and track[j + 1][0] - track[j][0] <= 3
+        while (j + 1 < len(track) and track[j + 1][0] - track[j][0] <= MAX_MISSING + 1
                and math.dist(track[j + 1][1], track[i][1]) <= dwell_mm):
             j += 1
         if (track[j][0] - track[i][0]) / fps >= dwell_s - 1e-9:
-            rep = min(track[i:j + 1], key=lambda t: t[2])
-            out.append((track[i][0], track[j][0], rep[0], rep[1]))
+            visit = track[i:j + 1]
+            rep = min(visit, key=lambda t: t[2])
+            cells = Counter(c for c in (cell_at(t[1]) for t in visit) if c)
+            out.append((track[i][0], track[j][0], rep[0], cells.most_common(1)[0][0] if cells else None))
             i = j + 1
         else:
             i += 1
@@ -217,8 +236,7 @@ def dwells(track: list, fps: float, dwell_s: float = DWELL_S, dwell_mm: float = 
 def found_wells(track: list, fps: float, dwell_s: float = DWELL_S, dwell_mm: float = DWELL_MM) -> list:
     """[(well, rep_frame, f0, f1)]: each dwell over a well; the same well twice in a row is one."""
     found = []
-    for f0, f1, rep, mm in dwells(track, fps, dwell_s, dwell_mm):
-        w = well_at(mm)
+    for f0, f1, rep, w in dwells(track, fps, dwell_s, dwell_mm):
         if w and (not found or found[-1][0] != w):
             found.append((w, rep, f0, f1))
     return found
@@ -296,8 +314,8 @@ class MetaSam:
             print(f"sam wells: files upload failed ({type(e).__name__}: {str(e)[:200]}); a data URL", flush=True)
             return {"type": "input_video", "video_url": look.data_url(clip.read_bytes(), mime)}
 
-    def video(self, part: dict, prompt: str) -> tuple[str, float]:
-        """The streamed text, and seconds to the first frame line."""
+    def video(self, part: dict, prompt: str, on_frame=None) -> tuple[str, float]:
+        """The streamed text, and seconds to the first frame line; on_frame(lines so far)."""
         body = {"model": look.SAM_MODEL, "stream": True,
                 "metadata": {"propagation_direction": "both", "include_confidence": "true"},
                 "input": [{"type": "message", "role": "user", "content": [
@@ -318,6 +336,8 @@ class MetaSam:
                 if ev.get("type") == "response.output_text.delta":
                     first = first or time.perf_counter() - t0
                     chunks.append((ev.get("delta") or "") + "\n")
+                    if on_frame:
+                        on_frame(len(chunks))
                 elif ev.get("type") in ("response.failed", "error"):
                     raise RuntimeError(f"sam video failed: {json.dumps(ev)[:500]}")
         return "".join(chunks), first or 0.0
@@ -352,12 +372,17 @@ def mask_points(match: dict, step: int = 1) -> list:
     return pts or [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
 
 
-def best_detect(sam, target: str, fdir: Path, nframes: int, fps: float, start: int = 0):
+def _quiet(stage: str, done: int | None = None, total: int | None = None) -> None:
+    pass
+
+
+def best_detect(sam, target: str, fdir: Path, nframes: int, fps: float, start: int = 0, say=_quiet):
     """(frame, match): the first sampled frame from `start` with the target,
     then the most confident of it and the next BEST_OF - 1 samples."""
     step = max(1, round(fps * SCAN_S))
     first = None
     for n in range(start, nframes, step):
+        say(f"Looking for the {target}", n, nframes)
         if sam.image(target, frame_png(fdir, n)):
             first = n
             break
@@ -365,6 +390,7 @@ def best_detect(sam, target: str, fdir: Path, nframes: int, fps: float, start: i
         return None
     best = None
     for n in range(first, min(nframes, first + step * BEST_OF), step):
+        say(f"Most confident {target} near frame {first}", n, nframes)
         got = sam.image(target, frame_png(fdir, n))
         if got and (best is None or got[0]["c"] > best[1]["c"]):
             best = (n, got[0])
@@ -435,60 +461,12 @@ def draw(png: Path, out: Path, plate, tip, quad, h, end, well, title: str) -> No
 
 # ---------- one clip ----------
 
-def analyze(clip: Path, a1: str, sam, out_dir: Path) -> dict:
-    """Everything one clip gives: clip facts, the tip track (plate mm, so
-    other dwell settings rerun without SAM), wells found, failures, timing,
-    check images in out_dir."""
-    t, t_all = {}, time.perf_counter()
-    info = ffprobe(clip)
-    if info["duration_s"] > MAX_CLIP_S + 0.5:
-        raise ClipTooLong(f"clip is {info['duration_s']:.0f} s (max {MAX_CLIP_S} s)")
-    t0 = time.perf_counter()
-    fdir = frames_dir(clip)
-    nframes = len(list(fdir.glob("*.png")))
-    fps = info["fps"]
-    t["frames_s"] = time.perf_counter() - t0
-
-    t0 = time.perf_counter()
-    plate0 = best_detect(sam, PLATE, fdir, nframes, fps)
-    tip0 = best_detect(sam, TIP, fdir, nframes, fps)
-    t["first_find_s"] = time.perf_counter() - t0
-    missing = [x for x, d in ((PLATE, plate0), (TIP, tip0)) if not d]
-    if missing:
-        raise RuntimeError(f"SAM found no {' and no '.join(missing)} on any sampled frame")
-    size = (plate0[1]["w"], plate0[1]["h"])
-    prompts = {1: [plate0], 2: [tip0]}
-
-    t0 = time.perf_counter()
-    part = sam.upload(clip)
-    t["upload_s"] = time.perf_counter() - t0
-    t["video_s"], t["video_first_frame_s"], t["refind_s"] = 0.0, 0.0, 0.0
-    gap = max(2, round(fps * GAP_S))
-    rounds = 0
-    while True:
-        rounds += 1
-        t0 = time.perf_counter()
-        text, first = sam.video(part, object_prompt(prompts, size))
-        t["video_s"] += time.perf_counter() - t0
-        t["video_first_frame_s"] = t["video_first_frame_s"] or first
-        recs = video_records(text)
-        if rounds >= MAX_ROUNDS:
-            break
-        g = tip_gap(recs, nframes, max(n for n, _ in prompts[2]), gap)
-        if g is None:
-            break
-        t0 = time.perf_counter()
-        again = best_detect(sam, TIP, fdir, nframes, fps, start=g)
-        t["refind_s"] += time.perf_counter() - t0
-        if not again or any(n == again[0] for n, _ in prompts[2]):
-            break
-        prompts[2].append(again)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "sam_video.txt").write_text(text)
-
-    track, per, pitches = [], {}, []
+def locate(recs: dict, nframes: int, a1: str, say=_quiet) -> tuple:
+    """SAM's records -> (track, {frame: what to draw}, well pitches in px, failed frames by why)."""
+    track, per, pitches, last = [], {}, [], None
     fails = {"no_plate": 0, "no_tip": 0, "bad_grid": 0}
     for n in range(nframes):
+        say("Placing the grid on each frame", n, nframes)
         r = recs.get(n, {})
         plate, tip = r.get(1), r.get(2)
         if not plate:
@@ -507,10 +485,72 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path) -> dict:
             fails["no_tip"] += 1
             continue
         pts = mask_points(tip)
-        end = tip_end(pts, mid)
-        mm = apply(h, end)
-        per[n] = (plate, tip, quad, h, end, well_at(mm))
+        last = tip_end(pts, last or mid)
+        mm = apply(h, last)
+        per[n] = (plate, tip, quad, h, last, well_at(mm))
         track.append((n, mm, len(pts)))
+    return track, per, pitches, fails
+
+
+def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_quiet) -> dict:
+    """Everything one clip gives: clip facts, the tip track (plate mm, so
+    other dwell settings rerun without SAM), wells found, failures, timing,
+    check images in out_dir. say(stage, done, total) tells how far it is."""
+    t, t_all = {}, time.perf_counter()
+    say("Reading the clip's frames")
+    info = ffprobe(clip)
+    if info["duration_s"] > MAX_CLIP_S + 0.5:
+        raise ClipTooLong(f"clip is {info['duration_s']:.0f} s (max {MAX_CLIP_S} s)")
+    t0 = time.perf_counter()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fdir = frames_dir(clip)
+    nframes = len(list(fdir.glob("*.png")))
+    fps = info["fps"]
+    t["frames_s"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    plate0 = best_detect(sam, PLATE, fdir, nframes, fps, say=say)
+    tip0 = best_detect(sam, pointer, fdir, nframes, fps, say=say)
+    t["first_find_s"] = time.perf_counter() - t0
+    missing = [x for x, d in ((PLATE, plate0), (pointer, tip0)) if not d]
+    if missing:
+        raise RuntimeError(f"SAM found no {' and no '.join(missing)} on any sampled frame")
+    size = (plate0[1]["w"], plate0[1]["h"])
+    prompts = {1: [plate0], 2: [tip0]}
+
+    t0 = time.perf_counter()
+    say("Uploading the clip to SAM")
+    part = sam.upload(clip)
+    t["upload_s"] = time.perf_counter() - t0
+    t["video_s"], t["video_first_frame_s"], t["refind_s"] = 0.0, 0.0, 0.0
+    gap = max(2, round(fps * GAP_S))
+    rounds = 0
+    while True:
+        rounds += 1
+        t0 = time.perf_counter()
+        say(f"SAM tracking plate and {pointer}" + (f" (round {rounds})" if rounds > 1 else ""), 0, nframes)
+        text, first = sam.video(part, object_prompt(prompts, size),
+                                lambda k, r=rounds: say(f"SAM tracking plate and {pointer}"
+                                                        + (f" (round {r})" if r > 1 else ""), k, nframes))
+        t["video_s"] += time.perf_counter() - t0
+        t["video_first_frame_s"] = t["video_first_frame_s"] or first
+        recs = video_records(text)
+        if rounds >= MAX_ROUNDS:
+            break
+        g = tip_gap(recs, nframes, max(n for n, _ in prompts[2]), gap)
+        if g is None:
+            break
+        t0 = time.perf_counter()
+        say(f"The {pointer} went missing at frame {g}: finding it again")
+        again = best_detect(sam, pointer, fdir, nframes, fps, start=g, say=say)
+        t["refind_s"] += time.perf_counter() - t0
+        if not again or any(n == again[0] for n, _ in prompts[2]):
+            break
+        prompts[2].append(again)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "sam_video.txt").write_text(text)
+
+    track, per, pitches, fails = locate(recs, nframes, a1, say)
     found = found_wells(track, fps)
 
     images = []
@@ -521,7 +561,8 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path) -> dict:
         pick.setdefault(n, "fail")
     img_dir = out_dir / "images"
     img_dir.mkdir(exist_ok=True)
-    for n, why in sorted(pick.items()):
+    for i, (n, why) in enumerate(sorted(pick.items())):
+        say("Drawing check images", i, len(pick))
         plate, tip, quad, h, end, well = per.get(n, (None,) * 6)
         if not plate:
             plate, tip = recs.get(n, {}).get(1), recs.get(n, {}).get(2)

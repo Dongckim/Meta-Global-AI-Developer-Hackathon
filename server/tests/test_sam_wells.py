@@ -65,22 +65,48 @@ assert sw.well_at(sw.apply(hp, sw.apply(sw.solve_inv(hp), sw.well_center_mm(2, 3
 print("SW3 ok: grid from four corners, any A1 corner, perspective")
 
 
-# SW4. Settings: a 0.25 s stop at the 2nd target only the 0.2 s dwell catches;
+# SW4. Settings: a 0.8 s stop at the 2nd target the 1 s dwell misses, the 0.5 s default catches;
 # the best setting is the one with the most hits.
 def stay(well, f0, frames):
     r, c = sw.ROWS.index(well[0]), int(well[1:]) - 1
     return [(f, sw.well_center_mm(r, c), 100 - f) for f in range(f0, f0 + frames)]
 
 
-track = stay("C3", 0, 9) + stay("F7", 20, 5) + stay("B10", 40, 9)  # 15 fps: 0.53 s, 0.27 s, 0.53 s
-assert [w for w, *_ in sw.found_wells(track, 15)] == ["C3", "B10"]
-cmp = sw.compare_settings([(["C3", "F7", "B10"], track, 15)])
+track = stay("C3", 0, 16) + stay("F7", 20, 5) + stay("B10", 40, 16)  # 5 fps: 3 s, 0.8 s, 3 s
+assert [w for w, *_ in sw.found_wells(track, 5)] == ["C3", "F7", "B10"]
+assert [w for w, *_ in sw.found_wells(track, 5, 1.0)] == ["C3", "B10"]
+cmp = sw.compare_settings([(["C3", "F7", "B10"], track, 5)])
 best = cmp["rows"][cmp["best"]]
-assert len(cmp["rows"]) == 9 and best["dwell_s"] == 0.2 and best["hits"] == 3, best
+assert len(cmp["rows"]) == 9 and best["dwell_s"] == sw.DWELL_S and best["hits"] == 3, best
 print("SW4 ok: every dwell setting on the same clips; the best one marked")
 
+PLATE_BOX_4C = (0, 0, 639, 479)
+
+# SW4b. A visit: 2 missing frames don't break it, 3 do; its well is the cell it stayed in longest.
+c3, c4 = sw.well_center_mm(2, 2), sw.well_center_mm(2, 3)
+edge = (c3[0] + 4, c3[1])  # C3's cell, outside its circle
+near = (c3[0] + 5, c3[1])  # C4's cell, within DWELL_MM of `edge`
+pts = lambda frames, mm: [(f, mm, 100) for f in frames]  # noqa: E731
+assert sw.well_at(edge) is None and sw.cell_at(edge) == "C3" and sw.cell_at(near) == "C4"
+assert sw.cell_at((-20, -20)) is None
+assert [w for w, *_ in sw.found_wells(pts(range(2), near) + pts(range(2, 8), edge), 5)] == ["C3"]
+assert [(w, f0, f1) for w, _, f0, f1 in sw.found_wells(pts([0, 1, 4, 5], c3), 2)] == [("C3", 0, 5)]
+assert sw.found_wells(pts([0, 4], c3), 2) == []
+print("SW4b ok: a visit bridges 2 lost frames and takes its longest cell")
+
+# SW4c. The tip end follows the last frame's end, whichever side of the plate's middle it is.
+pen = [(100 + i, 100) for i in range(50)]
+assert sw.tip_end(pen, (0, 100)) == (100, 100) and sw.tip_end(pen, (500, 100)) == (149, 100)
+# frame 0: the end nearer the middle (x 320) is 300, of a pen lying 300-200; then it slides past
+# the middle and the end stays the pen's left one, now the farther from the middle.
+pen_boxes = ((200, 200, 300, 204), (340, 200, 440, 204))
+recs = {n: {1: {"box": PLATE_BOX_4C, "mask": None}, 2: {"box": b, "mask": None}} for n, b in enumerate(pen_boxes)}
+track4c, per4c, *_ = sw.locate(recs, 2, "tl")
+assert [per4c[n][4][0] for n in (0, 1)] == [300, 340], per4c
+print("SW4c ok: the tip end keeps to the same end from frame to frame")
+
 # SW5. Endpoints on a real (tiny) clip, SAM faked: the tip stops on each target.
-W, H, FPS, SECS = 640, 480, 15, 3
+W, H, FPS, SECS = 640, 480, 5, 17
 tmp = Path(tempfile.mkdtemp())
 clip = tmp / "c.mp4"
 subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"testsrc=size={W}x{H}:rate={FPS}",
@@ -88,14 +114,16 @@ subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"testsrc=size={W}
 PLATE_BOX = (40, 60, 599, 434)
 ph = sw.plate_h(sw.plate_quad(sw.corners([(40, 60), (599, 60), (599, 434), (40, 434)]), "tl"))
 pinv = sw.solve_inv(ph)
-mid_y = sw.apply(pinv, (sw.PLATE_MM[0] / 2, sw.PLATE_MM[1] / 2))[1]
+
+
+PEN = 800
 
 
 def tip_box(well):
-    """A thin tip whose end is on the well, its body away from the plate's middle."""
+    """A long thin pen, its end on the well, held from below (moves stay under half its length)."""
     x, y = sw.apply(pinv, sw.well_center_mm(sw.ROWS.index(well[0]), int(well[1:]) - 1))
     x, y = round(x), round(y)
-    return (x - 2, y, x + 2, y + 40) if y > mid_y else (x - 2, y - 40, x + 2, y)
+    return (x - 2, y, x + 2, y + PEN)
 
 
 def rec(i, box, c=0.9):
@@ -117,16 +145,19 @@ class FakeSam:
         return [{"box": box, "w": W, "h": H, "c": 0.8, "mask": None}] if box else []
 
     def tip_at(self, n):
-        i, k = divmod(n - 2, 12)
-        if 0 <= i < len(self.targets) and k < 8:
+        i, k = divmod(n - 2, 20)
+        if 0 <= i < len(self.targets) and k < 17:  # 3.2 s on each target, 0.6 s moving
             return tip_box(self.targets[i])
-        return (20 + 13 * n, 4, 24 + 13 * n, 44)  # above the plate, a new place each frame
+        x = 20 + 13 * n % 600
+        return (x, 440, x + 4, 440 + PEN)  # below the plate, a new place each frame
 
     def upload(self, clip):
         return {"type": "input_video", "file_id": "f1"}
 
-    def video(self, part, prompt):
+    def video(self, part, prompt, on_frame=None):
         FakeSam.prompts.append(prompt)
+        if on_frame:
+            on_frame(1)
         refound = len(prompt.split("2<|box")) > 2  # tip prompted on 2 frames
         lines = []
         for n in range(FPS * SECS):
@@ -145,7 +176,7 @@ s = c.post("/lab/sam-wells/sessions", json={"a1": "tl"}).json()
 sid = s["id"]
 assert s["attempts"] == [] and s["summary"] is None
 FakeSam.targets = ["C3", "F7", "B10"]
-FakeSam.hide = range(20, 30)  # the tip goes missing in the 2nd stop: found again, prompted there
+FakeSam.hide = range(26, 31)  # the tip goes missing in the 2nd stop: found again, prompted there
 r = c.post(f"/lab/sam-wells/sessions/{sid}/attempts", data={"targets": "C3,F7,B10", "source": "stream"},
            files={"clip": ("c.mp4", clip.read_bytes(), "video/mp4")})
 assert r.status_code == 200 and r.json()["status"] == "analyzing", r.text
@@ -154,6 +185,7 @@ assert a["status"] == "done", a
 assert a["judge"]["line"] == "3/3 matched", a["judge"]
 res = a["result"]
 assert res["rounds"] == 2 and len(res["prompts"]["2"]) == 2, res["prompts"]
+assert "progress" not in a  # gone once analysed
 assert "track" not in res and (res["w"], res["h"], res["frames"]) == (W, H, FPS * SECS)
 assert res["well_px"] > 10 and res["images"], res
 assert c.get(f"/lab/sam-wells/sessions/{sid}/attempts/1/images/{res['images'][0]}").headers[
@@ -198,4 +230,44 @@ c.post(f"/lab/sam-wells/sessions/{s2}/attempts", data={"targets": "C3"},
 a = c.get(f"/lab/sam-wells/sessions/{s2}").json()["attempts"][0]
 assert a["status"] == "failed" and "max 60 s" in a["error"], a
 print("SW7 ok: bad input refused; a clip over 60 s fails with why")
+
+# SW8. A pen instead of a pipette: the session's pointer is what SAM looks for.
+asked = []
+_image = FakeSam.image
+FakeSam.image = lambda self, target, png: asked.append(target) or _image(self, target, png)
+FakeSam.targets = ["C3", "F7", "B10"]
+s3 = c.post("/lab/sam-wells/sessions", json={"a1": "tl", "pointer": "pen"}).json()
+assert s3["pointer"] == "pen"
+c.post(f"/lab/sam-wells/sessions/{s3['id']}/attempts", data={"targets": "C3,F7,B10"},
+       files={"clip": ("c.mp4", clip.read_bytes(), "video/mp4")})
+a = c.get(f"/lab/sam-wells/sessions/{s3['id']}").json()["attempts"][0]
+assert a["judge"]["line"] == "3/3 matched" and "pen" in asked and sw.TIP not in asked, (a, set(asked))
+assert c.post("/lab/sam-wells/sessions", json={"pointer": "finger"}).status_code == 400
+FakeSam.image = _image
+print("SW8 ok: a pen session finds the pen")
+
+# SW9. While it runs, the attempt says how far it is (stage, frames done of all).
+seen = []
+_write = lab_sam._write
+lab_sam._write = lambda p, data: (seen.append(dict(data.get("progress") or {})), _write(p, data))[1]
+s4 = c.post("/lab/sam-wells/sessions", json={"a1": "tl", "pointer": "pen"}).json()["id"]
+c.post(f"/lab/sam-wells/sessions/{s4}/attempts", data={"targets": "C3,F7,B10"},
+       files={"clip": ("c.mp4", clip.read_bytes(), "video/mp4")})
+lab_sam._write = _write
+stages = [x.get("stage") for x in seen if x]
+assert stages[0] == "Waiting for the attempt before" and "Reading the clip's frames" in stages, stages
+assert any(s.startswith("Looking for the pen") for s in stages) and any(s.startswith("SAM tracking") for s in stages)
+assert any(x.get("total") == FPS * SECS for x in seen if x) and all(x["elapsed_s"] >= 0 for x in seen if x)
+print("SW9 ok: progress while analysing")
+
+# SW10. Every frame of a 15 fps clip goes to SAM: nothing is cut.
+fast = tmp / "fast.mp4"
+subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"testsrc=size={W}x{H}:rate=15", "-t", str(SECS),
+                "-pix_fmt", "yuv420p", str(fast)], check=True)
+s5 = c.post("/lab/sam-wells/sessions", json={"a1": "tl", "pointer": "pen"}).json()["id"]
+c.post(f"/lab/sam-wells/sessions/{s5}/attempts", data={"targets": "C3,F7,B10"},
+       files={"clip": ("fast.mp4", fast.read_bytes(), "video/mp4")})
+res = c.get(f"/lab/sam-wells/sessions/{s5}").json()["attempts"][0]["result"]
+assert (res["fps"], res["frames"]) == (15, 15 * SECS), res
+print("SW10 ok: every frame is analysed")
 print("ALL PASS")

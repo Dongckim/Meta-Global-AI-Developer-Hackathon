@@ -102,16 +102,19 @@ def targets():
 
 class SessionIn(BaseModel):
     a1: str = "tl"
+    pointer: str = sw.TIP
 
 
 @router.post("/sessions")
 def new_session(body: SessionIn):
     if body.a1 not in sw.CORNERS:
         raise HTTPException(400, f"a1 is one of {', '.join(sw.CORNERS)}")
+    if body.pointer not in sw.POINTERS:
+        raise HTTPException(400, f"pointer is one of {', '.join(sw.POINTERS)}")
     sid = time.strftime("%Y%m%d-%H%M%S-") + os.urandom(2).hex()
     d = ROOT / sid
     d.mkdir(parents=True)
-    _write(d / "session.json", {"id": sid, "created": time.time(), "a1": body.a1})
+    _write(d / "session.json", {"id": sid, "created": time.time(), "a1": body.a1, "pointer": body.pointer})
     return _session_out(d)
 
 
@@ -133,18 +136,33 @@ def session(sid: str):
     return _session_out(_dir(sid))
 
 
-def _analyze(d: Path, a1: str) -> None:
+def _analyze(d: Path, session: dict) -> None:
     """Background: SAM, then the judge; the attempt says done or failed."""
     p = d / "attempt.json"
     a = _read(p)
+    last = [0.0, ""]
+
+    def say(stage: str, done: int | None = None, total: int | None = None) -> None:
+        """How far it is, on the attempt (written at most twice a second, and on each new stage)."""
+        now = time.time()
+        if stage == last[1] and now - last[0] < 0.5:
+            return
+        last[:] = [now, stage]
+        a["progress"] = {"stage": stage, "done": done, "total": total, "elapsed_s": now - started}
+        _write(p, a)
+
+    started = time.time()
+    say("Waiting for the attempt before")
     with _LOCK:
+        started = time.time()
         try:
             clip = next(d.glob("clip.*"))
-            r = sw.analyze(clip, a1, make_sam(), d)
+            r = sw.analyze(clip, session["a1"], make_sam(), d, session.get("pointer", sw.TIP), say)
             a.update(status="done", result=r, judge=sw.judge(a["targets"], [f["well"] for f in r["found"]]))
         except Exception as e:
             print(f"sam wells: attempt {d} failed: {type(e).__name__}: {e}", flush=True)
             a.update(status="failed", error=f"{type(e).__name__}: {e}")
+        a.pop("progress", None)
     _write(p, a)
 
 
@@ -179,7 +197,7 @@ async def new_attempt(sid: str, background: BackgroundTasks, clip: UploadFile = 
     a = {"n": n, "targets": wells, "source": source, "filename": clip.filename, "status": "analyzing",
          "created": time.time()}
     _write(ad / "attempt.json", a)
-    background.add_task(_analyze, ad, _read(d / "session.json")["a1"])
+    background.add_task(_analyze, ad, _read(d / "session.json"))
     return a
 
 
