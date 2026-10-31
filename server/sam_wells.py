@@ -574,8 +574,8 @@ def shown(match: dict) -> float:
 
 
 def seen_points(match: dict) -> list:
-    """Where the plate shows, thin enough to keep: the cache has every sixth pixel."""
-    return match.get("seen") or mask_points(match, 2)
+    """Where the plate shows, thinned: the same points live and from the cache, so both follow alike."""
+    return match.get("seen") or mask_points(match, 2)[::9]
 
 
 def compact(recs: dict) -> dict:
@@ -583,7 +583,7 @@ def compact(recs: dict) -> dict:
     keeps its outline (all plate_corners uses) and how much of it shows, the tip every
     other pixel (as locate)."""
     return {str(n): {str(oid): ({"box": m["box"], "points": outline(mask_points(m, 2)), "shown": shown(m),
-                                 "seen": mask_points(m, 2)[::9]} if oid == 1
+                                 "seen": seen_points(m)} if oid == 1
                                 else {"box": m["box"], "points": mask_points(m, 2)})
                      for oid, m in r.items()} for n, r in recs.items()}
 
@@ -742,11 +742,12 @@ def _follow(orb, base: tuple, gray, tip: list | None, plate: list, last, quad0: 
     i, j = np.nonzero(np.linalg.norm(moved[:, None] - pts[None], axis=2) <= reach)
     bits = np.bitwise_count(des0[i] ^ des[j]).sum(axis=1)
     best = {}
-    for k in np.argsort(bits).tolist():
+    for k in np.argsort(bits, kind="stable").tolist():
         if bits[k] < MAX_BITS:
             best.setdefault(int(i[k]), int(j[k]))
     if len(best) < MIN_INLIERS:
         return None
+    cv2.setRNGSeed(0)  # RANSAC's draws: the same input gives the same plate, whatever ran before
     h, inliers = cv2.findHomography(pts0[list(best)], pts[list(best.values())], cv2.RANSAC, 3.0)
     if h is None or inliers.sum() < MIN_INLIERS or inliers.mean() < MIN_INLIER_SHARE:
         return None

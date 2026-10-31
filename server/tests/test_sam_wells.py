@@ -335,4 +335,15 @@ kinds = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-sh
 assert len(kinds) == FPS * SECS and "B" not in kinds, kinds
 assert [i for i, k in enumerate(kinds) if k == "I"][:3] == [0, FPS, 2 * FPS], kinds
 print("SW12 ok: the clip for SAM")
+# SW13. The same input follows the same way, run after run, and cached or not.
+n13 = FPS * SECS
+box = (40, 60, 599, 434)
+plate13 = lambda: {"box": box, "mask": None, "points": [(x, y) for x in range(40, 600, 8) for y in range(60, 435, 8)],  # noqa: E731
+                   "shown": 1.0}
+recs13 = {n: {1: plate13()} for n in range(n13)}
+one, two = sw.follow_plate(clip, recs13, n13), sw.follow_plate(clip, recs13, n13)
+assert one == two and one["ref"] is not None, (one["ref"], two["ref"])
+cached = sw.expand(sw.json.loads(sw.json.dumps(sw.compact(recs13))))
+assert sw.seen_points(cached[0][1]) == [list(p) for p in sw.seen_points(recs13[0][1])]
+print("SW13 ok: following repeats exactly")
 print("ALL PASS")
