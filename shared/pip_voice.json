@@ -327,8 +327,8 @@
   },
   "modes": {
     "_note": "Run modes: header label, Mode card line, and the routing itself: asr, commands, imports (keys of mode_routes), handoff, confirm_*. server/modes.py reads these for the routing and the Mode card alike.",
-    "full": {"label": "Full", "line": "Meta API · fastest", "asr": "meta", "commands": "spark", "imports": "spark", "handoff": true, "confirm_search": false, "confirm_photo": false},
-    "private": {"label": "Private", "line": "On our own Meta model", "asr": "device", "commands": "glimmer", "imports": "glimmer", "handoff": false, "confirm_search": true, "confirm_photo": true}
+    "full": {"label": "Full", "line": "Most capable · Meta API", "asr": "meta", "commands": "spark", "imports": "spark", "handoff": true, "confirm_search": false, "confirm_photo": false},
+    "private": {"label": "Private", "line": "Protects your data · a bit slower", "asr": "device", "commands": "glimmer", "imports": "glimmer", "handoff": false, "confirm_search": true, "confirm_photo": true}
   },
   "mode_routes": {
     "_note": "How a route is named on the Mode card and aloud.",
