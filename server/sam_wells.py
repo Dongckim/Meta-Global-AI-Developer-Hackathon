@@ -11,10 +11,11 @@ flow never calls it.
    propagated both ways. When the tip goes missing for a while, it's found
    again after the gap and prompted there too (same id), and the request
    runs again.
-3. Each frame: plate mask -> four corners -> homography to the plate's
+3. Each frame: plate mask -> four edges -> four corners -> homography to the plate's
    footprint in mm (SBS: 127.76 x 85.48, A1 at 14.38 / 11.24, pitch 9) ->
-   the tip end's well. The tip end is the mask's long-axis end nearer the
-   last frame's tip end (the first frame: nearer the plate's middle).
+   the tip end's well. The tip end is the mask's long-axis end over the
+   plate; both or neither: the one nearer the last frame's tip end (the
+   first frame: nearer the plate's middle).
 4. "Went in": the tip end stays within dwell_mm for >= dwell_s (up to
    MAX_MISSING frames without a tip don't break it); the visit's well is the
    cell it spent the most frames in. One camera has no depth, so "lowest" is
@@ -55,6 +56,9 @@ ROWS = "ABCDEFGH"
 #: Targets skip the edge (rows A and H, columns 1 and 12), as the demo protocol does.
 INNER = [f"{r}{c}" for r in ROWS[1:-1] for c in range(2, 12)]
 CORNERS = ("tl", "tr", "br", "bl")
+#: Plate edges: within this share of the plate's diagonal is on the line; tries per edge; fewest
+#: points to fit; most degrees between opposite edges.
+EDGE_TOL, FIT_TRIES, MIN_EDGE_POINTS, MAX_SKEW = 0.01, 200, 8, 25.0
 
 
 class ClipTooLong(ValueError):
@@ -163,12 +167,117 @@ def corners(points: list) -> list:
             max(points, key=lambda p: p[0] + p[1]), min(points, key=lambda p: p[0] - p[1])]
 
 
+def long_axis(points: list) -> tuple:
+    """(middle, unit direction) of the points' best line."""
+    n = len(points)
+    mx, my = sum(p[0] for p in points) / n, sum(p[1] for p in points) / n
+    sxx = sum((p[0] - mx) ** 2 for p in points)
+    syy = sum((p[1] - my) ** 2 for p in points)
+    sxy = sum((p[0] - mx) * (p[1] - my) for p in points)
+    ang = 0.5 * math.atan2(2 * sxy, sxx - syy)
+    return (mx, my), (math.cos(ang), math.sin(ang))
+
+
+def outline(points: list) -> list:
+    """The outermost point of each row and column: what's inside (a pen across the plate) drops out."""
+    ends: dict = {}
+    for p in points:
+        for key, v in ((("row", round(p[1])), p[0]), (("col", round(p[0])), p[1])):
+            lo, hi = ends.get(key, ((v, p), (v, p)))
+            ends[key] = (min(lo, (v, p)), max(hi, (v, p)))
+    return list({e[1] for pair in ends.values() for e in pair})
+
+
+def hull(points: list) -> list:
+    """The convex hull, in order (monotone chain)."""
+    pts = sorted(set(points))
+
+    def half(seq: list) -> list:
+        out: list = []
+        for p in seq:
+            while len(out) > 1 and ((out[-1][0] - out[-2][0]) * (p[1] - out[-2][1])
+                                    - (out[-1][1] - out[-2][1]) * (p[0] - out[-2][0])) <= 0:
+                out.pop()
+            out.append(p)
+        return out[:-1]
+
+    return half(pts) + half(pts[::-1])
+
+
+def along(loop: list, step: float) -> list:
+    """Points every `step` around a closed polygon, so a long edge counts for its length."""
+    out = []
+    for a, b in zip(loop, loop[1:] + loop[:1]):
+        k = max(1, round(math.dist(a, b) / step))
+        out += [(a[0] + (b[0] - a[0]) * i / k, a[1] + (b[1] - a[1]) * i / k) for i in range(k)]
+    return out
+
+
+def segment_dist(p: tuple, a: tuple, b: tuple) -> float:
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    t = max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy or 1)))
+    return math.dist(p, (a[0] + t * dx, a[1] + t * dy))
+
+
+def skew(u: tuple, v: tuple) -> float:
+    """Degrees between two undirected lines."""
+    return math.degrees(math.acos(min(1.0, abs(u[0] * v[0] + u[1] * v[1]))))
+
+
+def edge_points(points: list, tol: float, like: tuple | None = None) -> list:
+    """The most points lying on one line within tol (RANSAC), so a stretch cut by a hand
+    doesn't pull it. `like`: only lines within MAX_SKEW of this direction."""
+    rng, best = random.Random(0), []
+    for _ in range(FIT_TRIES):
+        a, b = rng.sample(points, 2)
+        d = math.dist(a, b)
+        if d and (like is None or skew(((b[0] - a[0]) / d, (b[1] - a[1]) / d), like) <= MAX_SKEW):
+            on = [p for p in points
+                  if abs((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])) / d <= tol]
+            if len(on) > len(best):
+                best = on
+    return best
+
+
+def crossing(l1: tuple, l2: tuple) -> tuple:
+    (p, u), (q, v) = l1, l2
+    t = solve([[u[0], -v[0]], [u[1], -v[1]]], [q[0] - p[0], q[1] - p[1]])[0]
+    return (p[0] + t * u[0], p[1] + t * u[1])
+
+
+def plate_corners(points: list) -> list:
+    """tl, tr, br, bl where the plate's four edges cross. The plate is convex, so the
+    edges are on the mask's convex hull: a hand biting into an edge is bridged, and a
+    corner under a hand is found from its two edges. Opposite edges are near parallel
+    even in perspective: when two aren't, the one less square to the other pair is fitted
+    again along its opposite (a long bridge over a hand isn't an edge). Too little outline: corners()."""
+    seed = corners(points)
+    tol = EDGE_TOL * math.dist(seed[0], seed[2])
+    rim = along(hull(outline(points)), tol)
+    sides: list = [[] for _ in range(4)]
+    for p in rim:
+        sides[min(range(4), key=lambda i: segment_dist(p, seed[i], seed[(i + 1) % 4]))].append(p)
+    if min(map(len, sides)) < MIN_EDGE_POINTS:
+        return seed
+    edges = [edge_points(s, tol) for s in sides]
+    for i in (0, 1):
+        across = long_axis(max(edges[i + 1], edges[i - 1], key=len))[1]
+        square = (-across[1], across[0])
+        strong, weak = sorted((i, i + 2), key=lambda k: skew(long_axis(edges[k])[1], square))
+        along_strong = long_axis(edges[strong])[1]
+        if skew(long_axis(edges[weak])[1], along_strong) > MAX_SKEW:
+            edges[weak] = edge_points(sides[weak], tol, along_strong) or edges[weak]
+    lines = [long_axis(e) for e in edges]
+    return [crossing(lines[i - 1], lines[i]) for i in range(4)]
+
+
 def plate_quad(img_corners: list, a1: str) -> list:
     """Image corners ordered A1, A12, H12, H1 (A1 -> A12 is the long side)."""
     i = CORNERS.index(a1)
     q = img_corners
-    cw, ccw = q[(i + 1) % 4], q[(i - 1) % 4]
-    if math.dist(q[i], cw) >= math.dist(q[i], ccw):
+    cw, ccw, far = q[(i + 1) % 4], q[(i - 1) % 4], q[(i + 2) % 4]
+    # both pairs of sides: one side alone is short under perspective
+    if math.dist(q[i], cw) + math.dist(ccw, far) >= math.dist(q[i], ccw) + math.dist(cw, far):
         return [q[i], cw, q[(i + 2) % 4], ccw]
     return [q[i], ccw, q[(i + 2) % 4], cw]
 
@@ -199,18 +308,15 @@ def pitch_px(h: list) -> float:
     return (math.dist(p0, px) + math.dist(p0, py)) / 2
 
 
-def tip_end(points: list, toward: tuple) -> tuple:
-    """The end of the tip's long axis nearer `toward`."""
-    n = len(points)
-    mx, my = sum(p[0] for p in points) / n, sum(p[1] for p in points) / n
-    sxx = sum((p[0] - mx) ** 2 for p in points)
-    syy = sum((p[1] - my) ** 2 for p in points)
-    sxy = sum((p[0] - mx) * (p[1] - my) for p in points)
-    ang = 0.5 * math.atan2(2 * sxy, sxx - syy)
-    ax = (math.cos(ang), math.sin(ang))
+def tip_ends(points: list) -> list:
+    """The two ends of the tip's long axis."""
+    (mx, my), ax = long_axis(points)
     proj = lambda p: (p[0] - mx) * ax[0] + (p[1] - my) * ax[1]  # noqa: E731
-    ends = [min(points, key=proj), max(points, key=proj)]
-    return min(ends, key=lambda p: math.dist(p, toward))
+    return [min(points, key=proj), max(points, key=proj)]
+
+
+def on_plate(mm: tuple) -> bool:
+    return 0 <= mm[0] <= PLATE_MM[0] and 0 <= mm[1] <= PLATE_MM[1]
 
 
 def dwells(track: list, fps: float, dwell_s: float = DWELL_S, dwell_mm: float = DWELL_MM) -> list:
@@ -473,7 +579,7 @@ def locate(recs: dict, nframes: int, a1: str, say=_quiet) -> tuple:
             fails["no_plate"] += 1
             continue
         try:
-            quad = plate_quad(corners(mask_points(plate, 2)), a1)
+            quad = plate_quad(plate_corners(mask_points(plate, 2)), a1)
             h = plate_h(quad)
             pitches.append(pitch_px(h))
             mid = apply(solve_inv(h), (PLATE_MM[0] / 2, PLATE_MM[1] / 2))
@@ -485,7 +591,9 @@ def locate(recs: dict, nframes: int, a1: str, say=_quiet) -> tuple:
             fails["no_tip"] += 1
             continue
         pts = mask_points(tip)
-        last = tip_end(pts, last or mid)
+        ends = tip_ends(pts)
+        over = [e for e in ends if on_plate(apply(h, e))]
+        last = min(over if len(over) == 1 else ends, key=lambda e: math.dist(e, last or mid))
         mm = apply(h, last)
         per[n] = (plate, tip, quad, h, last, well_at(mm))
         track.append((n, mm, len(pts)))

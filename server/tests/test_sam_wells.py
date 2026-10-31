@@ -64,6 +64,26 @@ hp = sw.plate_h(sw.plate_quad(sw.corners(persp), "tl"))
 assert sw.well_at(sw.apply(hp, sw.apply(sw.solve_inv(hp), sw.well_center_mm(2, 3)))) == "C4"
 print("SW3 ok: grid from four corners, any A1 corner, perspective")
 
+# SW3b. A hand over a corner, a pen across the middle: the edges still cross at the true corner.
+blob = [(x, y) for x in range(0, 300, 2) for y in range(0, 200, 2)
+        if x + y < 440 and not (140 <= x <= 160 and 40 <= y <= 160)]  # br corner gone, a hole inside
+assert sw.corners(blob)[2] != (298, 198)
+RECT = [(0, 0), (298, 0), (298, 198), (0, 198)]
+for got, want in zip(sw.plate_corners(blob), RECT):
+    assert sw.math.dist(got, want) < 3, (got, want)
+# A hand biting into the top edge: the hull bridges it.
+bitten = [(x, y) for x in range(0, 300, 2) for y in range(0, 200, 2) if not (60 < x < 240 and y < 120)]
+for got, want in zip(sw.plate_corners(bitten), RECT):
+    assert sw.math.dist(got, want) < 3, (got, want)
+# The bridge over the hand is longer than what shows of the right edge: not parallel to the left, not an edge.
+cut = [(x, y) for x in range(0, 300, 2) for y in range(0, 200, 2) if x + y < 360]
+right = sw.plate_corners(cut)[1:3]
+assert abs(right[0][0] - 298) < 12 and abs(right[1][0] - 298) < 12, right
+box = [(0, 0), (10, 0), (10, 10), (0, 10)]
+for got, want in zip(sw.plate_corners(box), box):  # four points: the plain box
+    assert sw.math.dist(got, want) < 1, (got, want)
+print("SW3b ok: corners come from the edges, a hidden one included")
+
 
 # SW4. Settings: a 0.8 s stop at the 2nd target the 1 s dwell misses, the 0.5 s default catches;
 # the best setting is the one with the most hits.
@@ -80,8 +100,6 @@ best = cmp["rows"][cmp["best"]]
 assert len(cmp["rows"]) == 9 and best["dwell_s"] == sw.DWELL_S and best["hits"] == 3, best
 print("SW4 ok: every dwell setting on the same clips; the best one marked")
 
-PLATE_BOX_4C = (0, 0, 639, 479)
-
 # SW4b. A visit: 2 missing frames don't break it, 3 do; its well is the cell it stayed in longest.
 c3, c4 = sw.well_center_mm(2, 2), sw.well_center_mm(2, 3)
 edge = (c3[0] + 4, c3[1])  # C3's cell, outside its circle
@@ -94,15 +112,22 @@ assert [(w, f0, f1) for w, _, f0, f1 in sw.found_wells(pts([0, 1, 4, 5], c3), 2)
 assert sw.found_wells(pts([0, 4], c3), 2) == []
 print("SW4b ok: a visit bridges 2 lost frames and takes its longest cell")
 
-# SW4c. The tip end follows the last frame's end, whichever side of the plate's middle it is.
-pen = [(100 + i, 100) for i in range(50)]
-assert sw.tip_end(pen, (0, 100)) == (100, 100) and sw.tip_end(pen, (500, 100)) == (149, 100)
-# frame 0: the end nearer the middle (x 320) is 300, of a pen lying 300-200; then it slides past
-# the middle and the end stays the pen's left one, now the farther from the middle.
+# SW4c. The tip end: the end over the plate; both over it: the end the last frame had.
+assert sw.tip_ends([(100 + i, 100) for i in range(50)]) == [(100, 100), (149, 100)]
+PLATE_BOX_4C = (0, 0, 639, 479)
+# frame 0: both ends over the plate, the one nearer the middle (x 320) is 300; then it slides
+# past the middle and stays the left end, now the farther one.
 pen_boxes = ((200, 200, 300, 204), (340, 200, 440, 204))
 recs = {n: {1: {"box": PLATE_BOX_4C, "mask": None}, 2: {"box": b, "mask": None}} for n, b in enumerate(pen_boxes)}
 track4c, per4c, *_ = sw.locate(recs, 2, "tl")
 assert [per4c[n][4][0] for n in (0, 1)] == [300, 340], per4c
+# the first frame's end is the back of the pen; once the other end is alone on the plate, that's the tip
+plate_small = {"box": (100, 100, 300, 250), "mask": None}
+pen_boxes = ((120, 150, 400, 154), (120, 150, 900, 154))
+recs = {n: {1: plate_small, 2: {"box": b, "mask": None}} for n, b in enumerate(pen_boxes)}
+recs[0][2] = {"box": (310, 150, 900, 154), "mask": None}  # neither end on the plate
+track4c, per4c, *_ = sw.locate(recs, 2, "tl")
+assert per4c[0][4][0] == 310 and per4c[1][4][0] == 120, per4c
 print("SW4c ok: the tip end keeps to the same end from frame to frame")
 
 # SW5. Endpoints on a real (tiny) clip, SAM faked: the tip stops on each target.
