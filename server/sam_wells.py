@@ -1001,8 +1001,8 @@ def ref_candidate(sam, gray, plate: dict, frame: int) -> dict | None:
 
 def follow_chunk(frames: dict, recs: dict, ref: dict, start: int, plate: dict) -> dict:
     """{"quads", ...} for a chunk from the session's reference. `plate` (SAM's, on frame `start`)
-    says roughly where the plate is now, and matching takes it from there both ways. Only the tip
-    is tracked, so a hand on the plate isn't masked out: RANSAC drops its matches."""
+    says roughly where the plate is now, and matching takes it from there both ways. It runs
+    beside SAM's video, so neither the hand nor the tip is masked out: RANSAC drops their matches."""
     import cv2
     import numpy as np
     orb = cv2.ORB_create(ORB_FEATURES)
@@ -1028,41 +1028,43 @@ def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) 
     looks = [(2 * i + 1) * nframes // (2 * CHUNK_TIP_LOOKS) for i in range(CHUNK_TIP_LOOKS)]
     fdir = frames_dir(clip, looks)
     t0 = time.perf_counter()
-    with ThreadPoolExecutor(1) as pool:
+    # each step that doesn't need another's result runs beside it: the chunk waits for the longest
+    with ThreadPoolExecutor(3) as pool:
+        sending = pool.submit(send_video, clip, out_dir, sam, fps, t)
         finding_plate = pool.submit(lambda: next(filter(None, (hits_on(sam, PLATE, fdir, [n])
                                                                for n in sorted(looks, key=lambda n: abs(n - nframes / 2)))), [None]))
         tips = hits_on(sam, pointer, fdir, looks)
         plate0 = finding_plate.result()[0]
-    t["first_find_s"] = time.perf_counter() - t0
-    gray = gray_frames(clip, nframes)
-    if plate0:
-        def offer() -> None:
-            cand = ref_candidate(sam, gray[plate0[0]], plate0[1], plate0[0])
-            if cand:
-                session.offer({**cand, "chunk": out_dir.name})
-        if session.ref() is None:
-            t0 = time.perf_counter()
-            offer()
-            t["reference_s"] = time.perf_counter() - t0
-        else:  # a better reference can land later; this chunk needn't wait for the call
-            threading.Thread(target=offer, daemon=True).start()
-    if not plate0 or not tips:
+        t["first_find_s"] = time.perf_counter() - t0
+        gray = gray_frames(clip, nframes)
+        if plate0:
+            def offer() -> None:
+                cand = ref_candidate(sam, gray[plate0[0]], plate0[1], plate0[0])
+                if cand:
+                    session.offer({**cand, "chunk": out_dir.name})
+            if session.ref() is None:
+                t0 = time.perf_counter()
+                offer()
+                t["reference_s"] = time.perf_counter() - t0
+            else:  # a better reference can land later; this chunk needn't wait for the call
+                threading.Thread(target=offer, daemon=True).start()
+        ref = session.ref()
+        if not plate0 or not tips or ref is None:
+            shutil.rmtree(fdir)
+            sending.result()
+            t["total_s"] = time.perf_counter() - t_all
+            why = "no plate" if not plate0 else "no tip" if not tips else "no reference"
+            return {"frames": nframes, "fps": fps, "track": [], "timing": t, "why": why}
+        following = pool.submit(follow_chunk, gray, {}, ref, plate0[0], plate0[1])
+        # every look that saw the tip prompts it, in one video call: a second round repeats the whole video
+        _, recs, rounds = track_video(sending.result(), sam, {2: tips}, nframes, fps, fdir, pointer, t, max_rounds=1)
         shutil.rmtree(fdir)
-        t["total_s"] = time.perf_counter() - t_all
-        return {"frames": nframes, "fps": fps, "track": [], "timing": t, "why": "no plate" if not plate0 else "no tip"}
-    # every look that saw the tip prompts it, in one video call: a second round repeats the whole video
-    _, recs, rounds = track_video(clip, out_dir, sam, {2: tips}, nframes, fps, fdir, pointer, t, max_rounds=1)
-    shutil.rmtree(fdir)
-    t0 = time.perf_counter()
-    decode_masks(recs)
-    t["masks_s"] = time.perf_counter() - t0
-    ref = session.ref()
-    if ref is None:
-        t["total_s"] = time.perf_counter() - t_all
-        return {"frames": nframes, "fps": fps, "track": [], "timing": t, "why": "no reference"}
-    t0 = time.perf_counter()
-    followed = follow_chunk(gray, recs, ref, plate0[0], plate0[1])
-    t["follow_s"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        decode_masks(recs)
+        t["masks_s"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        followed = following.result()
+        t["follow_wait_s"] = time.perf_counter() - t0
     track, *_ = locate(recs, nframes, a1, quads=followed["quads"])
     t["total_s"] = time.perf_counter() - t_all
     return {"frames": nframes, "fps": fps, "track": [[n, mm[0], mm[1], a] for n, mm, a in track], "timing": t,
@@ -1105,12 +1107,8 @@ def locate(recs: dict, nframes: int, a1: str, say=_quiet, quads: dict | None = N
     return track, per, pitches, fails
 
 
-def track_video(clip: Path, out_dir: Path, sam, prompts: dict, nframes: int, fps: float, fdir: Path,
-                pointer: str, t: dict, say=_quiet, max_rounds: int = MAX_ROUNDS) -> tuple:
-    """The clip re-encoded, uploaded and tracked from `prompts`, found again when the tip goes
-    missing (prompts grows). -> (SAM's text, its records, rounds); t gets the times."""
-    first_match = next(iter(prompts.values()))[0][1]
-    size = (first_match["w"], first_match["h"])
+def send_video(clip: Path, out_dir: Path, sam, fps: float, t: dict, say=_quiet) -> dict:
+    """The clip re-encoded and uploaded -> SAM's input part."""
     t0 = time.perf_counter()
     say("Uploading the clip to SAM")
     sent = out_dir / "clip_sam.mp4"
@@ -1119,6 +1117,15 @@ def track_video(clip: Path, out_dir: Path, sam, prompts: dict, nframes: int, fps
     part = sam.upload(sent)
     sent.unlink()
     t["upload_s"] = time.perf_counter() - t0 - t["encode_s"]
+    return part
+
+
+def track_video(part: dict, sam, prompts: dict, nframes: int, fps: float, fdir: Path,
+                pointer: str, t: dict, say=_quiet, max_rounds: int = MAX_ROUNDS) -> tuple:
+    """The uploaded clip tracked from `prompts`, found again when the tip goes missing
+    (prompts grows). -> (SAM's text, its records, rounds); t gets the times."""
+    first_match = next(iter(prompts.values()))[0][1]
+    size = (first_match["w"], first_match["h"])
     t["video_s"], t["video_first_frame_s"], t["refind_s"] = 0.0, 0.0, 0.0
     gap = max(2, round(fps * GAP_S))
     rounds = 0
@@ -1172,7 +1179,8 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
     if missing:
         raise RuntimeError(f"SAM found no {' and no '.join(missing)} on any sampled frame")
     prompts = {1: [plate0], 2: [tip0]}
-    text, recs, rounds = track_video(clip, out_dir, sam, prompts, nframes, fps, fdir, pointer, t, say)
+    part = send_video(clip, out_dir, sam, fps, t, say)
+    text, recs, rounds = track_video(part, sam, prompts, nframes, fps, fdir, pointer, t, say)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "sam_video.txt").write_text(text)
     (out_dir / "detections.json").write_text(json.dumps(
