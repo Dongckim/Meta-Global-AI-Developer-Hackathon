@@ -473,5 +473,10 @@ assert r17["track"] == [] and r17["why"] == "no tip", r17
 session17 = Ref16()
 r17 = sw.track_chunk(clip, "tl", FakeSam(), out17 / "1", "pen", session17)
 assert session17.got and r17["track"], r17
+# The pen and the hand behind it are out of ORB's region when there's no plate mask; the plate's far side stays.
+gray17, quad17 = np.zeros((800, 800), np.uint8), [(100, 300), (700, 300), (700, 700), (100, 700)]
+pen17 = [(400 + i * 0.1, 450 + i) for i in range(300)]  # end over the plate, going down and off it
+region17 = sw._region(gray17, quad17, pen17, None)
+assert region17[500, 400] == 0 and region17[740, 400] == 0 and region17[500, 150] == 255 and region17[320, 650] == 255
 print("SW17 ok: a chunk without a tip is empty, one with a tip tracks")
 print("ALL PASS")

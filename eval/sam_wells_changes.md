@@ -22,3 +22,8 @@
 ## 2026-10-31 (continuous mode, no baseline change)
 - new rule filled(): FILL_S 1.0, FILL_WINDOW_S 3.0, STOP_MM_S 20, SINK_RATIO off; the clip rule (found_wells) is unchanged
 - why: without spoken wells a stay is the only cue. Cached desk 41/55 false 8, hand 16/16 false 0. The tip-sinking cue gave desk 27/55 false 6, hand 13/16, so it stays off.
+
+## 2026-10-31 (continuous chunks: frames to SAM, not a judging value)
+- tried SAM at 3 and 3.5 fps on the iPad sessions 150444, 144925, 145113; stays 7 fps
+- why: 18 wells at 7 fps all as first judged; 3 fps changed 3 (H5 to G5, F5 to F4, D6 and D7 to D7 and D8), 3.5 fps changed 1 (H5 to G5). Lost tracking was about the same. Mean delay 32.6-39.2 s at 3 fps, 35.9-40.8 s at 3.5, 41.4-50.4 s at 7.
+- also: ORB leaves out the pen and the hand behind it, which brought 144925 back to H5 at 7 fps; it has to wait for SAM's pen, so plate following no longer runs beside the video.
