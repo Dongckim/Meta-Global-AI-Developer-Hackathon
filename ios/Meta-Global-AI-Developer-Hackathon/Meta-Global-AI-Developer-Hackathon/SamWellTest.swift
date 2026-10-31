@@ -177,6 +177,15 @@ enum SamWellAPI {
             let well: String
             let frame: Int
             let f0: Int
+            let confidence: String
+        }
+        struct Summary: Decodable {
+            let sure: Int
+            let notSure: Int
+            let hit: [String]
+            let outside: [String]
+            let missed: [String]
+            let toCatch: [String]
         }
         struct Chunk: Decodable {
             let n: Int
@@ -192,16 +201,18 @@ enum SamWellAPI {
         }
         let id: String
         let wells: [Well]
+        let targets: [String]
+        let summary: Summary
         let done: Bool
         let chunks: [Chunk]
         let references: [Reference]
     }
 
-    static func newLive(a1: String, pointer: String) async throws -> Live {
+    static func newLive(a1: String, pointer: String, targets: String) async throws -> Live {
         var req = URLRequest(url: url("live"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["a1": a1, "pointer": pointer])
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["a1": a1, "pointer": pointer, "targets": targets])
         return try await send(req)
     }
 

@@ -102,6 +102,7 @@ final class SamWellRun {
     struct Seen: Identifiable {
         let id: String
         let well: String
+        let sure: Bool
         /// Seconds from the tip stopping at the well to the well showing here.
         let delay: Double?
     }
@@ -125,10 +126,10 @@ final class SamWellRun {
         return { chunks.frame($0) }
     }
 
-    func start(a1: String, pointer: String, fps: Int) async {
+    func start(a1: String, pointer: String, targets: String, fps: Int) async {
         guard phase == .idle else { return }
         do {
-            let s = try await SamWellAPI.newLive(a1: a1, pointer: pointer)
+            let s = try await SamWellAPI.newLive(a1: a1, pointer: pointer, targets: targets)
             id = s.id
             live = s
         } catch {
@@ -179,7 +180,7 @@ final class SamWellRun {
         let now = CACurrentMediaTime()
         for w in s.wells where !seen.contains(where: { $0.id == "\(w.well)-\(w.frame)" }) {
             let delay = chunks?.arrival(w.f0).map { now - $0 }
-            seen.append(Seen(id: "\(w.well)-\(w.frame)", well: w.well, delay: delay))
+            seen.append(Seen(id: "\(w.well)-\(w.frame)", well: w.well, sure: w.confidence == "sure", delay: delay))
             Log.dat.info("[samwell] live \(w.well, privacy: .public) frame \(w.frame) delay \(delay ?? -1)")
         }
         if s.done, phase == .finishing { phase = .done }
@@ -210,14 +211,20 @@ struct SamWellLiveView: View {
     @State private var aimState = PlateAimState()
     @State private var aimQuad: [CGPoint]?
     @State private var finder: PlateFinder?
+    /// Debug only: the wells the tester means to fill, saved with the session to check against.
+    @State private var targets = ""
+
+    private func name(_ s: SamWellRun.Seen) -> String { s.sure ? s.well : "\(s.well)?" }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text(run.seen.last?.well ?? "–")
+                Text(run.seen.last.map(name) ?? "–")
                     .font(.system(size: 72, weight: .bold, design: .rounded))
+                    .opacity(run.seen.last?.sure == false ? 0.35 : 1)
                     .frame(maxWidth: .infinity)
-                PlateCells(a1: a1, wells: Dictionary(run.seen.map { ($0.well, 1) }, uniquingKeysWith: +))
+                PlateCells(a1: a1, sure: Set(run.seen.filter(\.sure).map(\.well)),
+                           notSure: Set(run.seen.filter { !$0.sure }.map(\.well)))
                 if run.phase == .idle || run.phase == .recording {
                     ZStack(alignment: .topLeading) {
                         SamWellPreview(dat: dat, aimQuad: aimQuad)
@@ -232,6 +239,8 @@ struct SamWellLiveView: View {
                 }
                 switch run.phase {
                 case .idle:
+                    TextField("Wells you'll fill (optional): C3, F7", text: $targets)
+                        .textFieldStyle(.roundedBorder).textInputAutocapitalization(.characters)
                     Button("Record") { Task { await begin() } }
                         .buttonStyle(.borderedProminent).disabled(aimQuad == nil)
                     Text(aimQuad == nil ? "Waiting for the plate in view…" : "Plate in view.").foregroundStyle(.secondary)
@@ -265,7 +274,7 @@ struct SamWellLiveView: View {
     }
 
     private func begin() async {
-        await run.start(a1: a1, pointer: pointer, fps: Int(fps))
+        await run.start(a1: a1, pointer: pointer, targets: targets, fps: Int(fps))
         guard let tap = run.tap, let finder else { return }
         let cam = cam
         dat?.frameTap.set { cam.frame($0); finder.frame($0); tap($0) }
@@ -279,11 +288,23 @@ struct SamWellLiveView: View {
         }
     }
 
+    private func list(_ wells: [String]) -> String { wells.isEmpty ? "none" : wells.joined(separator: ", ") }
+
     private var summary: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Summary").font(.title2.bold())
             ForEach(Array(run.seen.enumerated()), id: \.element.id) { i, s in
-                Text("\(i + 1). \(s.well)" + (s.delay.map { "   \(Int($0)) s" } ?? "")).font(.title2.monospaced())
+                Text("\(i + 1). \(name(s))" + (s.delay.map { "   \(Int($0)) s" } ?? "")).font(.title2.monospaced())
+                    .opacity(s.sure ? 1 : 0.35)
+            }
+            if let sm = run.live?.summary {
+                Text("Sure \(sm.sure) · not sure \(sm.notSure)").font(.headline)
+                if run.live?.targets.isEmpty == false {
+                    Text("Hit: \(list(sm.hit))")
+                    Text("Missed: \(list(sm.missed))")
+                    Text("Outside the list: \(list(sm.outside))")
+                    Text("To catch (not sure only): \(list(sm.toCatch))")
+                }
             }
             if run.seen.isEmpty { Text("No wells").foregroundStyle(.secondary) }
             let delays = run.seen.compactMap(\.delay)
@@ -302,10 +323,11 @@ struct SamWellLiveView: View {
     }
 }
 
-/// The plate as cells, seen as `a1` says (A1's corner top left when "tl"). A well with a count is filled and named.
+/// The plate as cells, seen as `a1` says (A1's corner top left when "tl"). A sure well is filled; a not-sure one is faint, "C4?".
 struct PlateCells: View {
     let a1: String
-    let wells: [String: Int]
+    let sure: Set<String>
+    let notSure: Set<String>
 
     private func well(_ row: Int, _ col: Int) -> String {
         let r = a1 == "bl" || a1 == "br" ? 7 - row : row
@@ -319,12 +341,13 @@ struct PlateCells: View {
                 GridRow {
                     ForEach(0..<12, id: \.self) { col in
                         let name = well(row, col)
-                        let hit = wells[name] != nil
-                        Text(name)
+                        let hit = sure.contains(name)
+                        let maybe = !hit && notSure.contains(name)
+                        Text(maybe ? "\(name)?" : name)
                             .font(.caption2.monospacedDigit().weight(hit ? .bold : .regular))
                             .foregroundStyle(hit ? .white : .secondary)
                             .frame(maxWidth: .infinity, minHeight: 34)
-                            .background(hit ? Color.green : Color.secondary.opacity(0.15), in: Circle())
+                            .background(hit ? Color.green : maybe ? Color.green.opacity(0.2) : Color.secondary.opacity(0.15), in: Circle())
                     }
                 }
             }
