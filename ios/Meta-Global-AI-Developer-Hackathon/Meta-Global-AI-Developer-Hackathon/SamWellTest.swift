@@ -7,6 +7,7 @@
 #if DEBUG
 import AVFoundation
 import MWDATCamera
+import os
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -179,7 +180,7 @@ enum SamWellAPI {
 /// Counts stream frames (size, fps) and, while recording, writes them to an
 /// H.264 .mp4 at full size. Frames arrive on the SDK's thread.
 final class WellCam: @unchecked Sendable {
-    struct Clip { let url: URL; let width: Int; let height: Int; let fps: Double }
+    struct Clip { let url: URL; let width: Int; let height: Int; let fps: Double; let report: String }
 
     private let queue = DispatchQueue(label: "samwell.cam")
     private var size = (0, 0)
@@ -191,6 +192,13 @@ final class WellCam: @unchecked Sendable {
     private var last: CMTime?
     private var written = 0
     private var recording = false
+    // what the stream really delivered while recording
+    private var arrived = 0
+    private var refused = 0
+    private var late = 0
+    private var worstGap = 0.0
+    private var lastArrival: Double?
+    private var sizes = Set<String>()
 
     /// "1280×720 · 14.8 fps" over the last second, or nil before frames.
     var rate: String? {
@@ -211,11 +219,20 @@ final class WellCam: @unchecked Sendable {
             stamps.append(now)
             stamps.removeAll { now - $0 > 1 }
             guard recording else { return }
+            arrived += 1
+            sizes.insert("\(size.0)x\(size.1)")
+            if let a = lastArrival {
+                worstGap = max(worstGap, now - a)
+                if now - a > 1.5 / Double(fps) { late += 1 }
+            }
+            lastArrival = now
             if writer == nil { open(width: size.0, height: size.1, at: pts) }
-            guard let input, let adaptor, input.isReadyForMoreMediaData else { return }
+            guard let input, let adaptor, input.isReadyForMoreMediaData else { refused += 1; return }
             if adaptor.append(pb, withPresentationTime: pts) {
                 written += 1
                 last = pts
+            } else {
+                refused += 1
             }
         }
     }
@@ -247,6 +264,7 @@ final class WellCam: @unchecked Sendable {
             self.fps = fps
             pendingURL = FileManager.default.temporaryDirectory.appending(path: "samwell-\(UUID().uuidString).mp4")
             writer = nil; input = nil; adaptor = nil; first = nil; last = nil; written = 0
+            arrived = 0; refused = 0; late = 0; worstGap = 0; lastArrival = nil; sizes = []
             recording = true
         }
     }
@@ -254,9 +272,9 @@ final class WellCam: @unchecked Sendable {
     /// Stops; the clip moved into Documents (Files app) named with its size
     /// and frame rate, or nil when no frame came.
     func stop() async -> Clip? {
-        let (w, i, n, f, l, sz) = queue.sync {
+        let (w, i, n, f, l, sz, got, no, slow, gap, seen, asked) = queue.sync {
             recording = false
-            return (writer, input, written, first, last, size)
+            return (writer, input, written, first, last, size, arrived, refused, late, worstGap, sizes, fps)
         }
         guard let w, let i, n > 1, let f, let l else { return nil }
         i.markAsFinished()
@@ -266,10 +284,18 @@ final class WellCam: @unchecked Sendable {
         let df = DateFormatter()
         df.dateFormat = "yyyyMMdd-HHmmss"
         let stamp = df.string(from: .now)
-        let name = "samwell_\(stamp)_\(sz.0)x\(sz.1)_\(String(format: "%.1f", fps))fps.mp4"
+        // the glasses' link is whatever's on the route now: HFP shares its Bluetooth with the stream
+        let hfp = AVAudioSession.sharedInstance().currentRoute.inputs.contains { $0.portType == .bluetoothHFP }
+        let name = "samwell_\(stamp)_\(sz.0)x\(sz.1)_\(String(format: "%.1f", fps))fps_\(hfp ? "hfp" : "nohfp").mp4"
         let dest = URL.documentsDirectory.appending(path: name)
         try? FileManager.default.moveItem(at: w.outputURL, to: dest)
-        return Clip(url: dest, width: sz.0, height: sz.1, fps: fps)
+        let seconds = (l - f).seconds
+        let bytes = (try? dest.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let report = "\(seen.sorted().joined(separator: ", ")) · HFP \(hfp ? "on" : "off") · \(String(format: "%.2f", fps)) fps of \(asked) "
+            + "· \(got) frames over \(String(format: "%.1f", seconds)) s · \(n) written, \(no) refused, \(slow) late "
+            + "· worst gap \(Int(gap * 1000)) ms · file \(String(format: "%.1f", Double(bytes) * 8 / max(0.001, seconds) / 1_000_000)) Mbps"
+        Log.dat.info("[samwell] clip \(report, privacy: .public)")
+        return Clip(url: dest, width: sz.0, height: sz.1, fps: fps, report: report)
     }
 }
 
@@ -351,6 +377,7 @@ struct SamWellSessionView: View {
     @State private var recordingUntil: Date?
     @State private var uploading = false
     @State private var uploadMB = 0.0
+    @State private var clipReport: String?
     @State private var showing: Int?  // an attempt's result open; nil: capture the next
     @State private var picking = false
     @State private var pickedClip: URL?
@@ -469,6 +496,7 @@ struct SamWellSessionView: View {
                 }
             }
             .frame(maxWidth: .infinity)
+            if let clipReport { Text("Last clip: \(clipReport)").font(.caption.monospacedDigit()) }
             Toggle("Sounds", isOn: $soundOn)
             Toggle("Say \"Plate in view\"", isOn: $sayPlate)
             Picker("Length", selection: $seconds) {
@@ -522,6 +550,7 @@ struct SamWellSessionView: View {
             while let u = recordingUntil, u > .now { try? await Task.sleep(for: .milliseconds(100)) }
             recordingUntil = nil
             guard let clip = await cam.stop() else { error = "No frames were recorded."; return }
+            clipReport = clip.report
             await send(clip.url, targets: targets, source: "stream")
         }
     }
