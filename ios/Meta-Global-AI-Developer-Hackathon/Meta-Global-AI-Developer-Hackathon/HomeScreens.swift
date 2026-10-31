@@ -182,7 +182,7 @@ struct ProtocolsHome: View {
                     }
                     .font(Theme.ui(28 * u))
                     .padding(.horizontal, 32 * u).frame(height: 80 * u)
-                    .background(Capsule().fill(Theme.chip))
+                    .background(Capsule().fill(Theme.chip)).onLight()
                 }
                 .buttonStyle(.plain)
             }

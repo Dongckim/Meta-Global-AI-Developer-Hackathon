@@ -57,18 +57,29 @@ enum Theme {
 
     // MARK: - Light canvas (Figma Glassistant "ver 2 - Final", node 20:31108)
 
+    /// One token, two looks: Private is the dark scheme (Figma section 43:2).
+    /// White surfaces go back to light with `onLight()`.
+    private static func modal(_ light: Color, _ dark: Color) -> Color {
+        let l = UIColor(light), d = UIColor(dark)
+        return Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? d : l })
+    }
+
     /// Screen background.
-    static let canvas = Color(hex: 0xECECEF)
+    static let canvas = modal(Color(hex: 0xECECEF), Color(hex: 0x3A3A3C))
     /// Primary text.
-    static let text1 = Color(hex: 0x1D1D1F)
+    static let text1 = modal(Color(hex: 0x1D1D1F), .white)
     /// Secondary text.
-    static let text2 = Color(hex: 0x86868B)
+    static let text2 = modal(Color(hex: 0x86868B), Color(hex: 0xD1D1D6))
     /// Chip secondary text.
-    static let text3 = Color(hex: 0x6E6E73)
+    static let text3 = modal(Color(hex: 0x6E6E73), Color(hex: 0xC7C7CC))
+    /// A progress segment not reached yet, on the canvas.
+    static let segmentRest = modal(.white, Color(hex: 0x7C7C80))
+    /// Legend dots stay readable on the dark canvas.
+    static let legendRing = modal(.clear, Color.white.opacity(0.7))
     /// Unselected card.
     static let cardOff = Color(hex: 0xE2E2E7)
     /// Bottom-right blue glow: rgba(0,113,227,.11) blur 118.
-    static let canvasGlow = polishBlue.opacity(0.11)
+    static let canvasGlow = modal(polishBlue.opacity(0.11), polishBlue.opacity(0.3))
     /// Plate axis labels.
     static let text4 = Color(hex: 0xAEAEB2)
     /// Upcoming (not started) timer wells.
@@ -82,7 +93,7 @@ enum Theme {
     /// Header bar of a document card (Start ⑤e).
     static let cardHead = Color(hex: 0xF5F5F7)
     /// Frosted choice card (Start ⑤a/⑤b): a light glass over the canvas, white rim.
-    static let cardGlass = Color(hex: 0xEEEEF1)
+    static let cardGlass = modal(Color(hex: 0xEEEEF1), Color.white.opacity(0.75))
     /// Plate groups in plan order (design gc / dot / gb); cycles past three.
     static let groupTones: [Color] = [Color(hex: 0x8E8E93), Color(hex: 0x1D1D1F), Color(hex: 0x5A5A5E)]
     static func groupTone(_ index: Int) -> Color { groupTones[index % groupTones.count] }

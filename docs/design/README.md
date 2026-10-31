@@ -44,7 +44,7 @@ Status: **done** = matches ver 2 · **old** = exists in the pre-ver-2 style ·
 | After run | ⑨c Where to | 37:14393 | frame | 4 |
 | After run | ⑨d Exported | 37:14427 | frame | 4 |
 | — | ⑥ Learn | 37:14460 | later (out of scope) | — |
-| Private | Private variants of the above | section 43:2 | mode tokens (Theme.RunMode) | — |
+| Private | Private variants of the above | section 43:2 | done: dark scheme on screens whose header says Private; `Theme` tokens, white surfaces `onLight()`. Variant ⑤a not used (its "Nothing leaves this iPad" isn't true) | — |
 
 Reference PNGs exported from Figma live in `docs/design/ref/` (read only, not
 committed). Milo's line at the top of each screen is the registry screen's
@@ -72,6 +72,12 @@ nearest frame's parts and should get a look.
   28). Awake: crossfade to the real screen (`Motion.screen`). Failed: a 900
   wide card, "The private model didn't wake up." with Try again (primary) and
   Use Full mode (secondary), both 360 wide.
+- **⑤a Mode, Private variant (differs from the design)**: its line "Nothing
+  leaves this iPad" isn't true, so it isn't used. What happens: speech is
+  transcribed on the iPad; voice commands and imports run on Glimmer on our
+  server; search and photo questions use the Meta API after a card's Yes.
+- **Home, Mode, protocol detail, Run record stay light in Private**: the
+  design has no Private variant of them.
 - **⑨0 Final protocol**: the ⑤c-⑤e review screens in final protocol mode
   (plan → run, Changed badge, the step's changes with their record event;
   Keep as run / Use plan on a timer step). See `handoff.md`.

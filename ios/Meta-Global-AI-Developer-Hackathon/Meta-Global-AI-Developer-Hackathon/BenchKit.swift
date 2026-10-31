@@ -24,9 +24,12 @@ struct BenchCanvas: View {
 }
 
 extension View {
+    /// Dark text on a white surface, whatever the canvas behind it.
+    func onLight() -> some View { environment(\.colorScheme, .light) }
+
     /// White card: radius 32, three-layer soft shadow.
     func benchCard(radius: CGFloat = 32, fill: Color = Theme.card) -> some View {
-        background {
+        onLight().background {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .fill(fill)
                 .shadow(color: .black.opacity(0.04), radius: 1, y: 1)
@@ -86,6 +89,7 @@ struct SayButton: View {
             }
         }
         .buttonStyle(.plain)
+        .onLight()
         .accessibilityLabel(button.greyed ? "\(word), \(button.note ?? "unavailable")" : word)
     }
 }
@@ -104,7 +108,7 @@ struct ControlChips: View {
                     (Say.prefix(Theme.polishBlue) + Text(b.say).foregroundStyle(Theme.text1))
                         .font(Theme.ui(20 * u, weight: .medium)).lineLimit(1)
                         .padding(.horizontal, 18 * u).frame(height: 44 * u)
-                        .background(Capsule().fill(Theme.chip))
+                        .background(Capsule().fill(Theme.chip)).onLight()
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(b.say)
@@ -169,6 +173,7 @@ struct TimerChip: View {
                 .frame(width: Theme.Layout.chipWidth * unit, height: Theme.Layout.chipHeight * unit)
                 .background(Capsule().fill(Theme.chip)
                     .shadow(color: .black.opacity(0.04), radius: 1, y: 1))
+                .onLight()
                 .accessibilityElement(children: .combine)
             }
         }
@@ -293,7 +298,7 @@ struct StepBars: View {
     var count: Int
     var done: Int
     var current: Int
-    var rest: Color = Theme.card
+    var rest: Color = Theme.segmentRest
     /// Design px -> points.
     var u: CGFloat
     @State private var grown = false

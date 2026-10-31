@@ -419,7 +419,7 @@ struct PlanCheckScreen: View {
                 ForEach(Array(draft.plan.conditions.keys.sorted().enumerated()), id: \.element) { i, k in
                     let c = draft.plan.conditions[k]!
                     HStack(spacing: 14 * u) {
-                        Circle().fill(Theme.groupTone(i)).frame(width: 12 * u, height: 12 * u)
+                        Circle().fill(Theme.groupTone(i)).overlay(Circle().strokeBorder(Theme.legendRing)).frame(width: 12 * u, height: 12 * u)
                         Text(c.label).foregroundStyle(Theme.text1)
                         Spacer(minLength: 0)
                         Text(wellRuns(c.wells)).foregroundStyle(Theme.text2)

@@ -213,7 +213,7 @@ struct ConditionBars: View {
             // design ① legend: each condition and its wells on the plate ("n 7"), from the server
             ForEach(lab.bench?.legend ?? [], id: \.key) { g in
                 HStack(spacing: 12 * u) {
-                    Circle().fill(lab.groupIndex(g.key).map(Theme.groupTone) ?? Theme.text1)
+                    Circle().fill(lab.groupIndex(g.key).map(Theme.groupTone) ?? Theme.text1).overlay(Circle().strokeBorder(Theme.legendRing))
                         .frame(width: 12 * u, height: 12 * u)
                     Text(g.label).font(Theme.ui(28 * u)).foregroundStyle(Theme.text1)
                     (Text("n ").foregroundStyle(Theme.text2)
@@ -343,7 +343,7 @@ struct TimerList: View {
         .lineLimit(1).minimumScaleFactor(0.6)
         .padding(.horizontal, 12 * u)
         .frame(height: 43 * u)
-        .background(Capsule().fill(Theme.chip).shadow(color: .black.opacity(0.04), radius: 1, y: 1))
+        .background(Capsule().fill(Theme.chip).shadow(color: .black.opacity(0.04), radius: 1, y: 1)).onLight()
         .opacity(blink ? 0.25 : 1)
     }
 
@@ -363,7 +363,7 @@ struct TimerList: View {
         .lineLimit(1).minimumScaleFactor(0.6)
         .padding(.horizontal, 12 * u)
         .frame(height: 43 * u)
-        .background(Capsule().fill(Theme.chip).shadow(color: .black.opacity(0.04), radius: 1, y: 1))
+        .background(Capsule().fill(Theme.chip).shadow(color: .black.opacity(0.04), radius: 1, y: 1)).onLight()
     }
 
     /// Next plan step with a duration, after the current one.

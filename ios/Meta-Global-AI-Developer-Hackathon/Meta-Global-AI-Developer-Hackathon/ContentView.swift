@@ -263,7 +263,7 @@ struct ContentView: View {
         .overlay(alignment: .bottom) {
             if let done = importPill {
                 GeometryReader { g in
-                    LoadPill(done: done, u: Theme.Layout.unit(g.size))
+                    LoadPill(done: done, u: Theme.Layout.unit(g.size)).onLight()
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                         .padding(.bottom, 48 * Theme.Layout.unit(g.size))
                 }
@@ -273,7 +273,7 @@ struct ContentView: View {
         }
         .overlay(alignment: .bottom) {
             if let note = importNote {
-                Text(note).font(Theme.ui(22)).foregroundStyle(Theme.text1)
+                Text(note).font(Theme.ui(22)).foregroundStyle(Theme.text1).onLight()
                     .multilineTextAlignment(.center).lineLimit(3)
                     .padding(.horizontal, 28).padding(.vertical, 16)
                     .background(Capsule().fill(Theme.card))
@@ -282,6 +282,8 @@ struct ContentView: View {
                     .allowsHitTesting(false)
             }
         }
+        // Private's look; light everywhere else, whatever the iPad's setting
+        .preferredColorScheme(lab.headerMode?.id == "private" ? .dark : .light)
         // hidden from the first frame on and never toggled: a status bar
         // appearing with Main changed the safe area under it (the bands)
         .statusBarHidden(true)
