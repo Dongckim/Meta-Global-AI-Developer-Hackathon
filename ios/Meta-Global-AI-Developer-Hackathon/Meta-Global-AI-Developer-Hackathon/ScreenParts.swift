@@ -217,7 +217,7 @@ struct CameraScreen: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10 * u))
                         .overlay(alignment: .bottomTrailing) {
                             Text("\(i + 1)").font(Theme.ui(14 * u, weight: .bold)).padding(4 * u)
-                                .background(Circle().fill(.white))
+                                .background(Circle().fill(.white)).onLight()
                         }
                 }
                 Spacer(minLength: 0)

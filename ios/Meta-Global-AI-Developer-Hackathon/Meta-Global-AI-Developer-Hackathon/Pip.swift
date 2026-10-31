@@ -758,8 +758,11 @@ struct RecordSnapshot: Decodable {
     struct PrivateWake: Decodable, Equatable {
         var state: String
         var elapsedS: Int
+        var expectedS: Double
+        var title: String
         var line: String
-        enum CodingKeys: String, CodingKey { case state, elapsedS = "elapsed_s", line }
+        var info: String
+        enum CodingKeys: String, CodingKey { case state, elapsedS = "elapsed_s", expectedS = "expected_s", title, line, info }
     }
 
     /// Snapshot `bench`: each touched well's state (done / now / excluded),
@@ -934,6 +937,8 @@ final class LabState {
     var bench: RecordSnapshot.Bench?
     /// The private model's wake-up, drawn as the server sends it.
     var privateWake: RecordSnapshot.PrivateWake?
+    /// Ready came on the wait screen: it stays for its ending, the app clears this.
+    var wakeEnding = false
     var cards: [ServerCard] = []
     var draft: ProtocolDraft?
     var handoff: Handoff?
@@ -971,6 +976,9 @@ final class LabState {
         notes = snap.notes
         timers = snap.timers
         headerMode = snap.headerMode
+        if view.current.screen == "private_wait", privateWake?.state == "warming", snap.privateWake?.state == "ready" {
+            wakeEnding = true
+        }
         privateWake = snap.privateWake
         PipClient.transcribeOnDevice = snap.transcribe == "device"
         bench = snap.bench

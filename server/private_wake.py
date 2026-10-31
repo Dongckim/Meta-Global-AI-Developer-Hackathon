@@ -5,10 +5,16 @@ words and timing in pip_voice.json `private`, the task in server/api.py.
 """
 
 import asyncio
+import json
 import re
+import statistics
 import time
+from pathlib import Path
 
 from server.tone import section
+
+#: Cold starts the ring remembers.
+RECENT_COLDS = 7
 
 
 def weights_gb(sizes: dict, files: list) -> int:
@@ -44,8 +50,10 @@ async def wake_up(post, timeout_s: float) -> bool:
 class PrivateWake:
     """idle -> warming -> ready | failed. `gen` retires a wake-up left running."""
 
-    def __init__(self, clock=time.monotonic):
+    def __init__(self, clock=time.monotonic, path: Path | None = None):
         self.clock = clock
+        self.path = path  # cold starts survive a restart: they set the wait's ring
+        self.colds: list = json.loads(path.read_text()) if path and path.exists() else []
         self.state = "idle"
         self.gen = 0
         self.started = 0.0
@@ -61,6 +69,10 @@ class PrivateWake:
     def finish(self, ok: bool) -> None:
         self.state, self.elapsed = ("ready" if ok else "failed"), self.clock() - self.started
         self.ready_at = self.clock()
+        if ok and self.elapsed >= section("private")["cold_min_s"]:  # a warm answer says nothing
+            self.colds = (self.colds + [round(self.elapsed, 1)])[-RECENT_COLDS:]
+            if self.path:
+                self.path.write_text(json.dumps(self.colds))
 
     def reset(self) -> None:
         self.state = "idle"
@@ -74,10 +86,18 @@ class PrivateWake:
         """Ready and not gone back to sleep since."""
         return self.state == "ready" and self.clock() - self.ready_at < section("private")["ready_ttl_s"]
 
+    def expected_s(self) -> float:
+        """Recent cold starts' median: the wait's ring fills against it."""
+        return statistics.median(self.colds) if self.colds else section("private")["expected_s"]
+
     def view(self) -> dict | None:
         """Snapshot `private`: the app draws this as is."""
         if self.state == "idle":
             return None
+        cfg = section("private")
         elapsed = self.clock() - self.started if self.state == "warming" else self.elapsed
-        line = section("private")["failed_line"] if self.state == "failed" else line_at(elapsed, self.gb)
-        return {"state": self.state, "elapsed_s": int(elapsed), "line": line}
+        line = {"failed": "", "ready": cfg["awake_line"]}.get(self.state) if self.state != "warming" \
+            else line_at(elapsed, self.gb)
+        return {"state": self.state, "elapsed_s": int(elapsed), "expected_s": self.expected_s(),
+                "title": cfg["failed_line"] if self.state == "failed" else cfg["title"], "line": line,
+                "info": cfg["info"].format(s=int(elapsed))}

@@ -496,79 +496,126 @@ struct ModeScreen: View {
     }
 }
 
-/// Private's model is waking (not in the design): the next screen as a
-/// skeleton, the server's line and seconds over it; failed: a card with the
-/// registry's buttons. The server decides all of it (snapshot `private`).
+/// Private's model is waking (not in the design): a big orb with a ring that
+/// fills against recent cold starts, and the server's words under it. The
+/// server decides the words and states (snapshot `private`).
 struct PrivateWaitScreen: View {
     var wake: RecordSnapshot.PrivateWake
-    /// The screen that opens once it's awake (view target).
-    var next: String
     var buttons: [ScreenButton]
     var u: CGFloat
+    var orbSpace: Namespace.ID
+    /// Owned by the root, shared with the header's orb.
+    @Binding var orbHome: Bool
     var perform: (ScreenButton) -> Void
 
-    var body: some View {
-        ZStack {
-            skeleton
-            if wake.state == "failed" { failed } else { waiting }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    private let M = Theme.Motion.self
+    @Environment(\.accessibilityReduceMotion) private var reduce
+    /// Local time since the wait began: seconds from the server arrive once a second.
+    @State private var opened = Date()
+    @State private var breathing = false
+
+    private static let orbSize: CGFloat = 160
+    private var failed: Bool { wake.state == "failed" }
+    private var ready: Bool { wake.state == "ready" }
+
+    /// Fills toward the ceiling and never reaches it alone: only ready finishes.
+    private func progress(at t: Double) -> Double {
+        M.wakeRingCeiling * (1 - exp(-t / max(wake.expectedS * M.wakeRingPace, 1)))
     }
 
-    private var skeleton: some View {
-        let cards = next == "import_choice" ? 3 : 1
-        return HStack(spacing: 36 * u) {
-            ForEach(0..<cards, id: \.self) { _ in
-                RoundedRectangle(cornerRadius: 44 * u, style: .continuous).fill(Theme.cardGlass)
-                    .overlay {
-                        Sheen(period: Theme.Motion.shimmer, peak: Theme.Motion.shimmerPeak)
-                            .clipShape(RoundedRectangle(cornerRadius: 44 * u, style: .continuous))
-                    }
-                    .frame(maxWidth: .infinity).frame(height: 345 * u)
+    var body: some View {
+        VStack(spacing: 0) {
+            orb
+            Text(wake.title).font(Theme.ui(44 * u, weight: .semibold)).tracking(-0.9 * u)
+                .foregroundStyle(Theme.text1).multilineTextAlignment(.center)
+                .padding(.top, 56 * u)
+            if failed { actions } else { words }
+        }
+        .padding(.horizontal, 64 * u)
+        .padding(.bottom, Theme.Layout.choiceLift * u)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            opened = Date().addingTimeInterval(-Double(wake.elapsedS))
+            guard !reduce else { return }
+            withAnimation(M.ease(M.wakeOrbMove)) { orbHome = false }
+            withAnimation(.easeInOut(duration: M.wakeBreath / 2).repeatForever(autoreverses: true)) { breathing = true }
+        }
+        .onChange(of: wake.state) { _, state in
+            if state == "warming" { opened = Date() }  // Try again: the ring starts over
+        }
+    }
+
+    private var orb: some View {
+        let d = Self.orbSize * u
+        return ZStack {
+            OrbDisc(style: Theme.orbStill, diameter: d * 0.72, bright: ready)
+                .scaleEffect(reduce || failed || ready ? 1
+                             : breathing ? M.wakeBreathScale.upperBound : M.wakeBreathScale.lowerBound)
+            Circle().stroke(Theme.segmentRest.opacity(0.4), lineWidth: 5 * u)
+            TimelineView(.animation(paused: ready || failed)) { ctx in
+                let t = failed ? Double(wake.elapsedS) : max(ctx.date.timeIntervalSince(opened), Double(wake.elapsedS))
+                Circle().trim(from: 0, to: ready ? 1 : progress(at: t))
+                    .stroke(failed ? Theme.paused : Theme.polishBlue, style: StrokeStyle(lineWidth: 5 * u, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(M.ease(M.wakeRingFinish), value: ready)
             }
         }
-        .frame(width: 1248 * u)
-        .padding(.bottom, Theme.Layout.choiceLift * u)
+        .frame(width: d, height: d)
+        .scaleEffect(orbHome && !reduce ? 52 / Self.orbSize : 1)
+        .orbFlight(reduce ? nil : orbSpace, source: !orbHome)
         .accessibilityHidden(true)
     }
 
-    private var waiting: some View {
-        VStack(spacing: 18 * u) {
+    private var words: some View {
+        VStack(spacing: 16 * u) {
             ZStack {
                 Text(wake.line).id(wake.line).transition(.opacity)
-                    .font(Theme.ui(40 * u, weight: .semibold)).tracking(-0.8 * u).foregroundStyle(Theme.text1)
-                    .multilineTextAlignment(.center)
+                    .font(Theme.ui(28 * u)).foregroundStyle(Theme.text2).multilineTextAlignment(.center)
             }
-            .animation(Theme.Motion.ease(Theme.Motion.lineFade), value: wake.line)
-            Text("\(wake.elapsedS) s").font(Theme.ui(28 * u)).monospacedDigit().foregroundStyle(Theme.text2)
+            .animation(M.ease(M.lineFade), value: wake.line)
+            Text(wake.info).font(Theme.ui(20 * u)).monospacedDigit().foregroundStyle(Theme.text3)
         }
-        .padding(.horizontal, 48 * u).padding(.vertical, 36 * u)
-        .frame(width: 1000 * u)
-        .benchCard(radius: 44 * u, fill: Theme.card)
+        .padding(.top, 20 * u)
     }
 
-    private var failed: some View {
-        VStack(spacing: 40 * u) {
-            Text(wake.line).font(Theme.ui(40 * u, weight: .semibold)).tracking(-0.8 * u)
-                .foregroundStyle(Theme.text1).multilineTextAlignment(.center)
-            HStack(spacing: 36 * u) {
-                ForEach(Array(buttons.filter { $0.voiceOnly != true }.enumerated()), id: \.offset) { i, b in
-                    SayButton(button: b, kind: i == 0 ? .primary : .secondary, size: 34 * u, perform: perform)
-                        .frame(width: 360 * u)
-                }
+    private var actions: some View {
+        HStack(spacing: 36 * u) {
+            ForEach(Array(buttons.filter { $0.voiceOnly != true }.enumerated()), id: \.offset) { i, b in
+                SayButton(button: b, kind: i == 0 ? .primary : .secondary, size: 34 * u, perform: perform)
+                    .frame(width: 360 * u)
             }
         }
-        .padding(48 * u)
-        .frame(width: 900 * u)
-        .benchCard(radius: 44 * u, fill: Theme.card)
+        .padding(.top, 48 * u)
+    }
+}
+
+/// A choice card's entrance: the usual rise, or the wait screen's ending.
+private struct CardRise: ViewModifier {
+    var afterWake: Bool
+    var risen: Bool
+    var index: Int
+    var u: CGFloat
+
+    func body(content: Content) -> some View {
+        if afterWake {
+            let M = Theme.Motion.self
+            content.offset(y: risen ? 0 : M.wakeCardRise * u).opacity(risen ? 1 : 0)
+                .animation(M.ease(M.lineFade).delay(Double(index) * M.wakeCardStep), value: risen)
+        } else {
+            content.enter(.rise, index + 1, u: u)
+        }
     }
 }
 
 struct ImportChoiceScreen: View {
     /// Registry import_choice buttons (Text, File, Photo) with their lines.
     var buttons: [ScreenButton]
+    /// Right after the wait screen: the cards rise in its own quicker way.
+    var afterWake = false
     var u: CGFloat
     var perform: (ScreenButton) -> Void
+    @State private var risen = false
+    @Environment(\.accessibilityReduceMotion) private var reduce
 
     var body: some View {
         VStack(spacing: Theme.Layout.titleGap * u) {
@@ -581,7 +628,7 @@ struct ImportChoiceScreen: View {
                 ForEach(Array(buttons.enumerated()), id: \.offset) { i, b in
                     ChoiceCard(icon: ["text.alignleft", "doc.fill", "camera.fill"][min(i, 2)], button: b, line: b.line ?? "",
                                u: u, perform: perform)
-                        .enter(.rise, i + 1, u: u)
+                        .modifier(CardRise(afterWake: afterWake, risen: risen || reduce, index: i, u: u))
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -589,5 +636,6 @@ struct ImportChoiceScreen: View {
         }
         .padding(.bottom, Theme.Layout.choiceLift * u)
         .frame(maxHeight: .infinity)
+        .onAppear { risen = true }
     }
 }

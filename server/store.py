@@ -201,7 +201,7 @@ class RecordStore:
         #: Starts a run's hand off loop (api sets it; None in plain store tests).
         self.spawn_handoff = None
         #: The private model's wake-up; its task lives in api (None in plain store tests).
-        self.wake = PrivateWake()
+        self.wake = PrivateWake(path=self.root / "cold_starts.json")
         self.spawn_wake = None
         #: Runs an import held for its confirm card (api; None in plain store tests).
         self.spawn_import = None

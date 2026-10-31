@@ -83,7 +83,9 @@ enum Theme {
     /// Plate axis labels.
     static let text4 = Color(hex: 0xAEAEB2)
     /// Upcoming (not started) timer wells.
-    static let text5 = Color(hex: 0x48484A)
+    static let text5 = modal(Color(hex: 0x48484A), Color(hex: 0xD1D1D6))
+    /// The header's mode label.
+    static let modeLabel = modal(mutSay, Color(hex: 0xD1D1D6))
     /// Empty well (with an inset shadow).
     static let wellEmpty = Color(hex: 0xEFEFF2)
     /// Translucent white chip and timer row.
@@ -222,11 +224,20 @@ enum Theme {
         /// sheen 1.4s ease-in-out: a white band (.35 at 50%) crossing a loading card.
         static let sheen = 1.4
         static let sheenPeak = 0.35
-        /// The same band on the private model's wait: slower and quieter.
-        static let shimmer = 1.6
-        static let shimmerPeak = 0.16
-        /// The wait's line changes with a crossfade, the screens with `screen`.
+        /// The private model's wait: its line crossfades; the orb flies in from
+        /// the header and breathes; ready finishes the ring, holds "I'm awake."
+        /// and the next screen's cards rise in. The ring never fills on its own:
+        /// p = wakeRingCeiling × (1 − e^(−t / (expected × wakeRingPace))).
         static let lineFade = 0.5
+        static let wakeOrbMove = 0.5
+        static let wakeBreath = 2.4
+        static let wakeBreathScale: ClosedRange<CGFloat> = 0.96...1.04
+        static let wakeRingCeiling = 0.9
+        static let wakeRingPace = 0.5
+        static let wakeRingFinish = 0.3
+        static let wakeAwakeHold = 0.6
+        static let wakeCardRise: CGFloat = 12
+        static let wakeCardStep = 0.08
         /// --ease cubic-bezier(.22,1,.36,1) and --spring cubic-bezier(.34,1.36,.64,1).
         static func ease(_ duration: Double) -> Animation { .timingCurve(0.22, 1, 0.36, 1, duration: duration) }
         static func spring(_ duration: Double) -> Animation { .timingCurve(0.34, 1.36, 0.64, 1, duration: duration) }
@@ -500,6 +511,8 @@ enum Theme {
         }
     }
 
+    /// The private model is waking: the wait's big orb, its breath is the screen's.
+    static let orbStill = OrbStyle(breathe: nil, ring: nil, scale: 1, aurora: .breath, hollow: false)
     /// The private model is waking: the ready orb at a slower breath.
     static let orbWaking = OrbStyle(breathe: breathe * 2, ring: nil, scale: 1, aurora: .breath, hollow: false)
 

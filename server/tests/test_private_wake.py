@@ -74,15 +74,15 @@ api._stage = lambda session, stage, **d: stages.append((stage, d.get("say")))
 assert (glimmer_modal.MODEL_FILE, glimmer_modal.MMPROJ_FILE, glimmer_modal.DRAFT_FILE) == tuple(section("private")["files"])
 assert glimmer_modal.REPO == section("private")["repo"]
 assert api.WAKE_TIMEOUT_S == 90
-assert [x["at"] for x in LINES] == [0, 5, 10, 16, 22, 28, 40]
+assert [x["at"] for x in LINES] == [0, 6, 12, 18, 24, 30, 36]
 
 # file size: weights + mmproj only, from the bytes
 assert pw.weights_gb(SIZES, section("private")["files"]) == 23
 
 # line times
-w = [(t, pw.line_at(t, 17)) for t in (0, 4.9, 5, 9.9, 10, 16, 22, 28, 39, 40, 59)]
+w = [(t, pw.line_at(t, 17)) for t in (0, 5.9, 6, 11.9, 12, 18, 24, 30, 35, 36, 59)]
 assert [x[1] for x in w] == [LINES[i]["text"].format(gb=17) for i in (0, 0, 1, 1, 2, 3, 4, 5, 5, 6, 6)], w
-assert pw.line_at(5, 17) == "Pipetting 17 GB of weights onto the GPU…"
+assert pw.line_at(6, 17) == "Pipetting 17 GB of weights onto the GPU…"
 assert pw.line_at(5, None) == LINES[0]["text"], "no size: the line before stays"
 
 
@@ -127,7 +127,7 @@ async def retry_fails_then_try_again():
     await settle()
     assert len(calls) == 2 and st.wake.state == "failed" and screen(st) == "private_wait"
     snap = st.snapshot()
-    assert snap["private"]["line"] == "The private model didn't wake up."
+    assert snap["private"]["title"] == "The private model didn't wake up."
     assert snap["view"]["slots"]["wake"] == "failed"
     await api.run_utterance(None, "k", "try again", s, "input")
     assert st.wake.state == "warming"
@@ -250,4 +250,17 @@ tone.set_run_mode(None)
 RecordStore(path=st.path).restore_mode()
 assert tone.run_mode() == "private"
 tone.set_run_mode(None)
+# the ring's time scale: recent real cold starts, kept across a restart
+st, s = fresh()
+assert st.wake.expected_s() == section("private")["expected_s"]
+for secs in (2, 20, 30, 70):
+    now = [100.0]
+    st.wake.clock = lambda: now[0]
+    st.wake.begin()
+    now[0] += secs
+    st.wake.finish(True)
+assert st.wake.colds == [20, 30, 70] and st.wake.expected_s() == 30, st.wake.colds
+assert RecordStore(path=st.path).wake.expected_s() == 30
+view = st.wake.view()
+assert view["line"] == "I'm awake." and view["info"] == "Glimmer · on our server · 70 s", view
 print("test_private_wake OK")

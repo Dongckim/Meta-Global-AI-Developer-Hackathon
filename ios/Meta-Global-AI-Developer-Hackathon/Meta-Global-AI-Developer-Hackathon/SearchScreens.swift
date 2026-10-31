@@ -232,8 +232,8 @@ struct ScanLine: View {
 /// HTML `sheen`: a white band (100°, .35 at the middle) crossing left to
 /// right every 1.4 s, ease-in-out. Reduce Motion: a soft pulse in place.
 struct Sheen: View {
-    var period = Theme.Motion.sheen
-    var peak = Theme.Motion.sheenPeak
+    private let period = Theme.Motion.sheen
+    private let peak = Theme.Motion.sheenPeak
     @Environment(\.accessibilityReduceMotion) private var reduce
     @State private var on = false
 

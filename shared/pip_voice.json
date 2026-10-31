@@ -296,24 +296,28 @@
     "That isn't ready yet."
   ],
   "private": {
-    "_note": "Waking Private's model (server/private_wake.py). lines: `at` seconds after the wake-up starts; {gb} is the model's real size.",
+    "_note": "Waking Private's model (server/private_wake.py). lines: `at` seconds after the wake-up starts, one every 6 s; {gb} is the model's real size.",
     "repo": "meta-models/Muse-Glimmer-30B-GGUF",
     "files": ["Muse-Glimmer-30B-KQuant-Dynamic-Q4_K_XL.gguf", "mmproj-Muse-Glimmer-30B-Q4_K_M.gguf", "dflash-Muse-Glimmer-30B-Q4_K_M.gguf"],
     "wake_timeout_s": 90,
     "import_max_chars": 30000,
     "ready_ttl_s": 100,
+    "expected_s": 25,
+    "cold_min_s": 5,
+    "title": "Waking up the private model",
+    "info": "Glimmer · on our server · {s} s",
     "speak_after_s": 1.5,
     "waking_line": "Waking up my private brain. Give me half a minute.",
     "awake_line": "I'm awake.",
     "failed_line": "The private model didn't wake up.",
     "lines": [
       {"at": 0, "text": "Warming up the private model. Like the medium, it likes 37 °C."},
-      {"at": 5, "text": "Pipetting {gb} GB of weights onto the GPU…"},
-      {"at": 10, "text": "Your words stay off the Meta API. Milo signed the NDA."},
-      {"at": 16, "text": "Still incubating. No peeking."},
-      {"at": 22, "text": "Equilibrating…"},
-      {"at": 28, "text": "Almost there. Good time to label your tubes."},
-      {"at": 40, "text": "This one's a slow grower. Still trying…"}
+      {"at": 6, "text": "Pipetting {gb} GB of weights onto the GPU…"},
+      {"at": 12, "text": "Your words stay off the Meta API. Milo signed the NDA."},
+      {"at": 18, "text": "Still incubating. No peeking."},
+      {"at": 24, "text": "Equilibrating…"},
+      {"at": 30, "text": "Almost there. Good time to label your tubes."},
+      {"at": 36, "text": "This one's a slow grower. Still trying…"}
     ]
   },
   "modes": {

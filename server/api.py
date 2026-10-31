@@ -95,7 +95,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 23
+API_VERSION = 24
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0

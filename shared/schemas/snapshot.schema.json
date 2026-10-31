@@ -36,12 +36,15 @@
     },
     "private": {
       "type": ["object", "null"],
-      "required": ["state", "elapsed_s", "line"],
+      "required": ["state", "elapsed_s", "expected_s", "title", "line", "info"],
       "description": "Served snapshots only: the private model's wake-up, null until Private asks for it. The app draws it as is.",
       "properties": {
         "state": {"enum": ["warming", "ready", "failed"]},
         "elapsed_s": {"type": "integer"},
-        "line": {"type": "string"}
+        "expected_s": {"type": "number", "description": "Median of recent cold starts: the ring's time scale."},
+        "title": {"type": "string"},
+        "line": {"type": "string"},
+        "info": {"type": "string"}
       }
     },
     "transcribe": {"enum": ["device", "server"],

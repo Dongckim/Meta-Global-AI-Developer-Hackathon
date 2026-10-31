@@ -64,14 +64,18 @@ nearest frame's parts and should get a look.
   them", muted "Skip them") and "Not yet" as a small text button under them.
   The header shows one line, "{wells} not marked."
 - **Private model waking** (screen `private_wait`): after Private on ⑤a, or
-  when a turn needs the model while it sleeps. Header as usual with a slower
-  orb breath (6.4 s) and lock + "Private". Behind: the next screen as a
-  skeleton (⑤b's three 345 tall cards, else one) in `cardGlass` with the
-  search sheen slower and quieter (1.6 s, peak .16). Over it, a 1000 wide white
-  card: one line (40 semibold, opacity crossfade .5 s) and the seconds ("12 s",
-  28). Awake: crossfade to the real screen (`Motion.screen`). Failed: a 900
-  wide card, "The private model didn't wake up." with Try again (primary) and
-  Use Full mode (secondary), both 360 wide.
+  when a turn needs the model while it sleeps. Dark tokens, no white card, no
+  skeleton. The header keeps lock + "Private"; its orb and line hide. In the
+  middle a 160 orb with a progress ring (5 wide), then "Waking up the private
+  model" (44 semibold, white), a witty line (28, secondary, a new one every
+  6 s, opacity crossfade .5 s) and "Glimmer · on our server · 12 s" (20).
+  Ring: p = .9 × (1 − e^(−t/τ)), τ half the median of recent cold starts, so
+  only ready fills it. Motion: the orb flies in from the header (.5 s) and
+  breathes (.96–1.04, 2.4 s). Ready: ring to 100% in .3 s, orb bright, "I'm
+  awake.", .6 s later the orb flies home and ⑤b's cards rise 12 with .08 s
+  between. Failed: the ring stops orange, "The private model didn't wake up.",
+  Try again (primary) and Use Full mode (secondary), both 360 wide. Reduce
+  Motion: ring only. All times are `Theme.Motion`.
 - **⑤a Mode, Private variant (differs from the design)**: its line "Nothing
   leaves this iPad" isn't true, so it isn't used. What happens: speech is
   transcribed on the iPad; voice commands and imports run on Glimmer on our

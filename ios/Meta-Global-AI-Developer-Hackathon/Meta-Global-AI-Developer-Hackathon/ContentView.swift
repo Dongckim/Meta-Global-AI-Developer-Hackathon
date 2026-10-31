@@ -52,6 +52,11 @@ struct ContentView: View {
     @State private var importPill: Bool? = nil
     /// Why the last import stopped, on screen until the next one or a few seconds.
     @State private var importNote: String?
+    /// The orb is in the header (else on the wait screen, on its way or there).
+    @State private var orbHome = true
+    /// The import cards appear right after the wait screen.
+    @State private var wakeLanding = false
+    @Namespace private var orbSpace
     @State private var showImporter = false
     @State private var showTextImport = false
     /// Control commands for the screen on top (next page, take it, scroll down…).
@@ -371,6 +376,20 @@ struct ContentView: View {
         }
     }
 
+    /// The wait screen shows until its ending is over, past the server's next screen.
+    private var onWaitScreen: Bool { lab.view.current.screen == "private_wait" || lab.wakeEnding }
+
+    /// Ready: the ring finishes, "I'm awake." holds, the orb flies home.
+    private func finishWake() {
+        let M = Theme.Motion.self
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(M.wakeRingFinish + M.wakeAwakeHold))
+            withAnimation(M.ease(M.wakeOrbMove)) { orbHome = true }
+            try? await Task.sleep(for: .seconds(M.wakeOrbMove))
+            lab.wakeEnding = false
+        }
+    }
+
     private var mainBody: some View {
         VStack(spacing: 0) {
             contractBanners
@@ -379,12 +398,13 @@ struct ContentView: View {
                       // the plain bench lists its own timers; cards and the well card show the chip
                       timers: showsBench && lab.cards.isEmpty && selectedWell == nil ? [] : lab.timers,
                       onBlockedTap: openSync, mode: lab.headerMode,
-                      waking: lab.privateWake?.state == "warming")
+                      waking: lab.privateWake?.state == "warming",
+                      quiet: onWaitScreen, orbSpace: orbSpace, orbHome: orbHome)
             Group {
-                if lab.view.current.screen == "private_wait", let wake = lab.privateWake {
+                if onWaitScreen, let wake = lab.privateWake {
                     stage { u in
-                        PrivateWaitScreen(wake: wake, next: lab.view.current.target,
-                                          buttons: buttons("private_wait"), u: u, perform: performButton)
+                        PrivateWaitScreen(wake: wake, buttons: buttons("private_wait"), u: u, orbSpace: orbSpace,
+                                          orbHome: $orbHome, perform: performButton)
                     }
                     .transition(.opacity)
                 } else if let src = viewingSource {
@@ -478,7 +498,7 @@ struct ContentView: View {
                     if lab.view.current.screen == "mode" {
                         ModeScreen(buttons: buttons("mode"), u: u, perform: performButton)
                     } else {
-                        ImportChoiceScreen(buttons: buttons("import_choice"), u: u, perform: performButton)
+                        ImportChoiceScreen(buttons: buttons("import_choice"), afterWake: wakeLanding, u: u, perform: performButton)
                     }
                 }
             } else if let rid = viewingRun {
@@ -537,7 +557,13 @@ struct ContentView: View {
                 experimentView
             }
         }
-        .animation(Theme.Motion.ease(Theme.Motion.screen), value: lab.view.current.screen == "private_wait")
+        .animation(Theme.Motion.ease(Theme.Motion.screen), value: onWaitScreen)
+        .onChange(of: lab.wakeEnding) { _, ending in if ending { finishWake() } }
+        .onChange(of: onWaitScreen) { _, on in
+            if on { wakeLanding = false } else if lab.view.current.screen == "import_choice" { wakeLanding = true }
+            if !on { orbHome = true }
+        }
+        .onChange(of: lab.view.current.screen) { old, _ in if old == "import_choice" { wakeLanding = false } }
         }
     }
 

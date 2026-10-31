@@ -884,6 +884,11 @@ struct TopHeader: View {
     var mode: RecordSnapshot.RunModeLabel? = nil
     /// The private model is waking: the orb breathes slower while Milo is idle.
     var waking = false
+    /// The wait screen has the big orb: no orb or line up here.
+    var quiet = false
+    /// The orb the wait screen's flies from and back to.
+    var orbSpace: Namespace.ID? = nil
+    var orbHome = true
 
     var body: some View {
         let line = Theme.pipText(for: voice.state, speakText: speakText,
@@ -903,7 +908,7 @@ struct TopHeader: View {
                           && Theme.talkBlocker(wake: voice.wakeSupport, wakeOn: true) != nil,
                       onBlockedTap: onBlockedTap,
                       onOrbTap: { voice.open(trigger: .orbTap) },
-                      timers: timers, mode: mode)
+                      timers: timers, mode: mode, quiet: quiet, orbSpace: orbSpace, orbHome: orbHome)
     }
 }
 
@@ -935,7 +940,11 @@ struct TopHeaderView: View {
     /// Mode label at the left (icon x 64, text x 102); nil draws nothing and
     /// moves nothing else (each header part sits on its own layer).
     var mode: RecordSnapshot.RunModeLabel? = nil
+    var quiet = false
+    var orbSpace: Namespace.ID? = nil
+    var orbHome = true
     @State private var width: CGFloat = 0
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let px = { (v: CGFloat) in Theme.px(v, in: width) }
@@ -946,7 +955,7 @@ struct TopHeaderView: View {
                         .frame(width: px(26))
                     Text(mode.label).font(Theme.ui(px(22))).tracking(-0.012 * px(22))
                 }
-                .foregroundStyle(Theme.mutSay)
+                .foregroundStyle(Theme.modeLabel)
                 .frame(height: px(Theme.Layout.headerRow))
                 .padding(.leading, px(Theme.Layout.side))
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -958,6 +967,7 @@ struct TopHeaderView: View {
             HStack(spacing: px(16)) {
                 OrbDisc(style: style, diameter: px(52), bright: hearing)
                     .frame(width: px(52) * Theme.orbMaxScale)
+                    .orbFlight(orbSpace, source: orbHome)
                     .contentShape(Circle())
                     .onTapGesture { blocked ? onBlockedTap() : onOrbTap() }
                     .accessibilityLabel("Talk to \(Persona.current.agentName)")
@@ -974,12 +984,16 @@ struct TopHeaderView: View {
                            dotColor: status ? Theme.blue : Theme.mutT)
             }
             .frame(minHeight: px(Theme.Layout.headerRow))
+            .opacity(quiet ? 0 : 1)
+            .allowsHitTesting(!quiet)
+            // the lit pill is white in both looks
+            .environment(\.colorScheme, live ? .light : scheme)
             // design `.pip.live`: rgba(255,255,255,.94), padding 0 30 0 8,
             // shadow 0 1 2 rgba(0,0,0,.05) + 0 12 34 -14 rgba(0,113,227,.45)
             .padding(.leading, live ? px(8) : 0)
             .padding(.trailing, live ? px(30) : 0)
             .background {
-                if live {
+                if live, !quiet {
                     Capsule().fill(.white.opacity(0.94))
                         .shadow(color: .black.opacity(0.05), radius: px(1), y: px(1))
                         .shadow(color: Theme.blue.opacity(0.45), radius: px(17), y: px(12))
@@ -998,6 +1012,17 @@ struct TopHeaderView: View {
         .padding(.bottom, px(Theme.Layout.headerGap))
         .ignoresSafeArea(edges: .top)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
+    }
+}
+
+extension View {
+    /// The orb's place in its flight between the header and the wait screen.
+    @ViewBuilder func orbFlight(_ space: Namespace.ID?, source: Bool) -> some View {
+        if let space {
+            matchedGeometryEffect(id: "orb", in: space, properties: .position, isSource: source)
+        } else {
+            self
+        }
     }
 }
 
