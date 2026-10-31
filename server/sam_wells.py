@@ -31,7 +31,7 @@ import subprocess
 import tempfile
 import time
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
@@ -524,20 +524,21 @@ def best_detect(sam, target: str, fdir: Path, nframes: int, fps: float, start: i
     """(frame, match): the first sampled frame from `start` with the target,
     then the most confident of it and the next BEST_OF - 1 samples."""
     step = max(1, round(fps * SCAN_S))
-    first = None
+    best = None
     for n in range(start, nframes, step):
         say(f"Looking for the {target}", n, nframes)
-        if sam.image(target, frame_png(fdir, n)):
-            first = n
-            break
-    if first is None:
-        return None
-    best = None
-    for n in range(first, min(nframes, first + step * BEST_OF), step):
-        say(f"Most confident {target} near frame {first}", n, nframes)
         got = sam.image(target, frame_png(fdir, n))
-        if got and (best is None or got[0]["c"] > best[1]["c"]):
+        if got:
             best = (n, got[0])
+            break
+    if best is None:
+        return None
+    say(f"Most confident {target} near frame {best[0]}", best[0], nframes)
+    rest = list(range(best[0] + step, min(nframes, best[0] + step * BEST_OF), step))
+    with ThreadPoolExecutor(BEST_OF) as pool:
+        for n, got in zip(rest, pool.map(lambda n: sam.image(target, frame_png(fdir, n)), rest)):
+            if got and got[0]["c"] > best[1]["c"]:
+                best = (n, got[0])
     return best
 
 
@@ -655,8 +656,10 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
     t["frames_s"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    plate0 = best_detect(sam, PLATE, fdir, nframes, fps, say=say)
-    tip0 = best_detect(sam, pointer, fdir, nframes, fps, say=say)
+    with ThreadPoolExecutor(1) as pool:  # sam-3.1 allows 3,000 a minute, no limit on concurrency
+        finding_plate = pool.submit(best_detect, sam, PLATE, fdir, nframes, fps)
+        tip0 = best_detect(sam, pointer, fdir, nframes, fps, say=say)
+        plate0 = finding_plate.result()
     t["first_find_s"] = time.perf_counter() - t0
     missing = [x for x, d in ((PLATE, plate0), (pointer, tip0)) if not d]
     if missing:

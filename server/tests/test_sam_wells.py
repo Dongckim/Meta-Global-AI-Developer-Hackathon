@@ -298,4 +298,19 @@ c.post(f"/lab/sam-wells/sessions/{s5}/attempts", data={"targets": "C3,F7,B10"},
 res = c.get(f"/lab/sam-wells/sessions/{s5}").json()["attempts"][0]["result"]
 assert (res["fps"], res["frames"]) == (15, 15 * SECS), res
 print("SW10 ok: every frame is analysed")
+# SW11. The first find never asks SAM about the same frame twice, and keeps the most confident.
+calls = []
+
+
+class CountSam:
+    def image(self, target, png):
+        calls.append(png.name)
+        n = int(png.stem) - 1
+        return [{"box": (0, 0, 9, 9), "w": W, "h": H, "c": n / 100, "mask": None}] if n >= 5 else []
+
+
+fdir = sw.frames_dir(clip)
+found = sw.best_detect(CountSam(), "pen", fdir, FPS * SECS, FPS)
+assert len(calls) == len(set(calls)) and found[0] == 6 + 2 * (sw.BEST_OF - 1), (calls, found[0])
+print("SW11 ok: the first find asks once a frame")
 print("ALL PASS")
