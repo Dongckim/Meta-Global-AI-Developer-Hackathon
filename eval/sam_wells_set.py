@@ -46,7 +46,8 @@ APP_FPS = 7
 #: Every judging value; a change to one must say why.
 VALUES = ("DWELL_S", "DWELL_MM", "MAX_MISSING", "EDGE_TOL", "FIT_TRIES", "MIN_EDGE_POINTS", "MAX_SKEW",
           "MAX_VIEW_SKEW", "MAX_VIEW_RATIO", "ORB_FEATURES", "MATCH_PITCHES", "MIN_INLIERS", "MIN_INLIER_SHARE",
-          "MAX_BITS", "PLATE_MARGIN", "MIN_BASE_SIZE", "EDGE_GAP", "MIN_SHOWN", "LOST_FRAMES", "LOST_REACH")
+          "MAX_BITS", "PLATE_MARGIN", "MIN_BASE_SIZE", "EDGE_GAP", "MIN_SHOWN", "LOST_FRAMES", "LOST_REACH",
+          "FLAT_PX", "MAX_WELL_SHIFT", "MIN_WELLS", "SHIFT_MARGIN", "MAX_WELL_SCALE")
 #: What a confirm clip must be (the design's filming conditions).
 DESIGN = {"where": "desk", "view": "portrait", "w": 360, "h": 640}
 
@@ -85,7 +86,7 @@ def fill(clip: str) -> None:
 
 def follow_key() -> str:
     """Changes with the following's code or values."""
-    code = [sw.follow_plate, sw._follow, sw._region, sw.best_frame, sw.touches_edge, sw.distorted, sw.convex, sw.plate_corners]
+    code = [sw.follow_plate, sw.fit_wells, sw.well_centers, sw._follow, sw._region, sw.best_frame, sw.touches_edge, sw.distorted, sw.convex, sw.plate_corners]
     text = "".join(inspect.getsource(f) for f in code) + json.dumps(values())
     return hashlib.sha1(text.encode()).hexdigest()
 
@@ -118,7 +119,7 @@ def run(item: dict) -> dict:
             "found": found, "hits": j["hits"], "total": j["total"], "false": j["false"],
             "missed": [w["well"] for w in j["wells"] if not w["ok"]],
             "bent": sum(sw.distorted(p[2]) for p in per.values() if p[2]), "frames": meta["frames"],
-            "ref": f["ref"], "redone": f["redone"], "kept": f["kept"], "seconds": f["seconds"]}
+            "ref": f["ref"], "wells": f["wells"], "redone": f["redone"], "kept": f["kept"], "seconds": f["seconds"]}
 
 
 def off_design(r: dict) -> list:
@@ -131,8 +132,8 @@ def values() -> dict:
 
 
 def table(rows: list, base: dict) -> tuple:
-    lines, worse = ["| clip | where | view | size | fps | hit | missed | false | bent | redone | kept | ref | follow s "
-                    "| found | baseline |", "|" + "---|" * 15], []
+    lines, worse = ["| clip | where | view | size | fps | hit | missed | false | bent | redone | kept | ref | wells | follow s "
+                    "| found | baseline |", "|" + "---|" * 16], []
     for r in rows:
         b = base.get(r["clip"])
         down = b and (r["hits"] < b["hits"] or len(r["false"]) > b["false"])
@@ -141,7 +142,7 @@ def table(rows: list, base: dict) -> tuple:
         was = f"{b['hits']}/{r['total']}, {b['false']} false" if b else "-"
         lines.append(f"| {r['clip']} | {r['where']} | {r['view']} | {r['size']} | {r['fps']:.0f} "
                      f"| {r['hits']}/{r['total']} | {' '.join(r['missed']) or '-'} | {' '.join(r['false']) or '-'} "
-                     f"| {r['bent']}/{r['frames']} | {r['redone']} | {r['kept']} | {r['ref']} | {r['seconds']:.1f} "
+                     f"| {r['bent']}/{r['frames']} | {r['redone']} | {r['kept']} | {r['ref']} | {r['wells']} | {r['seconds']:.1f} "
                      f"| {' '.join(r['found']) or '-'} | {'WORSE than ' if down else ''}{was} |")
     for where in ("desk", "hand"):
         rs = [r for r in rows if r["where"] == where]

@@ -11,5 +11,10 @@
   {"clip": "20261031-011204-2206/1", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
   {"clip": "20261031-015621-19c5/1", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
   {"clip": "20261031-020045-e545/1", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
-  {"clip": "20261031-020045-e545/2", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"}
+  {"clip": "20261031-020045-e545/2", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
+  {"clip": "20261031-015621-19c5/2", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
+  {"clip": "20261031-015621-19c5/3", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
+  {"clip": "20261031-025215-4568/1", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
+  {"clip": "20261031-025434-cd36/1", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"},
+  {"clip": "20261031-025434-cd36/2", "where": "desk", "targets": ["B1", "B2", "B3", "B4"], "use": "tune", "view": "landscape"}
 ]

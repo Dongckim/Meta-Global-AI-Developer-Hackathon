@@ -78,6 +78,10 @@ PLATE_MARGIN, MIN_BASE_SIZE = 1.15, 0.85
 #: After this many frames in a row left in place the plate has likely moved on: matches may come
 #: from this many times further, and SAM's plate counts even partly covered, if its corners hold up.
 LOST_FRAMES, LOST_REACH = 3, 3.0
+#: Fitting the grid to the wells: px a mm on the flattened frame; how far (mm) the outline can be
+#: off (under half a pitch: further is the next well over); the fewest wells to trust; how many
+#: more wells a shifted fit must explain than the one before; how far the fit may rescale.
+FLAT_PX, MAX_WELL_SHIFT, MIN_WELLS, SHIFT_MARGIN, MAX_WELL_SCALE = 6, 4, 30, 2, 0.06
 #: The screen's edge is this share of its size from the plate's box; SAM's plate stands in for an
 #: unmatched frame only when this much of it shows.
 EDGE_GAP, MIN_SHOWN = 0.02, 0.9
@@ -764,6 +768,67 @@ def _follow(orb, base: tuple, gray, tip: list | None, plate: list, last, quad0: 
     return h
 
 
+def well_centers(flat) -> "object":
+    """Well centers (mm) on a flattened frame. A clear plate's wells catch light differently, so
+    no one brightness or circle test finds them; each well's rim is an edge, though, and a ring of
+    a well's size over the edges peaks at its center."""
+    import cv2
+    import numpy as np
+    soft = cv2.GaussianBlur(flat, (5, 5), 1).astype(np.float32)
+    edges = cv2.magnitude(cv2.Sobel(soft, cv2.CV_32F, 1, 0), cv2.Sobel(soft, cv2.CV_32F, 0, 1))
+    edges = np.minimum(edges, np.percentile(edges, 95))  # a glare spot doesn't outvote a rim
+    size = round(WELL_D_MM * FLAT_PX) + 7
+    ring = np.zeros((size, size), np.float32)
+    cv2.circle(ring, (size // 2, size // 2), round(WELL_D_MM * FLAT_PX / 2), 1.0, 2)
+    score = cv2.filter2D(edges, cv2.CV_32F, ring / ring.sum())
+    gap = round(PITCH_MM * FLAT_PX * 0.7) | 1
+    top = score == cv2.dilate(score, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (gap, gap)))
+    ys, xs = np.nonzero(top)
+    order = np.argsort(-score[ys, xs], kind="stable")[:96]
+    return np.float32(np.stack([xs[order], ys[order]], axis=1)) / FLAT_PX
+
+
+def fit_wells(gray, quad: list) -> tuple:
+    """The plate's corners moved so the grid sits on the wells that show. Seen from the side, the
+    mask's outline takes in the plate's wall too, which pushes the grid off the wells: flatten the
+    frame by that outline, find the wells, and fit the 8 x 12 grid to them with RANSAC.
+    -> (corners in the same order, wells matched); the corners as given when too few fit."""
+    import cv2
+    import numpy as np
+    ordered = plate_quad(quad, "tl")  # the grid is the same turned 180 degrees, so any A1 will do
+    w, h = PLATE_MM
+    to_flat = cv2.getPerspectiveTransform(np.float32(ordered), np.float32([(0, 0), (w, 0), (w, h), (0, h)]) * FLAT_PX)
+    flat = cv2.warpPerspective(gray, to_flat, (round(w * FLAT_PX), round(h * FLAT_PX)))
+    seen = well_centers(flat)
+    grid = np.float32([well_center_mm(r, c) for r in range(8) for c in range(12)])
+    best, most = None, 0
+    cv2.setRNGSeed(0)
+    shifts = sorted(((dx, dy) for dx in range(-MAX_WELL_SHIFT, MAX_WELL_SHIFT + 1)
+                     for dy in range(-MAX_WELL_SHIFT, MAX_WELL_SHIFT + 1)), key=lambda d: abs(d[0]) + abs(d[1]))
+    for dx, dy in shifts:
+        near = np.linalg.norm(seen[:, None] - (grid + (dx, dy))[None], axis=2)
+        pick = near.argmin(axis=1)
+        keep = near[np.arange(len(seen)), pick] < PITCH_MM * 0.3
+        if keep.sum() < MIN_WELLS:
+            continue
+        # move, turn and scale only: flattening took out the perspective, and more freedom lets a
+        # few wells drag the grid a row over
+        found, inliers = cv2.estimateAffinePartial2D(grid[pick[keep]], seen[keep], method=cv2.RANSAC,
+                                                     ransacReprojThreshold=1.0)
+        if found is None or abs(math.hypot(found[0, 0], found[1, 0]) - 1) > MAX_WELL_SCALE:
+            continue
+        if inliers.sum() > most + SHIFT_MARGIN * (dx != 0 or dy != 0):
+            best, most = np.vstack([found, (0, 0, 1)]), int(inliers.sum())
+    if best is None or most < MIN_WELLS:
+        return quad, 0
+    # image -> flat mm -> grid mm: where each corner's own plate position lands now
+    to_mm = np.linalg.inv(best) @ np.diag([1 / FLAT_PX, 1 / FLAT_PX, 1.0]) @ to_flat
+    back = np.linalg.inv(to_mm)
+    was = cv2.perspectiveTransform(np.float32(quad).reshape(-1, 1, 2), np.diag([1 / FLAT_PX, 1 / FLAT_PX, 1.0]) @ to_flat)
+    fitted = [tuple(map(float, p)) for p in cv2.perspectiveTransform(was, back).reshape(-1, 2)]
+    return (fitted, most) if convex(fitted) and not distorted(fitted) else (quad, 0)
+
+
 def follow_plate(clip: Path, recs: dict, nframes: int) -> dict:
     """The plate's corners once, on its best frame, then carried to every frame by matching
     features to that frame. A frame that can't be matched takes SAM's plate if it's all in view,
@@ -778,14 +843,14 @@ def follow_plate(clip: Path, recs: dict, nframes: int) -> dict:
             break
         frames[n] = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     video.release()
-    none = {"quads": {}, "ref": None, "redone": 0, "kept": 0}
+    none = {"quads": {}, "ref": None, "redone": 0, "kept": 0, "wells": 0}
     if not frames:
         return none
     h, w = frames[0].shape
     ref = best_frame(recs, (w, h))
     if ref is None or ref not in frames:
         return none
-    quad0 = [tuple(map(float, p)) for p in plate_corners(mask_points(recs[ref][1], 2))]
+    quad0, wells = fit_wells(frames[ref], [tuple(map(float, p)) for p in plate_corners(mask_points(recs[ref][1], 2))])
     corners0 = np.float32(quad0).reshape(-1, 1, 2)
     orb = cv2.ORB_create(ORB_FEATURES)
     tip_at = lambda n: mask_points(recs[n][2], 2) if 2 in recs.get(n, {}) else None  # noqa: E731
@@ -795,7 +860,7 @@ def follow_plate(clip: Path, recs: dict, nframes: int) -> dict:
         return none
     base = (np.float32([k.pt for k in kps]), des)
     reach = MATCH_PITCHES * pitch_px(plate_h(plate_quad(quad0, "tl")))
-    out = {"quads": {ref: quad0}, "ref": ref, "redone": 0, "kept": 0}
+    out = {"quads": {ref: quad0}, "ref": ref, "redone": 0, "kept": 0, "wells": wells}
     for way in (range(ref + 1, nframes), range(ref - 1, -1, -1)):
         last, stuck = np.eye(3), 0
         for n in way:
@@ -966,7 +1031,7 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
             "prompts": {str(k): [n for n, _ in v] for k, v in prompts.items()},
             "track": [[n, mm[0], mm[1], a] for n, mm, a in track],
             "found": [{"well": w, "rep": rep, "f0": f0, "f1": f1} for w, rep, f0, f1 in found],
-            "plate_frame": followed["ref"], "plate_redone": followed["redone"], "plate_kept": followed["kept"],
+            "plate_frame": followed["ref"], "plate_wells": followed["wells"], "plate_redone": followed["redone"], "plate_kept": followed["kept"],
             "pitch_px": pitch, "well_px": pitch * WELL_D_MM / PITCH_MM,
             "fails": fails, "failed_ratio": failed / nframes if nframes else 1.0,
             "timing": t, "images": images}

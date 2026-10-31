@@ -10,3 +10,7 @@
 ## 2026-10-31 (not yet a baseline)
 - LOST_FRAMES None -> 3, LOST_REACH None -> 3.0
 - why: following stayed lost on 230954 (115 frames left in place) with a hand over part of the plate; recovery added. Accuracy is checked by hand on the iPad.
+
+## 2026-10-31 (not yet a baseline)
+- FLAT_PX None -> 6, MAX_WELL_SHIFT None -> 4, MIN_WELLS None -> 30, SHIFT_MARGIN None -> 2, MAX_WELL_SCALE None -> 0.06
+- why: seen from the side the mask's outline takes in the plate's wall and pushes the grid off the wells; the grid now fits the wells on the reference frame.

@@ -349,4 +349,20 @@ assert sw.convex([(0, 0), (10, 0), (10, 10), (0, 10)]) and sw.convex([(0, 10), (
 assert not sw.convex([(0, 0), (10, 10), (10, 0), (0, 10)])  # crossed
 assert not sw.convex([(0, 0), (10, 0), (2, 2), (0, 10)])  # dented
 print("SW13 ok: following repeats exactly")
+# SW14. An outline 3 mm off (the plate's wall): the grid moves onto the wells.
+import cv2  # noqa: E402
+import numpy as np  # noqa: E402
+PX = 6
+frame14 = np.full((round(sw.PLATE_MM[1] * PX) + 200, round(sw.PLATE_MM[0] * PX) + 200), 40, np.uint8)
+for r14 in range(8):
+    for c14 in range(12):
+        x14, y14 = sw.well_center_mm(r14, c14)
+        cv2.circle(frame14, (round(x14 * PX) + 100, round(y14 * PX) + 100), round(sw.WELL_D_MM * PX / 2), 200, 2)
+true14 = [(100, 100), (100 + sw.PLATE_MM[0] * PX, 100), (100 + sw.PLATE_MM[0] * PX, 100 + sw.PLATE_MM[1] * PX),
+          (100, 100 + sw.PLATE_MM[1] * PX)]
+off14 = [(x + 3 * PX, y + 3 * PX) for x, y in true14]
+fit14, wells14 = sw.fit_wells(frame14, off14)
+assert wells14 >= 60 and all(sw.math.dist(a, b) < 4 for a, b in zip(fit14, true14)), (wells14, fit14)
+assert sw.fit_wells(np.zeros_like(frame14), off14) == (off14, 0)  # nothing to fit: as given
+print("SW14 ok: the grid sits on the wells")
 print("ALL PASS")
