@@ -95,11 +95,9 @@ EDGE_GAP, MIN_SHOWN = 0.02, 0.9
 #: 41/55 false 8 without, 27/55 false 6 at 1.0).
 FILL_S, FILL_WINDOW_S, STOP_MM_S = 1.0, 3.0, 20.0
 SINK_RATIO, SINK_BACK_S = None, 2.0
-#: A chunk's frame replaces the session's reference when its score (share of the plate showing +
-#: share of the 96 wells SAM finds) beats it by this much.
-REF_MARGIN = 0.15
-#: A continuous well is "sure" with a reference of at least MIN_WELLS wells, at least SURE_INLIERS ORB
-#: inliers on its stay (the median), and the tip within SURE_OFF_MM of the well's center.
+#: A continuous well is "sure" with at least SURE_INLIERS ORB inliers on its stay (the median) and
+#: the tip within SURE_OFF_MM of the well's center. The reference's wells don't count: SAM can find
+#: none on a clear view of a clear plate, and the grid then just keeps to the outline.
 SURE_INLIERS, SURE_OFF_MM = 70, 3.0  # 70: the lowest 5th percentile of matched frames on the iPad sessions
 #: A chunk's looks for the tip. SAM's image calls run about one at a time however many are sent
 #: (1.6 s each), and a chunk closes every 9 s: 40 a chunk took 270 s, and dropped connections.
@@ -451,11 +449,10 @@ def filled(track: list, fps: float, sink: float | None = SINK_RATIO) -> list:
     return out
 
 
-def not_sure_why(off_mm: float, ref_wells: int, inliers: list) -> list:
+def not_sure_why(off_mm: float, inliers: list) -> list:
     """What's unsure about a well, by name; empty: sure. inliers: the stay's frames (0: not matched)."""
     middle = sorted(inliers)[len(inliers) // 2] if inliers else 0
-    return [why for why, bad in (("reference", ref_wells < MIN_WELLS), ("matching", middle < SURE_INLIERS),
-                                 ("off center", off_mm > SURE_OFF_MM)) if bad]
+    return [why for why, bad in (("matching", middle < SURE_INLIERS), ("off center", off_mm > SURE_OFF_MM)) if bad]
 
 
 def compare_settings(attempts: list) -> dict:
@@ -995,27 +992,39 @@ def _carry(orb, base: tuple, frames: dict, recs: dict, quad0: list, ways: tuple,
 
 # ---------- continuous: the plate once a session ----------
 
-def plate_score(plate: dict, wells: int) -> float:
-    return shown(plate) + min(wells, 96) / 96
+def _overlap(a: list, b: list) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
-def ref_candidate(sam, gray, plate: dict, frame: int) -> dict | None:
-    """This frame as the session's reference: None when the plate touches the screen's edge or
-    its grid is bent. The grid is fitted to the wells SAM finds there."""
-    size = gray.shape[::-1]
-    pts = mask_points(plate, 2)
-    if touches_edge(plate, size) or distorted(plate_corners(pts)):
-        return None
-    quad = [tuple(map(float, p)) for p in plate_corners(pts)]
-    quad, wells = fit_wells(gray, quad, lambda png: sam.image(WELL, png))
-    return {"gray": gray, "quad": quad, "seen": seen_points(plate), "wells": wells, "frame": frame,
-            "score": plate_score(plate, wells)}
+def pick_reference(sam, stills: list, pointer: str) -> dict | None:
+    """The session's one reference from the frames at Record: stills are [(frame, gray, png)]. A
+    frame with the pen over the plate, or part of the plate hidden, only counts when all are; of
+    the rest, the one with the most wells SAM finds. None when none shows a usable plate."""
+    seen = []
+    for frame, gray, png in stills:
+        plates = sam.image(PLATE, png)
+        if not plates or touches_edge(plates[0], gray.shape[::-1]):
+            continue
+        plate, pens = plates[0], sam.image(pointer, png)
+        corners_ = [tuple(map(float, p)) for p in plate_corners(mask_points(plate, 2))]
+        if not distorted(corners_):
+            covered = shown(plate) < MIN_SHOWN or any(_overlap(m["box"], plate["box"]) for m in pens)
+            seen.append((frame, gray, plate, corners_, covered))
+    clear = [c for c in seen if not c[4]]
+    best = None
+    for frame, gray, plate, corners_, covered in clear or seen:
+        quad, wells = fit_wells(gray, corners_, lambda png: sam.image(WELL, png))
+        if best is None or wells > best["wells"]:
+            best = {"gray": gray, "quad": quad, "seen": seen_points(plate), "wells": wells, "frame": frame, "covered": covered}
+    return best
 
 
-def follow_chunk(frames: dict, recs: dict, ref: dict, start: int, plate: dict) -> dict:
-    """{"quads", ...} for a chunk from the session's reference. `plate` (SAM's, on frame `start`)
-    says roughly where the plate is now, and matching takes it from there both ways. It runs
-    beside SAM's video, so neither the hand nor the tip is masked out: RANSAC drops their matches."""
+def follow_chunk(frames: dict, recs: dict, ref: dict, start: int, plate: dict | None) -> dict:
+    """A chunk on the session's fixed reference. `plate`, SAM's on frame `start`, says roughly where
+    the plate is now (the wells look alike, so matching needs that to start from), so a chunk
+    needs no other chunk, and one that lost the plate doesn't pass that on. Without it, or bent,
+    matching starts from where the reference was. The pen's mask isn't in yet, so RANSAC drops
+    its matches and the hand's."""
     import cv2
     import numpy as np
     orb = cv2.ORB_create(ORB_FEATURES)
@@ -1023,21 +1032,33 @@ def follow_chunk(frames: dict, recs: dict, ref: dict, start: int, plate: dict) -
     base = orb_base(orb, ref["gray"], ref["quad"], None, ref["seen"])
     if base is None:
         return out
-    here = np.float32(plate_corners(mask_points(plate, 2)))
-    first = cv2.getPerspectiveTransform(np.float32(ref["quad"]), here)
-    _carry(orb, base, frames, recs, ref["quad"], (range(start, len(frames)), range(start - 1, -1, -1)), first, out,
-           plate_tracked=False)
+    here = plate_corners(mask_points(plate, 2)) if plate else None
+    first = cv2.getPerspectiveTransform(np.float32(ref["quad"]), np.float32(here)) if here and not distorted(here) else np.eye(3)
+    _carry(orb, base, frames, recs, ref["quad"], (range(start, len(frames)), range(start - 1, -1, -1)), first, out, False)
     return out
 
 
 def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) -> dict:
     """One chunk of a continuous session -> its tip track in plate mm (frames from the chunk's
-    start) and times. `session`: offer(candidate) keeps the better reference, ref() gives it. A
-    chunk with no tip is {"track": []}: no SAM video."""
+    start) and times. `session`: ref() gives the reference; chunks run side by side, each finding
+    the plate once to start matching to it. No tip: {"track": []}, no SAM video."""
     t, t_all = {}, time.perf_counter()
     info = ffprobe(clip)
     nframes, fps = info["frames"], info["fps"]
     out_dir.mkdir(parents=True, exist_ok=True)
+    done = lambda r: {"frames": nframes, "fps": fps, "timing": t, **r}  # noqa: E731
+    gray = gray_frames(clip, nframes)
+
+    def follow(plate0) -> tuple:
+        ref = session.ref()
+        if ref is None:
+            return None, None
+        t0 = time.perf_counter()
+        start, match = plate0 or (ref["frame"] if int(out_dir.name) == 0 else 0, None)
+        followed = follow_chunk(gray, {}, ref, start, match)
+        t["follow_s"] = time.perf_counter() - t0
+        return ref, followed
+
     looks = [(2 * i + 1) * nframes // (2 * CHUNK_TIP_LOOKS) for i in range(CHUNK_TIP_LOOKS)]
     fdir = frames_dir(clip, looks)
     t0 = time.perf_counter()
@@ -1049,40 +1070,27 @@ def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) 
         tips = hits_on(sam, pointer, fdir, looks)
         plate0 = finding_plate.result()[0]
         t["first_find_s"] = time.perf_counter() - t0
-        gray = gray_frames(clip, nframes)
-        if plate0:
-            def offer() -> None:
-                cand = ref_candidate(sam, gray[plate0[0]], plate0[1], plate0[0])
-                if cand:
-                    session.offer({**cand, "chunk": out_dir.name})
-            if session.ref() is None:
-                t0 = time.perf_counter()
-                offer()
-                t["reference_s"] = time.perf_counter() - t0
-            else:  # a better reference can land later; this chunk needn't wait for the call
-                threading.Thread(target=offer, daemon=True).start()
-        ref = session.ref()
-        if not plate0 or not tips or ref is None:
+        if not tips:
             shutil.rmtree(fdir)
             sending.result()
             t["total_s"] = time.perf_counter() - t_all
-            why = "no plate" if not plate0 else "no tip" if not tips else "no reference"
-            return {"frames": nframes, "fps": fps, "track": [], "timing": t, "why": why}
-        following = pool.submit(follow_chunk, gray, {}, ref, plate0[0], plate0[1])
+            return done({"track": [], "why": "no tip"})
+        following = pool.submit(follow, plate0)
         # every look that saw the tip prompts it, in one video call: a second round repeats the whole video
         _, recs, rounds = track_video(sending.result(), sam, {2: tips}, nframes, fps, fdir, pointer, t, max_rounds=1)
         shutil.rmtree(fdir)
         t0 = time.perf_counter()
         decode_masks(recs)
         t["masks_s"] = time.perf_counter() - t0
-        t0 = time.perf_counter()
-        followed = following.result()
-        t["follow_wait_s"] = time.perf_counter() - t0
+        ref, followed = following.result()
+    if ref is None:
+        t["total_s"] = time.perf_counter() - t_all
+        return done({"track": [], "why": "no reference"})
     track, *_ = locate(recs, nframes, a1, quads=followed["quads"])
     t["total_s"] = time.perf_counter() - t_all
-    return {"frames": nframes, "fps": fps, "track": [[n, mm[0], mm[1], a] for n, mm, a in track], "timing": t,
-            "rounds": rounds, "redone": followed["redone"], "kept": followed["kept"], "ref_wells": ref["wells"],
-            "inliers": followed.get("inliers", {})}
+    return done({"track": [[n, mm[0], mm[1], a] for n, mm, a in track], "rounds": rounds, "ref_wells": ref["wells"],
+                 "inliers": followed.get("inliers", {}), "redone": followed["redone"], "kept": followed["kept"],
+                 "plate_found": plate0 is not None})
 
 
 # ---------- one clip ----------

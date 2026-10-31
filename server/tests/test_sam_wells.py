@@ -407,7 +407,6 @@ real16 = sw.track_chunk
 
 def fake_chunk(clip, a1, sam, out, pointer, session):
     n = int(out.name)
-    session.offer({"chunk": out.name, "frame": 0, "wells": 10 * (n + 1), "score": [0.5, 0.6, 1.0][n % 3]})
     wait[n].wait(5)
     return chunks16[n]
 
@@ -436,13 +435,11 @@ assert send16(0).status_code == 200
 s16 = c16.post(f"/lab/sam-wells/live/{sid}/stop").json()
 assert s16["done"] and [w["well"] for w in s16["wells"]] == ["B3", "D5"], s16
 assert [c["status"] for c in s16["chunks"]] == ["done", "done", "empty"], s16
-assert s16["references"][-1]["chunk"] == "2", s16["references"]
 one16 = live.Live("x", "tl", "pen")
-for score, wells, name in ((0.5, 0, "a"), (0.6, 40, "b"), (1.0, 5, "c"), (1.0, 40, "d")):
-    one16.offer({"chunk": name, "frame": 0, "wells": wells, "score": score})  # b: not clearly better; c: too few wells
-assert [r["chunk"] for r in one16.refs] == ["a", "d"]
-assert sw.not_sure_why(1.0, 40, [100] * 8) == []
-assert sw.not_sure_why(3.5, 0, [0] * 8) == ["reference", "matching", "off center"]
+one16.set_reference({"frame": 3, "wells": 40, "covered": False})
+assert one16.ref()["frame"] == 3 and one16.refs[0]["wells"] == 40
+assert sw.not_sure_why(1.0, [100] * 8) == []
+assert sw.not_sure_why(3.5, [0] * 8) == ["matching", "off center"]
 one16.targets, one16.wells = ["B3", "C4", "D5"], [{"well": w, "confidence": c} for w, c in
                                                   (("B3", "sure"), ("E9", "sure"), ("C4", "not_sure"), ("G2", "not_sure"))]
 sm16 = one16.summary()
@@ -455,11 +452,8 @@ print("SW16 ok: a continuous session joins its chunks")
 
 
 class Ref16:
-    def __init__(self):
-        self.got = None
-
-    def offer(self, cand):
-        self.got = self.got or cand
+    def __init__(self, got=None):
+        self.got = got
 
     def ref(self):
         return self.got
@@ -477,8 +471,35 @@ out17 = Path(tempfile.mkdtemp())
 FakeSam.targets = ["B3"]
 r17 = sw.track_chunk(clip, "tl", NoTip(), out17 / "0", "pen", Ref16())
 assert r17["track"] == [] and r17["why"] == "no tip", r17
-session17 = Ref16()
+d17 = Path(tempfile.mkdtemp())
+subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(clip), "-frames:v", "1", str(d17 / "s.png")], check=True)
+gray17 = sw.gray_frames(clip, 1)[0]
+stills17 = [(n, gray17, d17 / f"{n}.png") for n in (0, 3, 6)]
+for _, _, png in stills17:
+    sw.shutil.copy(d17 / "s.png", png)
+box17 = [(x, y) for x in range(40, 600, 8) for y in range(60, 435, 8)]
+
+
+class Stills(FakeSam):
+    """The plate on every still; the pen over it on frames `over`; `wells` holes."""
+    def __init__(self, over, plate=True):
+        self.over, self.plate = over, plate
+
+    def image(self, target, png):
+        if target == sw.PLATE:
+            return [{"box": PLATE_BOX, "w": W, "h": H, "c": 0.9, "mask": None, "points": box17, "shown": 1.0}] if self.plate else []
+        if target == "pen":
+            return [{"box": PLATE_BOX, "c": 0.9}] if int(png.stem) in self.over else []
+        return []
+
+
+ref17 = sw.pick_reference(Stills((0, 6)), stills17, "pen")
+assert ref17["frame"] == 3 and not ref17["covered"], ref17["frame"]  # the clear one, though it's not first
+all17 = sw.pick_reference(Stills((0, 3, 6)), stills17, "pen")
+assert all17 and all17["covered"]  # all covered: the best of them still serves
+assert sw.pick_reference(Stills((), plate=False), stills17, "pen") is None
+session17 = Ref16(ref17)
 r17 = sw.track_chunk(clip, "tl", FakeSam(), out17 / "1", "pen", session17)
-assert session17.got and r17["track"], r17
+assert r17["track"] and r17["plate_found"], r17
 print("SW17 ok: a chunk without a tip is empty, one with a tip tracks")
 print("ALL PASS")
