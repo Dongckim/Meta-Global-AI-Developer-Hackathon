@@ -15,7 +15,7 @@ def _words(items: list[str]) -> str:
 
 
 def _meta_use(mode: str) -> tuple[list, list, bool]:
-    """(ask first, go straight to the Meta API, robot code available)."""
+    """(ask first, go straight to the Meta Model API, robot code available)."""
     extras = (("Search", "confirm_search"), ("Photos", "confirm_photo"))
     asks = [name for name, key in extras if route(key, mode)]
     direct = [name for name, key in extras if not route(key, mode)]
@@ -31,7 +31,7 @@ def mode_view(mode: str) -> dict:
     """Snapshot `modes`: one Mode card, generated from the routing settings."""
     cfg = section("modes")[mode]
     asks, direct, robot = _meta_use(mode)
-    notes = [" · ".join(direct) + ": Meta API"] if direct else []
+    notes = [" · ".join(direct) + ": Meta Model API"] if direct else []
     notes += [" & ".join(asks).capitalize() + ": Milo checks with you first."] if asks else []
     notes += [] if robot else ["Robot code: Full only"]
     return {"id": mode, "label": cfg["label"], "line": cfg["line"],
@@ -54,7 +54,7 @@ def explain() -> str:
         out.append(f"{section('modes')[mode]['label']}: {_named(_step('asr', mode))} hears you "
                    f"and {_named(_step('commands', mode))} runs your commands.")
         if direct:
-            out.append(f"{_words(direct).capitalize()} use the Meta API.")
+            out.append(f"{_words(direct).capitalize()} use the Meta Model API.")
         if asks:
             out.append(f"{_words(asks).capitalize()} ask first.")
         if not robot:

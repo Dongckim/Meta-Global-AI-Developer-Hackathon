@@ -1,4 +1,4 @@
-"""Private: voice turns run on Glimmer and nothing reaches the Meta API
+"""Private: voice turns run on Glimmer and nothing reaches the Meta Model API
 before its confirm card. Every outgoing model call is recorded here.
 
 Run: python -m server.tests.test_private_voice (runs on import).
@@ -336,7 +336,7 @@ with patch.object(api, "_post", calls):
 assert len(calls.bodies) == 2 and tone.run_mode() == "private", len(calls.bodies)
 clean(calls.bodies)
 rec = api.store.searches()[-1]
-assert rec["sent"] == "sent to Meta API (Private, confirmed)", rec
+assert rec["sent"] == "sent to Meta Model API (Private, confirmed)", rec
 assert rec["detail"].endswith("That fits step 3."), rec
 print("PV-out1 ok: a search: nothing before yes, no record in it, tied to the run on Glimmer, mode stays")
 
@@ -354,7 +354,7 @@ with patch.object(api, "_post", calls), patch.object(api.lookmod, "matches", lam
     r = c.post("/look", files={"file": ("p.jpg", b"\xff\xd8x", "image/jpeg")}, data={"search_id": rec["id"], "session": "t"})
 assert r.status_code == 200 and len(calls.bodies) == 2, (r.text, len(calls.bodies))
 clean(calls.bodies)
-assert rec["sent"] == "sent to Meta API (Private, confirmed)" and tone.run_mode() == "private"
+assert rec["sent"] == "sent to Meta Model API (Private, confirmed)" and tone.run_mode() == "private"
 print("PV-out2 ok: a photo: nothing before yes, the question without the record, mode stays")
 
 c = private()

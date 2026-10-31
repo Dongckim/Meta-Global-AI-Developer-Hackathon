@@ -432,7 +432,7 @@ struct ContentView: View {
                                        onPick: { sendAction("pick", ["n": $0]) }, perform: performButton)
                             .disabled(importing).opacity(importing ? 0.5 : 1)
                     } else {
-                        // "Send this to the Meta API?", "Already saved as..."
+                        // "Send this to the Meta Model API?", "Already saved as..."
                         ConfirmScreen(lab: lab, buttons: registry.cards, u: u, onAnswer: answer(id:ok:),
                                       onAnswerAll: answerAll, onChoice: choose(id:answer:))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)

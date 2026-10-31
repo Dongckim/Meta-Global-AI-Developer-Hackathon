@@ -13,7 +13,7 @@ here first. Hand off, photo questions and search summaries stay on Spark; photo
 questions and search ask first. A document over `private.import_max_chars`
 (30,000, about 8,000 tokens) asks to switch to Full: the context is 16,384 with
 4,096 kept for the answer. `MAX_TOKENS` is 4,096 because the demo PDFs need up to
-2,472 output tokens, reasoning included. Say it as "not sent to the Meta API, processed on the Meta model we run",
+2,472 output tokens, reasoning included. Say it as "not sent to the Meta Model API, processed on the Meta model we run",
 never "on device". A run picks Private on the Mode screen and keeps it; the app
 follows the run that's open (`RecordStore._view_mode`), and Home is Full.
 

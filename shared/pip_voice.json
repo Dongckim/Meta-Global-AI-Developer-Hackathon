@@ -180,8 +180,8 @@
     "next_step": {"title": "Move to step {step}?", "detail": "Step {done} done"},
     "end_run": {"title": "Finish this run?", "detail": ""},
     "new_run": {"title": "{run} is finished", "detail": "Start a new run of {name}?"},
-    "confirm_search": {"title": "Search the web?", "detail": "Private mode stays on. Only this question goes to the Meta API to search the web. Your run record stays on our server.", "declined": "Okay, nothing was sent."},
-    "confirm_photo": {"title": "Send this photo?", "detail": "Private mode stays on. This photo and your question go to the Meta API. Your run record stays on our server.", "declined": "Okay, nothing was sent."},
+    "confirm_search": {"title": "Search the web?", "detail": "Private mode stays on. Only this question goes to the Meta Model API to search the web. Your run record stays on our server.", "declined": "Okay, nothing was sent."},
+    "confirm_photo": {"title": "Send this photo?", "detail": "Private mode stays on. This photo and your question go to the Meta Model API. Your run record stays on our server.", "declined": "Okay, nothing was sent."},
     "import_too_long": {"title": "Too long for Private", "detail": "Switch to Full to read it?"},
     "unmarked": {"context": "Step {now} · {now_title}", "title": "{wells} not marked", "detail": "Mark all {n} done and go to step {step}?", "header": "{wells} not marked."},
     "import_known": {"title": "Already saved as {name}", "detail": "Open it or review again?"},
@@ -280,7 +280,7 @@
   "look_no_photo": ["I couldn't get the photo from the glasses. Try again."],
   "look_no_glasses": ["Connect your glasses first."],
   "look_send_failed": ["I couldn't check the photo. Try again."],
-  "confirm_photo": ["Private mode stays on, but this photo and your question will go to the Meta API. Send anyway?"],
+  "confirm_photo": ["Private mode stays on, but this photo and your question will go to the Meta Model API. Send anyway?"],
   "import_too_long": ["This file is too long for Private mode. Switch to Full?"],
   "import_reading": ["Reading it now."],
   "import_failed": ["I couldn't read that file."],
@@ -290,7 +290,7 @@
   "search_slow": ["That took too long. Try again?"],
   "search_no_source": ["I couldn't find a solid source."],
   "search_private": ["I'd have to send your lab details. Ask it without them?"],
-  "confirm_search": ["Private mode stays on, but this question will go to the Meta API. Search anyway?"],
+  "confirm_search": ["Private mode stays on, but this question will go to the Meta Model API. Search anyway?"],
   "no_searches": ["No web searches yet."],
   "draft_discarded": [
     "Draft discarded."
@@ -308,7 +308,7 @@
     "expected_s": 25,
     "cold_min_s": 5,
     "title": "Waking up the private model",
-    "sent_note": "sent to Meta API (Private, confirmed)",
+    "sent_note": "sent to Meta Model API (Private, confirmed)",
     "tie_prompt": "A lab assistant got this answer from outside. In one short sentence, say what it means for the run in the state below, or reply NONE if it doesn't change anything. Use only what's in the state; never invent a number.",
     "info": "Glimmer · on our server · {s} s",
     "speak_after_s": 1.5,
@@ -318,7 +318,7 @@
     "lines": [
       {"at": 0, "text": "Warming up the private model. Like the medium, it likes 37 °C."},
       {"at": 6, "text": "Pipetting {gb} GB of weights onto the GPU…"},
-      {"at": 12, "text": "Your words stay off the Meta API. Milo signed the NDA."},
+      {"at": 12, "text": "Your words stay off the Meta Model API. Milo signed the NDA."},
       {"at": 18, "text": "Still incubating. No peeking."},
       {"at": 24, "text": "Equilibrating…"},
       {"at": 30, "text": "Almost there. Good time to label your tubes."},
@@ -327,7 +327,7 @@
   },
   "modes": {
     "_note": "Run modes: header label, Mode card line, and the routing itself: asr, commands, imports (keys of mode_routes), handoff, confirm_*. server/modes.py reads these for the routing and the Mode card alike.",
-    "full": {"label": "Full", "line": "Most capable · Meta API", "asr": "meta", "commands": "spark", "imports": "spark", "handoff": true, "confirm_search": false, "confirm_photo": false},
+    "full": {"label": "Full", "line": "Most capable · Meta Model API", "asr": "meta", "commands": "spark", "imports": "spark", "handoff": true, "confirm_search": false, "confirm_photo": false},
     "private": {"label": "Private", "line": "Protects your data · a bit slower", "asr": "device", "commands": "glimmer", "imports": "glimmer", "handoff": false, "confirm_search": true, "confirm_photo": true}
   },
   "mode_routes": {
@@ -337,7 +337,7 @@
       "device": {"icon": "waveform", "name": "iOS Speech", "where": "on iPad"}
     },
     "commands": {
-      "spark": {"icon": "sparkle", "name": "Muse Spark", "where": "Meta API"},
+      "spark": {"icon": "sparkle", "name": "Muse Spark", "where": "Meta Model API"},
       "glimmer": {"icon": "sparkle", "name": "Muse Glimmer", "where": "Private GPU · Modal", "said": "on a private GPU on Modal"}
     }
   },

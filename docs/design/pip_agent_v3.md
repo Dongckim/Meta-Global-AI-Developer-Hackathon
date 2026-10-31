@@ -451,7 +451,7 @@ the key stays on the server (handshake `authorization.accessToken`).
   A document too long for Glimmer asks to switch to Full. Which model runs
   what is one setting, `modes` in pip_voice.json, read by the routing and the
   Mode card alike (server/modes.py): never a mode check in code.
-  Say it as "not sent to the Meta API, processed on the Meta model we run";
+  Say it as "not sent to the Meta Model API, processed on the Meta model we run";
   never "on device".
 - "Hey Meta" voice invocation is out of scope; add no related
   plist/code/settings.

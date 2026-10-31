@@ -73,8 +73,8 @@ def went_to(c):
 
 
 full, private = modes.mode_view("full"), modes.mode_view("private")
-assert [named(s) for s in full["steps"]] == ["Meta Voice Transcribe", "Muse Spark (Meta API)"], full
-assert full["notes"] == ["Search · Photos · Robot code: Meta API"], full
+assert [named(s) for s in full["steps"]] == ["Meta Voice Transcribe", "Muse Spark (Meta Model API)"], full
+assert full["notes"] == ["Search · Photos · Robot code: Meta Model API"], full
 assert [named(s) for s in private["steps"]] == ["iOS Speech (on iPad)", "Muse Glimmer (Private GPU · Modal)"], private
 assert private["notes"] == ["Search & photos: Milo checks with you first.", "Robot code: Full only"], private
 print("MF1 ok: the cards say what was asked for")
@@ -105,7 +105,7 @@ with setting("full", commands="glimmer"):
 print("MF3 ok: move the setting, and the turn and the card move together")
 
 with setting("private", confirm_photo=False, handoff=True):
-    assert modes.mode_view("private")["notes"] == ["Photos · Robot code: Meta API", "Search: Milo checks with you first."]
+    assert modes.mode_view("private")["notes"] == ["Photos · Robot code: Meta Model API", "Search: Milo checks with you first."]
     c = fresh("private")
     j = c.post("/input", json={"text": "what does this label say", "session": "m"}).json()
     assert not j["cards"], "photo didn't ask: the card said so too"
@@ -118,7 +118,7 @@ with patch.object(api, "_post", route):
     j = c.post("/input", json={"text": "what's the difference?", "session": "m"}).json()
 assert j["route"] == "grammar" and not route.to, j
 reply = j["reply"]
-for words in ("Meta Voice Transcribe", "Muse Spark Meta API", "iOS Speech on iPad", "Muse Glimmer on a private GPU on Modal",
+for words in ("Meta Voice Transcribe", "Muse Spark Meta Model API", "iOS Speech on iPad", "Muse Glimmer on a private GPU on Modal",
               "Robot code is Full only."):
     assert words in reply, reply
 print("MF5 ok: the difference is said from the same settings, no model")

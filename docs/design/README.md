@@ -91,7 +91,7 @@ nearest frame's parts and should get a look.
 - **⑤a Mode, Private variant (differs from the design)**: its line "Nothing
   leaves this iPad" isn't true, so it isn't used. What happens: speech is
   transcribed on the iPad; voice commands and imports run on Glimmer on our
-  server; search and photo questions use the Meta API after a card's Yes.
+  server; search and photo questions use the Meta Model API after a card's Yes.
 - **Home, Mode, protocol detail, Run record stay light in Private**: the
   design has no Private variant of them.
 - **⑨0 Final protocol**: the ⑤c-⑤e review screens in final protocol mode
