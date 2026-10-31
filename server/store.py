@@ -1976,6 +1976,8 @@ class RecordStore:
             return
         rec = searchmod.record(question, "", None, "looking", (self.r.get("run") or {}).get("run_id"), 0)
         rec.update({"kind": "photo", "target": lookmod.target_of(question), "attempt": 1})
+        if confirmed:
+            rec["sent"] = section("private")["sent_note"]
         self._add_search_locked(rec)
         self._push_view("web_answer", rec["id"])
         res["ui"].append({"action": "camera", "search_id": rec["id"], "id": uuid.uuid4().hex[:8]})
@@ -2044,7 +2046,8 @@ class RecordStore:
     def private_texts(self) -> list[str]:
         """What a search query must never carry: note texts and run names."""
         notes = [m.get("text") or "" for m in self.r.get("notes") or []]
-        return notes + [(self.r.get("run") or {}).get("protocol_name") or ""]
+        steps = [s.get("text") or "" for s in (self.r.get("plan") or {}).get("steps") or []]
+        return notes + steps + [(self.r.get("run") or {}).get("protocol_name") or ""]
 
     def show_search(self, search_id: str) -> str:
         """Open a search's answer (after it ran). Returns the screen line."""
@@ -2714,8 +2717,9 @@ class RecordStore:
         self.r["cards"].pop(card_id)
         if not ok:
             self._commit()
-            self._refresh_card_output(card, ok, "Canceled.", session)
-            return "Canceled.", [], card
+            line = (section("cards").get(card["kind"]) or {}).get("declined") or "Canceled."
+            self._refresh_card_output(card, ok, line, session)
+            return line, [], card
         p = card.get("payload") or {}
         op = p.get("op")
         res: dict = {"messages": [], "cards": [], "ui": [],

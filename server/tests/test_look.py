@@ -173,7 +173,7 @@ with patch("httpx.AsyncClient", ScriptClient):
     with patch.dict(os.environ, {"RUN_MODE": "private"}):
         j = said("what does this say?")
         assert [x["kind"] for x in j["cards"]] == ["confirm_photo"] and not j.get("ui"), j
-        assert j["reply"] == "Send a photo to answer that?", j
+        assert j["reply"].endswith("Send anyway?"), j
         j = said("yes")
         recs = [d for d in api.store.searches() if d.get("kind") == "photo"]
         assert len(recs) == 1 and recs[0]["status"] == "looking", recs

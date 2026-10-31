@@ -189,10 +189,10 @@ with patch.dict(os.environ, {"RUN_MODE": "private", "PRIVATE_LLM_URL": "http://g
     ScriptClient.queue = [perform("web_search", "c4", query="max DMSO for HeLa cells")]
     with patch("httpx.AsyncClient", ScriptClient), patch.object(api, "from_chat", lambda p: p):
         j = c.post("/input", json={"text": "Max DMSO for HeLa cells?", "session": "s"}).json()
-    assert j["reply"] == "Search the web for 'max DMSO for HeLa cells'?" and len(sent) == 1, j
+    assert j["reply"].endswith("Search anyway?") and len(sent) == 1, j
     card = j["cards"][0]
-    assert (card["title"], card["detail"]) == ("Search the web?", "“max DMSO for HeLa cells”"), card
-    ScriptClient.queue = [GOOD, TIDY]
+    assert card["title"] == "Search the web?" and "Only this question" in card["detail"], card
+    ScriptClient.queue = [GOOD, TIDY, {"choices": [{"message": {"content": "NONE"}}]}]  # Glimmer: nothing to tie
     with patch("httpx.AsyncClient", ScriptClient):
         j = c.post("/input", json={"text": "yes", "session": "s"}).json()
     assert ". Source: " in j["reply"] and len(st.answered_searches()) == 1, j

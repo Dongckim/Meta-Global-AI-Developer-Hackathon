@@ -105,7 +105,7 @@ struct ConfirmScreen: View {
             } else if let sub = c.detail, !sub.isEmpty {
                 Text(sub).font(Theme.ui(28 * u)).tracking(-0.34 * u)
                     .foregroundStyle(Theme.text1).multilineTextAlignment(.center)
-                    .lineLimit(2).padding(.top, 24 * u)
+                    .lineLimit(4).multilineTextAlignment(.center).padding(.top, 24 * u)
             }
         }
         .frame(maxWidth: .infinity)

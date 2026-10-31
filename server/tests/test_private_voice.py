@@ -289,5 +289,80 @@ assert "B7" in done_wells(api.store.r) and not calls.meta, (j, calls.meta)
 assert k["transcript"] == "" and k["reply"], k
 print("PV12 ok: /voice takes the iPad's words; audio sent anyway stops here, ASR 0")
 
+# What leaves: the question, the photo. Never the record -------------------------
+SECRET = "SECRETNOTE cloudy near edge"
+FORBIDDEN = [SECRET, "Demo protocol", "C6", "step_index", "현재 상태", "\"notes\""]
+
+
+def clean(bodies):
+    text = json.dumps(bodies, ensure_ascii=False)
+    hit = [w for w in FORBIDDEN if w in text]
+    assert not hit, (hit, text[:400])
+
+
+class Meta(Calls):
+    """Meta answers as each call expects; every body is kept."""
+
+    def __init__(self, *script):
+        super().__init__(*script)
+        self.bodies = []
+
+    async def __call__(self, client, name, url, **k):
+        if url.startswith("http://glimmer.test"):
+            return await super().__call__(client, name, url, **k)
+        self.bodies.append(k["json"])
+        if name == "search":
+            return httpx.Response(200, json={"output": [
+                {"type": "web_search_call", "results": [{"url": "https://a.org/x", "title": "A"}]},
+                {"type": "message", "content": [{"type": "output_text", "text": "Keep it under 0.5%.",
+                                                 "annotations": [{"type": "url_citation", "url": "https://a.org/x", "title": "A"}]}]}]})
+        if name == "sam":
+            return httpx.Response(200, text="")
+        out = {"answer_short": "Under 0.5%", "detail": "Fine.", "sources": ["https://a.org/x"], "read": "Drug", "needs_search": False, "query": ""}
+        return httpx.Response(200, json={"output": [{"type": "message", "content": [{"type": "output_text", "text": json.dumps(out)}]}]})
+
+
+c = private()
+api.store.r["notes"].append({"text": SECRET, "target": "C6"})
+ask = chat(("web_search", {"query": f"max DMSO for C6 {SECRET}"}))
+calls = Meta(ask, ask, chat(text="That fits step 3."))
+with patch.object(api, "_post", calls):
+    j = say(c, f"what's the max DMSO for C6 {SECRET}")
+    assert not calls.bodies and j["cards"][0]["kind"] == "confirm_search", j
+    j = say(c, "not now")
+    assert j["reply"] == "Okay, nothing was sent." and not calls.bodies, j
+    j = say(c, f"what's the max DMSO for C6 {SECRET}")
+    j = say(c, "search anyway")
+assert len(calls.bodies) == 2 and tone.run_mode() == "private", len(calls.bodies)
+clean(calls.bodies)
+rec = api.store.searches()[-1]
+assert rec["sent"] == "sent to Meta API (Private, confirmed)", rec
+assert rec["detail"].endswith("That fits step 3."), rec
+print("PV-out1 ok: a search: nothing before yes, no record in it, tied to the run on Glimmer, mode stays")
+
+c = private()
+api.store.r["notes"].append({"text": SECRET, "target": "C6"})
+calls = Meta(chat(text="NONE"))
+crop_bytes = (b"crop", (0, 0, 10, 10))
+with patch.object(api, "_post", calls), patch.object(api.lookmod, "matches", lambda t: [{"box": (0, 0, 1, 1), "w": 1, "h": 1}]), \
+        patch.object(api.lookmod, "crop", lambda raw, box, size: crop_bytes), patch.object(api.lookmod, "outline", lambda m: []):
+    j = say(c, "what does this label say")
+    assert j["cards"][0]["kind"] == "confirm_photo" and not calls.bodies, j
+    j = say(c, "send anyway")
+    rec = next(d for d in api.store.searches() if d.get("kind") == "photo")
+    api.store.update_look(rec["id"], question=f"what does this label on C6 say {SECRET}")  # the worst a question holds
+    r = c.post("/look", files={"file": ("p.jpg", b"\xff\xd8x", "image/jpeg")}, data={"search_id": rec["id"], "session": "t"})
+assert r.status_code == 200 and len(calls.bodies) == 2, (r.text, len(calls.bodies))
+clean(calls.bodies)
+assert rec["sent"] == "sent to Meta API (Private, confirmed)" and tone.run_mode() == "private"
+print("PV-out2 ok: a photo: nothing before yes, the question without the record, mode stays")
+
+c = private()
+with patch.object(api, "_post", Calls()):
+    j = say(c, "what does this label say")
+    j = say(c, "not now")
+assert j["reply"] == "Okay, nothing was sent." and not api.store.searches(), j
+print("PV-out3 ok: not now sends nothing")
+
 tone.set_run_mode(None)
 print("ALL PASS")

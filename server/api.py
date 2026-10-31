@@ -758,6 +758,28 @@ def _resolve_cards(targets: list, session: dict):
     return [], res["messages"], reply, 0, "card", res["cards"], res["info"], []
 
 
+def _outgoing(text: str) -> str:
+    """A question as it leaves in a mode that asks first: no wells, notes or
+    run names, the same cleaning a search query gets."""
+    return search.clean_query(text, store.private_texts()) if _confirm_search() else text
+
+
+async def _tie_to_run(client, question: str, answer: str) -> str:
+    """Private: what came back, related to this run on our own model, so the
+    record never had to leave. One sentence, or nothing."""
+    if route("commands") != "glimmer" or not store.r.get("run") or not store.wake.fresh():
+        return ""
+    state = json.dumps(store.r.get("plan") or {}, ensure_ascii=False)[:8000]
+    body = {"instructions": section("private")["tie_prompt"] + STATE_MARK + state,
+            "input": f"Question: {question}\nAnswer: {answer}", "max_output_tokens": 400}
+    try:
+        line = proto.output_text(await _glimmer_json(client, "tie to run", body)).strip()
+    except HTTPException as e:
+        print(f"tie to run failed: {e.detail}", flush=True)
+        return ""
+    return "" if line.upper().startswith("NONE") else line
+
+
 def search_mode() -> str:
     """The run mode searches follow (tone.run_mode)."""
     return run_mode()
@@ -817,7 +839,7 @@ async def _search_calls(client, key, question: str, query: str, session: dict):
     tidy = await asyncio.wait_for(
         _post(client, "search tidy", f"{BASE_URL}/responses",
               headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-              json=search.build_summary_body(question, got, SPARK_MODEL)), max(left, 1.0))
+              json=search.build_summary_body(_outgoing(question) or query, got, SPARK_MODEL)), max(left, 1.0))
     return search.tidy(search.output_json(tidy.json()) if tidy.status_code == 200 else None, got), "ok"
 
 
@@ -826,6 +848,8 @@ async def _run_search(client, key, question: str, query: str, session: dict) -> 
     now and "Still looking…" once after 6 s; "stop" cancels it. Every sent
     search is kept. (reply, sources)."""
     rec = search.record(question, query, None, "pending", (store.r.get("run") or {}).get("run_id"), 0)
+    if _confirm_search():
+        rec["sent"] = section("private")["sent_note"]
     store.add_search(rec)
     store.show_search(rec["id"])
     _stage(session, "searching", query=query, search_id=rec["id"], say=say("looking_up", session))
@@ -860,8 +884,11 @@ async def _run_search(client, key, question: str, query: str, session: dict) -> 
     if status != "ok":
         _stage(session, "failed", reason=status, search_id=rec["id"], reply=line)
         return line, []
+    tie = await _tie_to_run(client, question, f"{rec['answer_short']}. {rec['detail']}")
+    if tie:
+        store.update_look(rec["id"], detail=f"{rec['detail']} {tie}".strip())
     session["last_web"] = f"{rec['answer_short']}. {rec['detail']}"  # "attach it as a tip"
-    return store.screen_line("web_answer", rec["id"]), rec["sources"]
+    return f"{store.screen_line('web_answer', rec['id'])} {tie}".strip(), rec["sources"]
 
 
 def _stop_search(session: dict, text: str) -> bool:
@@ -2245,7 +2272,8 @@ async def look_photo(file: UploadFile = File(...), search_id: str = Form(...), s
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(cut)
             read = await _post(client, "look read", f"{BASE_URL}/responses", headers=headers,
-                               json=lookmod.build_read_body(question, target, lookmod.data_url(cut), SPARK_MODEL))
+                               json=lookmod.build_read_body(_outgoing(question) or target, target,
+                                                            lookmod.data_url(cut), SPARK_MODEL))
             _check("look read", read)
             got = search.output_json(read.json()) or {}
             if not (got.get("answer_short") or "").strip():
@@ -2264,6 +2292,9 @@ async def look_photo(file: UploadFile = File(...), search_id: str = Form(...), s
                     web, status = None, "timeout"
                 if status == "ok" and web:
                     result, basis = web, web.get("basis") or "pages"
+            tie = await _tie_to_run(client, question, f"{result['answer_short']}. {result.get('detail') or ''}")
+            if tie:
+                result = {**result, "detail": f"{result.get('detail') or ''} {tie}".strip()}
     except Exception:  # the photo couldn't be read (API, crop): the camera comes back, Take it again
         store.update_look(search_id, a, status="looking", outline=[])
         _stage(sess, "looking", search_id=search_id)
