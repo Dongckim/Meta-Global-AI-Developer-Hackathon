@@ -75,6 +75,9 @@ MAX_BITS = 64  # of ORB's 256: a further pair isn't the same spot
 #: The area around the plate features come from (x its size), and a frame fit to be the reference
 #: shows at least this share of the clip's usual plate size.
 PLATE_MARGIN, MIN_BASE_SIZE = 1.15, 0.85
+#: After this many frames in a row left in place the plate has likely moved on: matches may come
+#: from this many times further, and SAM's plate counts even partly covered, if its corners hold up.
+LOST_FRAMES, LOST_REACH = 3, 3.0
 #: The screen's edge is this share of its size from the plate's box; SAM's plate stands in for an
 #: unmatched frame only when this much of it shows.
 EDGE_GAP, MIN_SHOWN = 0.02, 0.9
@@ -301,6 +304,13 @@ def distorted(q: list) -> bool:
     long = [math.hypot(*e) or 1 for e in sides]
     return (skew(units[0], units[2]) > MAX_VIEW_SKEW or skew(units[1], units[3]) > MAX_VIEW_SKEW
             or max(long[0] / long[2], long[2] / long[0], long[1] / long[3], long[3] / long[1]) > MAX_VIEW_RATIO)
+
+
+def convex(q: list) -> bool:
+    """Four corners in order that turn the same way at each."""
+    turns = [(q[(i + 1) % 4][0] - q[i][0]) * (q[(i + 2) % 4][1] - q[i][1])
+             - (q[(i + 1) % 4][1] - q[i][1]) * (q[(i + 2) % 4][0] - q[i][0]) for i in range(4)]
+    return all(t > 0 for t in turns) or all(t < 0 for t in turns)
 
 
 def plate_quad(img_corners: list, a1: str) -> list:
@@ -757,7 +767,8 @@ def _follow(orb, base: tuple, gray, tip: list | None, plate: list, last, quad0: 
 def follow_plate(clip: Path, recs: dict, nframes: int) -> dict:
     """The plate's corners once, on its best frame, then carried to every frame by matching
     features to that frame. A frame that can't be matched takes SAM's plate if it's all in view,
-    else stays where the last one was. -> {"quads": {frame: corners}, "ref", "redone", "kept"}."""
+    else stays where the last one was; a few of those in a row and the search widens and a partly
+    covered plate will do. -> {"quads": {frame: corners}, "ref", "redone", "kept"}."""
     import cv2
     import numpy as np
     video, frames = cv2.VideoCapture(str(clip)), {}
@@ -786,26 +797,28 @@ def follow_plate(clip: Path, recs: dict, nframes: int) -> dict:
     reach = MATCH_PITCHES * pitch_px(plate_h(plate_quad(quad0, "tl")))
     out = {"quads": {ref: quad0}, "ref": ref, "redone": 0, "kept": 0}
     for way in (range(ref + 1, nframes), range(ref - 1, -1, -1)):
-        last = np.eye(3)
+        last, stuck = np.eye(3), 0
         for n in way:
             if n not in frames:
                 continue
-            found = _follow(orb, base, frames[n], tip_at(n), plate_at(n), last, quad0, reach)
+            lost = stuck >= LOST_FRAMES
+            found = _follow(orb, base, frames[n], tip_at(n), plate_at(n), last, quad0, reach * (LOST_REACH if lost else 1))
             if found is not None:
                 quad = [tuple(map(float, p)) for p in cv2.perspectiveTransform(corners0, found).reshape(-1, 2)]
                 if not distorted(quad):  # a good inlier count on the wrong wells bends the grid
-                    last, out["quads"][n] = found, quad
+                    last, out["quads"][n], stuck = found, quad, 0
                     continue
             plate = recs.get(n, {}).get(1)
-            own = plate_corners(mask_points(plate, 2)) if plate and shown(plate) >= MIN_SHOWN \
+            own = plate_corners(mask_points(plate, 2)) if plate and (lost or shown(plate) >= MIN_SHOWN) \
                 and not touches_edge(plate, (w, h)) else None
-            if own and not distorted(own):
+            if own and convex(own) and not distorted(own):
                 last = cv2.getPerspectiveTransform(np.float32(quad0), np.float32(own))
-                out["quads"][n] = own
+                out["quads"][n], stuck = own, 0
                 out["redone"] += 1
             else:
                 out["quads"][n] = [tuple(map(float, p)) for p in cv2.perspectiveTransform(corners0, last).reshape(-1, 2)]
                 out["kept"] += 1
+                stuck += 1
     return out
 
 

@@ -46,7 +46,7 @@ APP_FPS = 7
 #: Every judging value; a change to one must say why.
 VALUES = ("DWELL_S", "DWELL_MM", "MAX_MISSING", "EDGE_TOL", "FIT_TRIES", "MIN_EDGE_POINTS", "MAX_SKEW",
           "MAX_VIEW_SKEW", "MAX_VIEW_RATIO", "ORB_FEATURES", "MATCH_PITCHES", "MIN_INLIERS", "MIN_INLIER_SHARE",
-          "MAX_BITS", "PLATE_MARGIN", "MIN_BASE_SIZE", "EDGE_GAP", "MIN_SHOWN")
+          "MAX_BITS", "PLATE_MARGIN", "MIN_BASE_SIZE", "EDGE_GAP", "MIN_SHOWN", "LOST_FRAMES", "LOST_REACH")
 #: What a confirm clip must be (the design's filming conditions).
 DESIGN = {"where": "desk", "view": "portrait", "w": 360, "h": 640}
 
@@ -85,7 +85,7 @@ def fill(clip: str) -> None:
 
 def follow_key() -> str:
     """Changes with the following's code or values."""
-    code = [sw.follow_plate, sw._follow, sw._region, sw.best_frame, sw.touches_edge, sw.distorted, sw.plate_corners]
+    code = [sw.follow_plate, sw._follow, sw._region, sw.best_frame, sw.touches_edge, sw.distorted, sw.convex, sw.plate_corners]
     text = "".join(inspect.getsource(f) for f in code) + json.dumps(values())
     return hashlib.sha1(text.encode()).hexdigest()
 

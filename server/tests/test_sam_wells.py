@@ -345,5 +345,8 @@ one, two = sw.follow_plate(clip, recs13, n13), sw.follow_plate(clip, recs13, n13
 assert one == two and one["ref"] is not None, (one["ref"], two["ref"])
 cached = sw.expand(sw.json.loads(sw.json.dumps(sw.compact(recs13))))
 assert sw.seen_points(cached[0][1]) == [list(p) for p in sw.seen_points(recs13[0][1])]
+assert sw.convex([(0, 0), (10, 0), (10, 10), (0, 10)]) and sw.convex([(0, 10), (10, 10), (10, 0), (0, 0)])
+assert not sw.convex([(0, 0), (10, 10), (10, 0), (0, 10)])  # crossed
+assert not sw.convex([(0, 0), (10, 0), (2, 2), (0, 10)])  # dented
 print("SW13 ok: following repeats exactly")
 print("ALL PASS")
