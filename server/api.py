@@ -67,6 +67,7 @@ from server.screens import SCREENS
 from server.screens import (PLAIN_ANSWERS, ask_choice, button_match, button_words, buttons_for, card_choices,
                             control_call, look_call, planned_screen, start_call, verbs)
 from server import handoff
+from server import lab_sam
 from server import look as lookmod
 from server.screens import guide as _screen_guide
 from server.screens import READS as SCREEN_READS
@@ -364,6 +365,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Pip server", lifespan=lifespan)
+app.include_router(lab_sam.router)  # Diagnostics test page only
 
 #: Hand off: Spark writes the robot code with room to think and a whole file.
 HANDOFF_EFFORT = "low"

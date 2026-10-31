@@ -225,6 +225,8 @@ final class GlassesDAT {
 
     /// What the glasses see while a photo question waits (stream frames).
     private(set) var liveFrame: UIImage?
+    /// Every stream frame as it comes, for whoever listens (Diagnostics' SAM well test records it).
+    nonisolated let frameTap = FrameTap()
     private var liveSession: DeviceSession?
     private var liveStream: MWDATCamera.Stream?
     private var liveTokens = ListenerTokenBag()
@@ -274,7 +276,9 @@ final class GlassesDAT {
                 stream.errorPublisher.listen { error in
                     Log.dat.error("[look] live: stream error \(String(describing: error), privacy: .public)")
                 }.store(in: liveTokens)
+                let tap = frameTap
                 stream.videoFramePublisher.listen { [weak self] frame in
+                    tap.send(frame.sampleBuffer)
                     guard let img = frame.makeUIImage() else { return }
                     Task { @MainActor in self?.liveFrame = img }
                 }.store(in: liveTokens)
@@ -378,6 +382,16 @@ final class GlassesDAT {
         deviceName = device.nameOrId()
         batteryLevel = device.batteryLevel
     }
+}
+
+/// One listener for stream frames, set and called from any thread.
+final class FrameTap: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sink: ((CMSampleBuffer) -> Void)?
+
+    func set(_ f: ((CMSampleBuffer) -> Void)?) { lock.withLock { sink = f } }
+
+    func send(_ buffer: CMSampleBuffer) { lock.withLock { sink }?(buffer) }
 }
 
 /// A value set once from any thread; the first set wins (a photo result vs its timeout).
