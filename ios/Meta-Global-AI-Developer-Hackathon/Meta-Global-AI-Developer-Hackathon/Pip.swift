@@ -393,7 +393,7 @@ struct RunSummary: Decodable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case runId = "run_id", protocolId = "protocol_id", protocolName = "protocol_name",
-             startedAt = "started_at", endedAt = "ended_at", status, summary, label, number, day, state
+             startedAt = "started_at", endedAt = "ended_at", status, summary, label, number, day, state, mode
     }
 }
 
