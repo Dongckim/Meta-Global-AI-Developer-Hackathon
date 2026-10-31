@@ -103,9 +103,6 @@ REF_MARGIN = 0.15
 CHUNK_TIP_LOOKS = 3
 #: Tries of an image call whose connection dropped.
 IMAGE_TRIES = 3
-#: Without SAM's plate mask, what ORB leaves out around the pen: px a side, in well pitches, and the
-#: hand behind the pen's far end, as long as this share of the plate's long side and as wide as the margin x 2.
-PEN_MARGIN, HAND_REACH = 1.0, 0.6
 
 
 class ClipTooLong(ValueError):
@@ -809,14 +806,6 @@ def _region(gray, quad: list, tip: list | None, plate: list | None):
         mask[(inside > 0) & (seen == 0)] = 0
     if tip:
         cv2.fillConvexPoly(mask, cv2.convexHull(np.int32(tip)), 0)
-        if plate is None:  # no plate mask to show where the hand is: it's behind the pen
-            long_side = max(np.linalg.norm(np.subtract(quad[1], quad[0])), np.linalg.norm(np.subtract(quad[2], quad[1])))
-            margin = round(PEN_MARGIN * long_side / (PLATE_MM[0] / PITCH_MM))
-            cv2.polylines(mask, [cv2.convexHull(np.int32(tip))], True, 0, 2 * margin)
-            far = max(tip_ends(tip), key=lambda e: math.dist(e, mid))
-            way = np.subtract(far, mid)
-            end = np.add(far, way / (np.linalg.norm(way) or 1) * HAND_REACH * long_side)
-            cv2.line(mask, tuple(map(int, far)), tuple(map(int, end)), 0, 2 * margin)
     return mask
 
 
@@ -1012,8 +1001,8 @@ def ref_candidate(sam, gray, plate: dict, frame: int) -> dict | None:
 
 def follow_chunk(frames: dict, recs: dict, ref: dict, start: int, plate: dict) -> dict:
     """{"quads", ...} for a chunk from the session's reference. `plate` (SAM's, on frame `start`)
-    says roughly where the plate is now, and matching takes it from there both ways. Only the tip
-    is tracked: _region leaves out the pen and the hand behind it."""
+    says roughly where the plate is now, and matching takes it from there both ways. It runs
+    beside SAM's video, so neither the hand nor the tip is masked out: RANSAC drops their matches."""
     import cv2
     import numpy as np
     orb = cv2.ORB_create(ORB_FEATURES)
@@ -1036,12 +1025,11 @@ def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) 
     info = ffprobe(clip)
     nframes, fps = info["frames"], info["fps"]
     out_dir.mkdir(parents=True, exist_ok=True)
-    done = lambda r: {"frames": nframes, "fps": fps, "timing": t, **r}  # noqa: E731
     looks = [(2 * i + 1) * nframes // (2 * CHUNK_TIP_LOOKS) for i in range(CHUNK_TIP_LOOKS)]
     fdir = frames_dir(clip, looks)
     t0 = time.perf_counter()
     # each step that doesn't need another's result runs beside it: the chunk waits for the longest
-    with ThreadPoolExecutor(2) as pool:
+    with ThreadPoolExecutor(3) as pool:
         sending = pool.submit(send_video, clip, out_dir, sam, fps, t)
         finding_plate = pool.submit(lambda: next(filter(None, (hits_on(sam, PLATE, fdir, [n])
                                                                for n in sorted(looks, key=lambda n: abs(n - nframes / 2)))), [None]))
@@ -1065,20 +1053,22 @@ def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) 
             shutil.rmtree(fdir)
             sending.result()
             t["total_s"] = time.perf_counter() - t_all
-            return done({"track": [], "why": "no plate" if not plate0 else "no tip" if not tips else "no reference"})
+            why = "no plate" if not plate0 else "no tip" if not tips else "no reference"
+            return {"frames": nframes, "fps": fps, "track": [], "timing": t, "why": why}
+        following = pool.submit(follow_chunk, gray, {}, ref, plate0[0], plate0[1])
         # every look that saw the tip prompts it, in one video call: a second round repeats the whole video
         _, recs, rounds = track_video(sending.result(), sam, {2: tips}, nframes, fps, fdir, pointer, t, max_rounds=1)
-    shutil.rmtree(fdir)
-    t0 = time.perf_counter()
-    decode_masks(recs)
-    t["masks_s"] = time.perf_counter() - t0
-    t0 = time.perf_counter()
-    followed = follow_chunk(gray, recs, ref, plate0[0], plate0[1])
-    t["follow_s"] = time.perf_counter() - t0
+        shutil.rmtree(fdir)
+        t0 = time.perf_counter()
+        decode_masks(recs)
+        t["masks_s"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        followed = following.result()
+        t["follow_wait_s"] = time.perf_counter() - t0
     track, *_ = locate(recs, nframes, a1, quads=followed["quads"])
     t["total_s"] = time.perf_counter() - t_all
-    return done({"track": [[n, mm[0], mm[1], a] for n, mm, a in track], "rounds": rounds,
-                 "redone": followed["redone"], "kept": followed["kept"]})
+    return {"frames": nframes, "fps": fps, "track": [[n, mm[0], mm[1], a] for n, mm, a in track], "timing": t,
+            "rounds": rounds, "redone": followed["redone"], "kept": followed["kept"]}
 
 
 # ---------- one clip ----------
