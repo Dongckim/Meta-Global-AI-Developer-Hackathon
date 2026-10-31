@@ -661,7 +661,7 @@ struct SummaryView: View {
                     .foregroundStyle(i == s.settings.best ? .green : .primary)
                 }
             }
-            Text("Green: most accurate (most wells, then fewest false). Default is 0.5 s / 4.5 mm. Every frame is analysed.")
+            Text("Green: most accurate (most wells, then fewest false). Default is 1 s / 4.5 mm. Every frame is analysed.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .padding()

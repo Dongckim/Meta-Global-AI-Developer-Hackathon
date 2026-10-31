@@ -49,7 +49,7 @@ POINTERS = (TIP, "pen")
 PLATE_MM = (127.76, 85.48)  # ANSI/SLAS footprint
 A1_MM, PITCH_MM, WELL_D_MM = (14.38, 11.24), 9.0, 6.86
 #: A visit is where the tip stays >= DWELL_S within DWELL_MM (half the well pitch).
-DWELL_S, DWELL_MM, MAX_MISSING = 0.5, PITCH_MM / 2, 2
+DWELL_S, DWELL_MM, MAX_MISSING = 1.0, PITCH_MM / 2, 2
 #: The settings the session summary compares (same clips, no new SAM calls).
 DWELL_S_GRID, DWELL_MM_GRID = (0.5, 1.0, 2.0), (2.5, 3.5, 4.5)
 #: First find: sample every SCAN_S from the start; of the first hit and the
@@ -75,6 +75,9 @@ MAX_BITS = 64  # of ORB's 256: a further pair isn't the same spot
 #: The area around the plate features come from (x its size), and a frame fit to be the reference
 #: shows at least this share of the clip's usual plate size.
 PLATE_MARGIN, MIN_BASE_SIZE = 1.15, 0.85
+#: The screen's edge is this share of its size from the plate's box; SAM's plate stands in for an
+#: unmatched frame only when this much of it shows.
+EDGE_GAP, MIN_SHOWN = 0.02, 0.9
 
 
 class ClipTooLong(ValueError):
@@ -561,11 +564,17 @@ def shown(match: dict) -> float:
     return len(pts) * 4 * cell / (area_of(hull(outline(pts))) or 1)
 
 
+def seen_points(match: dict) -> list:
+    """Where the plate shows, thin enough to keep: the cache has every sixth pixel."""
+    return match.get("seen") or mask_points(match, 2)
+
+
 def compact(recs: dict) -> dict:
     """SAM's records as locate() reads them without decoding masks: JSON-ready. The plate
     keeps its outline (all plate_corners uses) and how much of it shows, the tip every
     other pixel (as locate)."""
-    return {str(n): {str(oid): ({"box": m["box"], "points": outline(mask_points(m, 2)), "shown": shown(m)} if oid == 1
+    return {str(n): {str(oid): ({"box": m["box"], "points": outline(mask_points(m, 2)), "shown": shown(m),
+                                 "seen": mask_points(m, 2)[::9]} if oid == 1
                                 else {"box": m["box"], "points": mask_points(m, 2)})
                      for oid, m in r.items()} for n, r in recs.items()}
 
@@ -666,33 +675,57 @@ def draw(png: Path, out: Path, plate, tip, quad, h, end, well, title: str) -> No
 
 # ---------- the plate, found once ----------
 
-def best_frame(recs: dict) -> int:
-    """The frame showing the most of the plate, among those where it's about its usual size."""
-    size = {n: area_of(hull(outline(mask_points(r[1], 2)))) for n, r in recs.items() if 1 in r}
-    usual = sorted(size.values())[len(size) // 2]
-    return max((n for n in size if size[n] >= MIN_BASE_SIZE * usual), key=lambda n: shown(recs[n][1]))
+def touches_edge(match: dict, size: tuple) -> bool:
+    """The plate's box within EDGE_GAP of the screen's edge: part of it may be cut off."""
+    x1, y1, x2, y2 = match["box"]
+    gx, gy = EDGE_GAP * size[0], EDGE_GAP * size[1]
+    return x1 < gx or y1 < gy or x2 > size[0] - gx or y2 > size[1] - gy
 
 
-def _region(gray, quad: list, tip: list | None):
-    """ORB's mask: the plate and a margin around it, without the tip."""
+def best_frame(recs: dict, size: tuple) -> int | None:
+    """The reference: the plate about its usual size, off the screen's edge, the most of it
+    showing, and its opposite sides near parallel. None when no frame qualifies."""
+    seen = {n: area_of(hull(outline(mask_points(r[1], 2)))) for n, r in recs.items() if 1 in r}
+    if not seen:
+        return None
+    usual = sorted(seen.values())[len(seen) // 2]
+    fit = [n for n in seen if seen[n] >= MIN_BASE_SIZE * usual and not touches_edge(recs[n][1], size)]
+    for n in sorted(fit, key=lambda n: -shown(recs[n][1])):
+        if not distorted(plate_corners(mask_points(recs[n][1], 2))):
+            return n
+    return None
+
+
+def _region(gray, quad: list, tip: list | None, plate: list):
+    """ORB's mask: the plate and a margin around it, without the tip, and without what covers
+    the plate (a hand: inside the plate's corners, not in SAM's plate mask)."""
     import cv2
     import numpy as np
+    corners_ = np.int32(quad)
     mid = np.mean(quad, axis=0)
     mask = np.zeros(gray.shape, np.uint8)
     cv2.fillConvexPoly(mask, np.int32((np.array(quad) - mid) * PLATE_MARGIN + mid), 255)
+    inside, seen = np.zeros(gray.shape, np.uint8), np.zeros(gray.shape, np.uint8)
+    cv2.fillConvexPoly(inside, corners_, 255)
+    h, w = gray.shape
+    xy = np.int32(plate)
+    xy = xy[(xy[:, 0] >= 0) & (xy[:, 0] < w) & (xy[:, 1] >= 0) & (xy[:, 1] < h)]
+    seen[xy[:, 1], xy[:, 0]] = 255
+    seen = cv2.dilate(seen, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)))
+    mask[(inside > 0) & (seen == 0)] = 0
     if tip:
         cv2.fillConvexPoly(mask, cv2.convexHull(np.int32(tip)), 0)
     return mask
 
 
-def _follow(orb, base: tuple, gray, tip: list | None, last, quad0: list, reach: float):
+def _follow(orb, base: tuple, gray, tip: list | None, plate: list, last, quad0: list, reach: float):
     """This frame's homography from the reference, or None. A match stays within `reach` px of
     where the last frame's homography puts it (the wells repeat)."""
     import cv2
     import numpy as np
     pts0, des0 = base
     guess = cv2.perspectiveTransform(np.float32(quad0).reshape(-1, 1, 2), last).reshape(-1, 2)
-    kps, des = orb.detectAndCompute(gray, _region(gray, guess.tolist(), tip))
+    kps, des = orb.detectAndCompute(gray, _region(gray, guess.tolist(), tip, plate))
     if des is None or len(kps) < MIN_INLIERS:
         return None
     pts = np.float32([k.pt for k in kps])
@@ -700,9 +733,9 @@ def _follow(orb, base: tuple, gray, tip: list | None, last, quad0: list, reach: 
     i, j = np.nonzero(np.linalg.norm(moved[:, None] - pts[None], axis=2) <= reach)
     bits = np.bitwise_count(des0[i] ^ des[j]).sum(axis=1)
     best = {}
-    for a, b, d in zip(i[np.argsort(bits)].tolist(), j[np.argsort(bits)].tolist(), np.sort(bits).tolist()):
-        if d < MAX_BITS:
-            best.setdefault(a, b)
+    for k in np.argsort(bits).tolist():
+        if bits[k] < MAX_BITS:
+            best.setdefault(int(i[k]), int(j[k]))
     if len(best) < MIN_INLIERS:
         return None
     h, inliers = cv2.findHomography(pts0[list(best)], pts[list(best.values())], cv2.RANSAC, 3.0)
@@ -711,10 +744,10 @@ def _follow(orb, base: tuple, gray, tip: list | None, last, quad0: list, reach: 
     return h
 
 
-def follow_plate(clip: Path, recs: dict, nframes: int) -> tuple:
-    """The plate's corners once, on the frame that shows it best, then carried to every frame
-    by matching features to that frame. -> ({frame: corners}, reference frame, frames that
-    couldn't be matched and found their own edges)."""
+def follow_plate(clip: Path, recs: dict, nframes: int) -> dict:
+    """The plate's corners once, on its best frame, then carried to every frame by matching
+    features to that frame. A frame that can't be matched takes SAM's plate if it's all in view,
+    else stays where the last one was. -> {"quads": {frame: corners}, "ref", "redone", "kept"}."""
     import cv2
     import numpy as np
     video, frames = cv2.VideoCapture(str(clip)), {}
@@ -724,35 +757,46 @@ def follow_plate(clip: Path, recs: dict, nframes: int) -> tuple:
             break
         frames[n] = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     video.release()
-    ref = best_frame(recs)
-    if ref not in frames:
-        return {}, ref, 0
+    none = {"quads": {}, "ref": None, "redone": 0, "kept": 0}
+    if not frames:
+        return none
+    h, w = frames[0].shape
+    ref = best_frame(recs, (w, h))
+    if ref is None or ref not in frames:
+        return none
     quad0 = [tuple(map(float, p)) for p in plate_corners(mask_points(recs[ref][1], 2))]
+    corners0 = np.float32(quad0).reshape(-1, 1, 2)
     orb = cv2.ORB_create(ORB_FEATURES)
     tip_at = lambda n: mask_points(recs[n][2], 2) if 2 in recs.get(n, {}) else None  # noqa: E731
-    kps, des = orb.detectAndCompute(frames[ref], _region(frames[ref], quad0, tip_at(ref)))
+    plate_at = lambda n: seen_points(recs[n][1]) if 1 in recs.get(n, {}) else [(0, 0)]  # noqa: E731
+    kps, des = orb.detectAndCompute(frames[ref], _region(frames[ref], quad0, tip_at(ref), plate_at(ref)))
     if des is None or len(kps) < MIN_INLIERS:
-        return {}, ref, 0
+        return none
     base = (np.float32([k.pt for k in kps]), des)
     reach = MATCH_PITCHES * pitch_px(plate_h(plate_quad(quad0, "tl")))
-    quads, redone = {ref: quad0}, 0
+    out = {"quads": {ref: quad0}, "ref": ref, "redone": 0, "kept": 0}
     for way in (range(ref + 1, nframes), range(ref - 1, -1, -1)):
         last = np.eye(3)
         for n in way:
             if n not in frames:
                 continue
-            h = _follow(orb, base, frames[n], tip_at(n), last, quad0, reach)
-            if h is not None:
-                quad = [tuple(map(float, p)) for p in
-                        cv2.perspectiveTransform(np.float32(quad0).reshape(-1, 1, 2), h).reshape(-1, 2)]
+            found = _follow(orb, base, frames[n], tip_at(n), plate_at(n), last, quad0, reach)
+            if found is not None:
+                quad = [tuple(map(float, p)) for p in cv2.perspectiveTransform(corners0, found).reshape(-1, 2)]
                 if not distorted(quad):  # a good inlier count on the wrong wells bends the grid
-                    last, quads[n] = h, quad
+                    last, out["quads"][n] = found, quad
                     continue
-            redone += 1
-            own = plate_corners(mask_points(recs[n][1], 2)) if 1 in recs.get(n, {}) else None
-            if own and not distorted(own):  # the next frame looks from here, not from a stale place
+            plate = recs.get(n, {}).get(1)
+            own = plate_corners(mask_points(plate, 2)) if plate and shown(plate) >= MIN_SHOWN \
+                and not touches_edge(plate, (w, h)) else None
+            if own and not distorted(own):
                 last = cv2.getPerspectiveTransform(np.float32(quad0), np.float32(own))
-    return quads, ref, redone
+                out["quads"][n] = own
+                out["redone"] += 1
+            else:
+                out["quads"][n] = [tuple(map(float, p)) for p in cv2.perspectiveTransform(corners0, last).reshape(-1, 2)]
+                out["kept"] += 1
+    return out
 
 
 # ---------- one clip ----------
@@ -858,10 +902,10 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
     t["masks_s"] = time.perf_counter() - t0
     t0 = time.perf_counter()
     say("Following the plate from its best frame")
-    quads, ref, redone = follow_plate(clip, recs, nframes)
+    followed = follow_plate(clip, recs, nframes)
     t["follow_s"] = time.perf_counter() - t0
     t0 = time.perf_counter()
-    track, per, pitches, fails = locate(recs, nframes, a1, say, quads)
+    track, per, pitches, fails = locate(recs, nframes, a1, say, followed["quads"])
     t["grid_s"] = time.perf_counter() - t0
     found = found_wells(track, fps)
 
@@ -895,7 +939,7 @@ def analyze(clip: Path, a1: str, sam, out_dir: Path, pointer: str = TIP, say=_qu
             "prompts": {str(k): [n for n, _ in v] for k, v in prompts.items()},
             "track": [[n, mm[0], mm[1], a] for n, mm, a in track],
             "found": [{"well": w, "rep": rep, "f0": f0, "f1": f1} for w, rep, f0, f1 in found],
-            "plate_frame": ref, "plate_redone": redone,
+            "plate_frame": followed["ref"], "plate_redone": followed["redone"], "plate_kept": followed["kept"],
             "pitch_px": pitch, "well_px": pitch * WELL_D_MM / PITCH_MM,
             "fails": fails, "failed_ratio": failed / nframes if nframes else 1.0,
             "timing": t, "images": images}

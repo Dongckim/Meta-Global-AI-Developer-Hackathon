@@ -1,41 +1,74 @@
 {
   "values": {
-    "DWELL_S": 0.5,
+    "DWELL_S": 1.0,
     "DWELL_MM": 4.5,
     "MAX_MISSING": 2,
     "EDGE_TOL": 0.01,
     "FIT_TRIES": 200,
     "MIN_EDGE_POINTS": 8,
-    "MAX_SKEW": 25.0
+    "MAX_SKEW": 25.0,
+    "MAX_VIEW_SKEW": 20.0,
+    "MAX_VIEW_RATIO": 1.35,
+    "ORB_FEATURES": 2000,
+    "MATCH_PITCHES": 1.0,
+    "MIN_INLIERS": 15,
+    "MIN_INLIER_SHARE": 0.3,
+    "MAX_BITS": 64,
+    "PLATE_MARGIN": 1.15,
+    "MIN_BASE_SIZE": 0.85,
+    "EDGE_GAP": 0.02,
+    "MIN_SHOWN": 0.9
   },
   "clips": {
     "20261030-230954-47c9/1": {
       "hits": 4,
-      "false": 1
+      "false": 1,
+      "bent": 0
     },
     "20261030-220905-72d8/1": {
       "hits": 3,
-      "false": 1
+      "false": 1,
+      "bent": 0
     },
     "20261030-220122-4031/2": {
       "hits": 2,
-      "false": 5
+      "false": 1,
+      "bent": 0
     },
     "20261030-225924-3b53/1": {
       "hits": 4,
-      "false": 0
+      "false": 0,
+      "bent": 0
     },
     "20261030-224115-0320/1": {
       "hits": 4,
-      "false": 0
+      "false": 0,
+      "bent": 0
     },
     "20261030-222302-244a/1": {
       "hits": 4,
-      "false": 0
+      "false": 0,
+      "bent": 0
     },
     "20261030-221821-473a/1": {
       "hits": 4,
-      "false": 0
+      "false": 0,
+      "bent": 0
+    },
+    "20261031-003424-d471/1": {
+      "hits": 4,
+      "false": 0,
+      "bent": 0
+    },
+    "20261031-004939-5d8e/1": {
+      "hits": 3,
+      "false": 1,
+      "bent": 0
+    },
+    "20261031-011204-2206/1": {
+      "hits": 3,
+      "false": 1,
+      "bent": 0
     }
   }
 }

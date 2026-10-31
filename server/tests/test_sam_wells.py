@@ -85,7 +85,7 @@ for got, want in zip(sw.plate_corners(box), box):  # four points: the plain box
 print("SW3b ok: corners come from the edges, a hidden one included")
 
 
-# SW4. Settings: a 0.8 s stop at the 2nd target the 1 s dwell misses, the 0.5 s default catches;
+# SW4. Settings: a 0.8 s stop at the 2nd target the 1 s default misses, the 0.5 s setting catches;
 # the best setting is the one with the most hits.
 def stay(well, f0, frames):
     r, c = sw.ROWS.index(well[0]), int(well[1:]) - 1
@@ -93,11 +93,11 @@ def stay(well, f0, frames):
 
 
 track = stay("C3", 0, 16) + stay("F7", 20, 5) + stay("B10", 40, 16)  # 5 fps: 3 s, 0.8 s, 3 s
-assert [w for w, *_ in sw.found_wells(track, 5)] == ["C3", "F7", "B10"]
-assert [w for w, *_ in sw.found_wells(track, 5, 1.0)] == ["C3", "B10"]
+assert [w for w, *_ in sw.found_wells(track, 5)] == ["C3", "B10"]
+assert [w for w, *_ in sw.found_wells(track, 5, 0.5)] == ["C3", "F7", "B10"]
 cmp = sw.compare_settings([(["C3", "F7", "B10"], track, 5)])
 best = cmp["rows"][cmp["best"]]
-assert len(cmp["rows"]) == 9 and best["dwell_s"] == sw.DWELL_S and best["hits"] == 3, best
+assert len(cmp["rows"]) == 9 and best["dwell_s"] == 0.5 and best["hits"] == 3, best
 print("SW4 ok: every dwell setting on the same clips; the best one marked")
 
 # SW4b. A visit: 2 missing frames don't break it, 3 do; its well is the cell it stayed in longest.
@@ -131,6 +131,15 @@ assert per4c[0][4][0] == 310 and per4c[1][4][0] == 120, per4c
 # the cache gives locate the same answer as SAM's records
 saved = sw.expand(sw.json.loads(sw.json.dumps(sw.compact(recs))))
 assert sw.locate(saved, 2, "tl")[0] == track4c
+# SW4d. The reference frame: never a plate at the screen's edge, and the one showing the most.
+near_edge = {"box": (2, 100, 300, 300), "mask": None, "shown": 1.0, "points": [(2, 100), (300, 100), (300, 300), (2, 300)]}
+clear = {"box": (50, 100, 348, 300), "mask": None, "shown": 0.7, "points": [(50, 100), (348, 100), (348, 300), (50, 300)]}
+clearer = {**clear, "shown": 0.9}
+assert sw.touches_edge(near_edge, (640, 480)) and not sw.touches_edge(clear, (640, 480))
+assert sw.best_frame({0: {1: near_edge}, 1: {1: clear}, 2: {1: clearer}}, (640, 480)) == 2
+assert sw.best_frame({0: {1: near_edge}}, (640, 480)) is None
+bent = [(0, 0), (100, 0), (300, 200), (0, 200)]
+assert sw.distorted(bent) and not sw.distorted([(0, 0), (300, 8), (320, 200), (-10, 200)])
 print("SW4c ok: the tip end keeps to the same end from frame to frame")
 
 # SW5. Endpoints on a real (tiny) clip, SAM faked: the tip stops on each target.
