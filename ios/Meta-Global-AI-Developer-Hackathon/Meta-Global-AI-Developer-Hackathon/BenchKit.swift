@@ -39,6 +39,23 @@ extension View {
     }
 }
 
+/// A Private run in a list: lock and word on Private's dark canvas (not in
+/// the design; the same look wherever the list is).
+struct PrivateBadge: View {
+    var u: CGFloat
+
+    var body: some View {
+        HStack(spacing: 6 * u) {
+            Image(systemName: Theme.modeIcon("private") + ".fill").font(Theme.ui(14 * u))
+            Text("Private").font(Theme.ui(18 * u, weight: .medium))
+        }
+        .foregroundStyle(Color.white)
+        .padding(.horizontal, 12 * u).frame(height: 30 * u)
+        .background(Capsule().fill(Theme.privateCard))
+        .accessibilityLabel("Private run")
+    }
+}
+
 /// The one "Say" rule: buttons (big buttons, pills, chips) put "Say" before
 /// their word, the words that run them; list rows (protocols, runs,
 /// searches) show only their name.

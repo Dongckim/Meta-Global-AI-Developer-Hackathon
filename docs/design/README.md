@@ -85,6 +85,9 @@ nearest frame's parts and should get a look.
   Reduce Motion: no motion. Saying "what's the difference?" on this screen
   speaks the same facts. All of it comes from the routing settings
   (`server/modes.py`, snapshot `modes`).
+- **Private badge on run lists**: on Home's and the protocol's run rows and on
+  Run record, a 30 tall capsule in the dark canvas color with a lock (14) and
+  "Private" (18 medium, white), after the row's day. Only Private runs have it.
 - **⑤a Mode, Private variant (differs from the design)**: its line "Nothing
   leaves this iPad" isn't true, so it isn't used. What happens: speech is
   transcribed on the iPad; voice commands and imports run on Glimmer on our

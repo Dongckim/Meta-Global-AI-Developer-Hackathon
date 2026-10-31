@@ -386,6 +386,8 @@ struct RunSummary: Decodable, Identifiable {
     var number: Int?
     var day: String?
     var state: String?
+    /// full / private: a run keeps the mode it started in.
+    var mode: String?
 
     var id: String { runId }
 

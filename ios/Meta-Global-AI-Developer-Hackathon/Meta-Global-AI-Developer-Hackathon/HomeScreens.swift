@@ -244,6 +244,7 @@ struct ProtocolsHome: View {
                     Text(r.label ?? "").font(Theme.ui(28 * u, weight: .semibold))
                         .foregroundStyle(first ? Theme.text1 : Theme.text5)
                     Text(r.day ?? "").font(Theme.ui(24 * u)).foregroundStyle(Theme.text2)
+                    if r.mode == "private" { PrivateBadge(u: u) }
                     Spacer(minLength: 0)
                     Text(r.state ?? "")
                         .font(Theme.ui(24 * u, weight: r.status == "finished" ? .regular : .semibold))
@@ -312,6 +313,7 @@ struct RunRecordScreen: View {
             Text(summary?.label ?? "")
                 .font(Theme.ui(64 * u, weight: .semibold)).tracking(-1.79 * u).foregroundStyle(Theme.text1).displayLine(u)
                 .padding(.top, 8 * u)
+            if summary?.mode == "private" { PrivateBadge(u: u).padding(.top, 10 * u) }
             Text([summary?.day, summary?.state].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
                 .font(Theme.ui(28 * u)).foregroundStyle(Theme.text1).padding(.top, 14 * u)
             tabs.padding(.top, 36 * u)
