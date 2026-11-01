@@ -6,12 +6,25 @@
   "required": ["epoch", "version", "view", "plan", "step_index", "done", "excluded", "redo",
                "notes", "tips", "timers", "stamps", "cards", "recent"],
   "properties": {
+    "step_log": {"type": "array", "description": "When each step began (run records from API 31).",
+                 "items": {"type": "object", "required": ["step", "ts"],
+                           "properties": {"step": {"type": "integer"}, "ts": {"type": "number"}}}},
+    "vision": {"type": "object", "description": "Served: lines for Milo to say, in order. The app picks the moment (not over the person), then POST /vision/notices/{id}/played. Also sent as /events kind vision_notice.",
+               "properties": {"notices": {"type": "array", "items": {
+                 "type": "object", "required": ["id", "kind", "message", "speak"],
+                 "properties": {"id": {"type": "string"}, "kind": {"enum": ["done", "ask"]},
+                                "message": {"type": "string"}, "speak": {"type": "string"},
+                                "card_id": {"type": "string"}}}}}},
     "bench": {
       "type": "object",
       "required": ["wells", "legend", "rows"],
       "description": "Served snapshots and run details only: what the bench draws from the run so far. wells: well -> done (filled in its group) / now (a target of this step not done in it) / skipped (passed over unmarked, never done since) / excluded; others are untouched. legend: wells per condition. rows: the last steps passed (Done).",
       "properties": {
         "wells": {"type": "object", "additionalProperties": {"enum": ["done", "now", "skipped", "excluded"]}},
+        "vision": {"type": "object", "description": "What the glasses saw. seen: wells to mark with the eye. logged_by: wells only the camera logged. hints: not-sure wells of this step, drawn faint as C4?.",
+                   "properties": {"seen": {"type": "array", "items": {"type": "string"}},
+                                  "logged_by": {"type": "object", "additionalProperties": {"enum": ["vision"]}},
+                                  "hints": {"type": "array", "items": {"type": "string"}}}},
         "legend": {"type": "array", "items": {"type": "object", "required": ["key", "label", "n"],
                    "properties": {"key": {"type": "string"}, "label": {"type": "string"}, "n": {"type": "integer"}}}},
         "rows": {"type": "array", "items": {"type": "object", "required": ["wells", "name", "state"],

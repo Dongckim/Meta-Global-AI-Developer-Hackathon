@@ -1103,7 +1103,7 @@ def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) 
     info = ffprobe(clip)
     nframes, fps = info["frames"], info["fps"]
     out_dir.mkdir(parents=True, exist_ok=True)
-    done = lambda r: {"frames": nframes, "fps": fps, "timing": t, **r}  # noqa: E731
+    done = lambda r: {"frames": nframes, "fps": fps, "w": info["w"], "h": info["h"], "timing": t, **r}  # noqa: E731
     gray = gray_frames(clip, nframes)
 
     def follow(plate0: tuple | None, fit: list | None) -> dict:

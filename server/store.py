@@ -306,6 +306,7 @@ class RecordStore:
             "stamps": {},
             "recent": [],
             "cards": {},
+            "step_log": [{"step": max(min(current, len(steps)), 1), "ts": time.time()}] if run else [],
         }
 
     def active_run_doc(self) -> dict | None:
@@ -1020,6 +1021,9 @@ class RecordStore:
                 return False, {"reason": "no active run"}
             res = {"messages": [], "cards": [], "ui": [],
                    "info": {"dropped": 0, "drop_reasons": []}}
+            if self._vision_review_locked(res, session):
+                self._commit()
+                return False, {"card": res["cards"][-1]}
             card = self._card(res, "end_run", say("end_run", session), None,
                               {"op": "end_run",
                                "run_id": (self.r.get("run") or {}).get("run_id")})
@@ -1122,6 +1126,7 @@ class RecordStore:
             i = t.get("step_index")
             t["chip"] = labels.step_short_title(steps[i]) if isinstance(i, int) and 0 <= i < len(steps) \
                 else labels.shorten_title(t.get("step") or t.get("label") or "")
+        snap["vision"] = {"notices": ((snap.get("vision") or {}).get("notices") or [])}  # the log stays in the run
         snap["handoff"] = self.handoff_view(self._handoff_here()) if self._handoff_here() else None
         snap["bench"] = self.bench_view(self.r)
         snap["private"] = self.wake.view()
@@ -1158,7 +1163,13 @@ class RecordStore:
         rows = [{"wells": wells_label(s.get("wells") or []), "name": (s.get("pipette") or {}).get("liquid") or "",
                  "state": "done"}
                 for s in steps[:idx] if s.get("kind") == "pipette" and s.get("wells")]
-        return {"wells": wells, "legend": legend, "rows": rows[-self.BENCH_DONE_ROWS:]}
+        vision = rec.get("vision") or {}
+        marks = runlog.done_marks(rec)
+        return {"wells": wells, "legend": legend, "rows": rows[-self.BENCH_DONE_ROWS:],
+                "vision": {"seen": sorted({s["well"] for s in vision.get("seen") or []}),
+                           "logged_by": {m["well"]: "vision" for m in marks if m.get("source") == "vision"},
+                           "hints": sorted({h["well"] for h in vision.get("hints") or []
+                                            if h["step"] == idx + 1 and h["well"] not in done_now})}}
 
     def header_mode(self, screen: str) -> dict | None:
         """The header's mode label, on screens after the mode was chosen
@@ -1564,7 +1575,7 @@ class RecordStore:
 
     RUN_WRITES = frozenset({"mark_done", "exclude_well", "record_redo", "add_note",
                                 "edit_note", "save_tip", "set_timer", "cancel_timer",
-                                "extend_timer", "next_step", "end_run"})
+                                "extend_timer", "next_step", "end_run", "undo_vision"})
 
     def _apply_call(self, call, source, origin, route, session, res, force: bool,
                     evidence=None):
@@ -1852,16 +1863,19 @@ class RecordStore:
                            steps[nxt], {"op": "next_step", "target": nxt + 1})
             else:
                 self.r["step_index"] += 1
+                self.r.setdefault("step_log", []).append({"step": self.r["step_index"] + 1, "ts": now})
                 self._drop_step_cards_locked()
                 res["messages"].append(f"Next: {steps[self.r['step_index']]}")
                 self._suggest_entry_timer(res, session)
         elif name == "end_run":
             if not self.r.get("run"):
                 res["messages"].append("No active run.")
-            else:
+            elif not self._vision_review_locked(res, session):
                 self._card(res, "end_run", say("end_run", session), None,
                            {"op": "end_run",
                             "run_id": (self.r.get("run") or {}).get("run_id")})
+        elif name == "undo_vision":
+            self._undo_vision_locked(res, session, args.get("wells"))
         elif name == "show":
             # the person-facing line is the registry result, never the raw view id
             wells = parse_wellref(args.get("target")) if args.get("target") else []
@@ -3076,6 +3090,173 @@ class RecordStore:
             self._broadcast(ev)
         return events
 
+    # ---------- vision: wells the glasses saw (server/lab_sam_live.py) ----------
+
+    #: A person's mark this close to a stay on another well wins: it's the same fill, read two ways.
+    PERSON_WINS_S = 8.0
+    #: Unplayed lines kept for the app, oldest dropped.
+    MAX_NOTICES = 20
+
+    def _vision(self) -> dict:
+        v = self.r.setdefault("vision", {})
+        for k in ("seen", "hints", "batches", "rejected", "review", "notices", "log"):
+            v.setdefault(k, [])
+        return v
+
+    def _vision_notice(self, kind: str, text: str, **extra) -> None:
+        """A line for Milo. The app picks when to say it (not over the person) and calls it played."""
+        notices = self._vision()["notices"]
+        notice = {"id": uuid.uuid4().hex[:8], "kind": kind, "message": text, "speak": speak_text(text), **extra}
+        notices.append(notice)
+        del notices[:-self.MAX_NOTICES]
+        self._broadcast({"kind": "vision_notice", **notice})
+
+    def vision_notice_played(self, notice_id: str) -> None:
+        with self._lock:
+            v = self._vision()
+            v["notices"] = [n for n in v["notices"] if n["id"] != notice_id]
+            self._commit()
+
+    def vision_events(self, run_id: str, events: list[dict]) -> None:
+        """One chunk's wells: [{well, ts (when the pen stayed), confidence, usable}]. Each goes to
+        the step its stay belongs to. Sure wells that step asks for are logged as vision; people's
+        marks always stand; anything off plan is asked about, at once on the current step, at the
+        run's end on an earlier one; not sure leaves only a hint. Every event is logged."""
+        with self._lock:
+            run = self.r.get("run") or {}
+            if run.get("run_id") != run_id or "private" in (run.get("mode"), run_mode()):
+                return
+            v = self._vision()
+            res: dict = {"messages": [], "cards": [], "ui": [], "info": {"dropped": 0, "drop_reasons": []}}
+            to_mark: dict = {}
+            for e in events:
+                step = runlog.step_at(self.r, e["ts"])
+                outcome = self._vision_outcome(e["well"], step, e, v, to_mark, res)
+                v["log"].append({"well": e["well"], "step": step, "ts": e["ts"], "confidence": e["confidence"],
+                                 "outcome": outcome})
+            if to_mark:
+                self._vision_mark_locked(to_mark, v, res)
+            self._commit()
+            for a in res["ui"]:
+                a.setdefault("id", uuid.uuid4().hex[:8])
+                self._broadcast({"kind": "ui", **a})
+
+    def _vision_outcome(self, well: str, step: int, e: dict, v: dict, to_mark: dict, res: dict) -> str:
+        if not e.get("usable"):
+            return "ignored_stream"
+        if e["confidence"] != "sure":
+            if {"step": step, "well": well} not in v["hints"]:
+                v["hints"].append({"step": step, "well": well})
+            return "hint"
+        if {"step": step, "well": well} in v["rejected"]:
+            return "rejected_before"
+        marks = [m for m in runlog.done_marks(self.r) if m.get("step") == step]
+        mine = next((m for m in marks if m["well"] == well), None)
+        if mine:
+            if mine.get("source") == "vision":
+                return "repeat"
+            self._vision_saw(v, step, well, e["ts"])
+            return "agrees"
+        if well in (self.r.get("excluded") or {}) or self.unplanned([well], step):
+            if step == self.current_step():
+                self._vision_ask(res, well, step)
+                return "off_plan_asked"
+            v["review"].append({"step": step, "well": well})
+            return "off_plan_review"
+        saw = {s["well"] for s in v["seen"] if s["step"] == step}
+        if any(m.get("source") != "vision" and m["well"] not in saw and abs(m.get("ts", 0) - e["ts"]) <= self.PERSON_WINS_S
+               for m in marks):
+            return "person_differs"
+        to_mark.setdefault(step, []).append(well)
+        return "logged"
+
+    @staticmethod
+    def _vision_saw(v: dict, step: int, well: str, ts: float) -> None:
+        if not any(s["step"] == step and s["well"] == well for s in v["seen"]):
+            v["seen"].append({"step": step, "well": well, "ts": ts})
+
+    def _vision_ask(self, res: dict, wells, step: int) -> None:
+        wells = [wells] if isinstance(wells, str) else wells
+        off = join_wells_ranges(wells)
+        card = self._card(res, "catch", say("catch_off_plan", None, wells=off), None,
+                          {"op": "mark_done", "wells": wells, "step": step}, slots={"wells": off})
+        self._vision_notice("ask", card["question"], card_id=card["id"])
+
+    def _vision_mark_locked(self, to_mark: dict, v: dict, res: dict) -> None:
+        """Through mark_done, as voice and taps go. The step's last well offers the next, as they do."""
+        step_before, left_before = self.r.get("step_index"), self._left_now()
+        batch = []
+        now_step = self.current_step()
+        for step, wells in sorted(to_mark.items()):
+            self._apply_call({"name": "mark_done", "args": {"wells": wells, "step": step}},
+                             "vision", "", "vision", None, res, force=True)
+            for w in wells:
+                self._vision_saw(v, step, w, time.time())
+                batch.append({"step": step, "well": w})
+            self._vision_settle_catch(step, wells)
+            label = join_wells_ranges(wells)
+            self._vision_notice("done", say("vision_done", None, wells=label) if step == now_step
+                                else say("vision_done_past", None, wells=label, step=step))
+        v["batches"].append(batch)
+        if left_before and self.r.get("step_index") == step_before and self._left_now() == set():
+            self._offer_next_locked(res, None)
+
+    def _vision_settle_catch(self, step: int, wells: list[str]) -> None:
+        """Logged after all: off the step-end Catch, whether it's still asking or was skipped."""
+        self.r["skipped"] = [m for m in self.r.get("skipped") or []
+                             if not (m.get("step") == step and m.get("well") in wells)]
+        if not self.r["skipped"]:
+            self.r.pop("skipped")
+        for cid, c in list(self.r["cards"].items()):
+            p = c.get("payload") or {}
+            if c.get("kind") == "unmarked" and p.get("target") == step + 1:
+                p["unmarked"] = [w for w in p.get("unmarked") or [] if w not in wells]
+                if not p["unmarked"]:
+                    del self.r["cards"][cid]
+
+    def _vision_review_locked(self, res: dict, session: dict | None) -> bool:
+        """Off-plan wells seen on steps already passed: asked once, as the run ends. True: asked."""
+        v = self._vision()
+        review, v["review"] = v["review"], []
+        if not review:
+            return False
+        steps: dict = {}
+        for r in review:
+            steps.setdefault(r["step"], []).append(r["well"])
+        for step, wells in sorted(steps.items()):
+            self._vision_ask(res, sort_wells(set(wells)), step)
+        return True
+
+    def _undo_vision_locked(self, res: dict, session: dict | None, wells) -> None:
+        """"Undo": the last wells the camera logged together. "No, not C2": that well's camera
+        mark. A person's mark is never touched, and the camera won't log a taken-back well again."""
+        v = self._vision()
+        marks = runlog.done_marks(self.r)
+        camera = [m for m in marks if m.get("source") == "vision"]
+        if wells:
+            named = [w for w in (parse_wellref(wells) if isinstance(wells, str) else wells) if isinstance(w, str)]
+            take = [{"step": m["step"], "well": m["well"]} for m in camera if m["well"] in named]
+            if not take:
+                res["messages"].append(say("vision_not_camera", session, wells=join_wells_ranges(named)))
+                return
+        else:
+            alive = {(m["step"], m["well"]) for m in camera}
+            take = []
+            while v["batches"] and not take:
+                take = [t for t in v["batches"].pop() if (t["step"], t["well"]) in alive]
+            if not take:
+                res["messages"].append(say("vision_undo_none", session))
+                return
+        gone = [(t["step"], t["well"]) for t in take]
+        self.r["done"] = [m for m in marks if not (m.get("source") == "vision" and (m.get("step"), m["well"]) in gone)]
+        for t in take:
+            self.r["stamps"].pop(t["well"], None)
+            v["rejected"].append(t)
+        v["seen"] = [s for s in v["seen"] if (s["step"], s["well"]) not in gone]
+        v["log"].append({"well": [t["well"] for t in take], "ts": time.time(), "outcome": "undone"})
+        self._drop_step_cards_locked()
+        res["messages"].append(say("vision_undone", session, wells=join_wells_ranges(sort_wells({t["well"] for t in take}))))
+
     def _suggest_entry_timer(self, res: dict, session: dict):
         """Entering a timed step proposes its timer; nothing otherwise."""
         steps = self.r["plan"]["steps"]
@@ -3112,6 +3293,8 @@ class RecordStore:
         if not self.r.get("run") or not steps:
             return None
         if idx >= len(steps) - 1:
+            if self._vision_review_locked(res, session):
+                return res["cards"][-1]
             return self._card(res, "end_run", say("all_steps_done", session), None,
                               {"op": "end_run", "run_id": (self.r.get("run") or {}).get("run_id")})
         return self._card(res, "next_step", say("step_done", session, done=idx + 1, step=idx + 2),
