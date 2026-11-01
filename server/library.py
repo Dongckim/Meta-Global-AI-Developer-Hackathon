@@ -85,6 +85,14 @@ def source_hash(files: list[bytes], text: str = "") -> str:
     return h.hexdigest()[:16]
 
 
+def file_source_hash(sha256_hex: str) -> str:
+    """source_hash of one file known by its SHA-256 (the app has the file, not the server); "" if that isn't one."""
+    try:
+        return hashlib.sha256(bytes.fromhex(sha256_hex)).hexdigest()[:16] if sha256_hex else ""
+    except ValueError:
+        return ""
+
+
 def find_by_source(src: str, root: Path | None = None) -> dict | None:
     """The protocol any of whose versions came from this original."""
     if not src:

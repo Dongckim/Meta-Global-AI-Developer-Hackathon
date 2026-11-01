@@ -2754,9 +2754,10 @@ class ItemsIn(BaseModel):
 @app.post("/screen/items")
 async def screen_items(body: ItemsIn):
     """The app says what a list screen shows (its files, the photos taken), so
-    "number 2" and a file's name pick from exactly those."""
+    "number 2" and a file's name pick from exactly those. Back come the items in
+    the order to show: a file with a `sha256` already reviewed goes last, with its protocol."""
     store.set_items(body.screen, body.items)
-    return {"ok": True, "record_version": store.r["version"]}
+    return {"ok": True, "record_version": store.r["version"], "items": store.screen_items.get(body.screen, [])}
 
 
 @app.get("/searches")

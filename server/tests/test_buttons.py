@@ -12,7 +12,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 os.environ["MODEL_API_KEY"] = "dummy"
 
+import hashlib  # noqa: E402
+
 from fastapi.testclient import TestClient  # noqa: E402
+from server import library as lib  # noqa: E402
 
 import server.api as api  # noqa: E402
 from server.screens import PLANNED, SCREENS, button_call, buttons_for  # noqa: E402
@@ -265,6 +268,25 @@ for said, want in (("number 2", "mtt_assay.txt"), ("the first one", "drug_ab_dos
 j = c.post("/input", json={"action": {"id": "pick", "args": {"n": 9}}, "session": "bt"}).json()
 assert j["reply"] == "There are only 2.", j
 assert control_call("browse files", "import_file", []) is None
+# A file reviewed before: last in the list, and picking it opens its protocol, no second review.
+api.store = fresh("import_file")
+raw17 = b"a protocol reviewed before"
+doc17 = lib.save({"title": "MTT", "conditions": {"a": {"label": "A", "wells": ["C2"], "replicates": 1}},
+                  "steps": [{"kind": "pipette", "text": "Add A", "wells": ["C2"]}]},
+                 "MTT assay", "mtt.pdf", api.store.root, source=lib.source_hash([raw17]))
+assert lib.file_source_hash(hashlib.sha256(raw17).hexdigest()) == doc17["source_hash"]
+assert lib.file_source_hash("") == "" and lib.file_source_hash("not hex") == ""
+got17 = c.post("/screen/items", json={"screen": "import_file", "items": [
+    {"id": "old.pdf", "name": "old", "sha256": hashlib.sha256(raw17).hexdigest()},
+    {"id": "new.pdf", "name": "new", "sha256": hashlib.sha256(b"new").hexdigest()}]}).json()["items"]
+assert [i["id"] for i in got17] == ["new.pdf", "old.pdf"] and got17[1]["title"] == "MTT assay", got17
+assert api.store.snapshot()["view"]["prompt"] == "2 files, 1 already reviewed. Which one?"
+j = c.post("/input", json={"text": "number 2", "session": "bt"}).json()
+assert not j.get("ui") and "MTT assay" in j["reply"], j
+assert api.store.r["view"]["current"] == {"screen": "protocol_detail", "target": doc17["id"]}, api.store.r["view"]["current"]
+api.store.r["view"]["current"] = {"screen": "import_file", "target": ""}
+j = c.post("/input", json={"text": "number 1", "session": "bt"}).json()
+assert noid(j["ui"]) == [{"action": "pick", "target": "new.pdf"}], j
 api.store = fresh("import_photo")
 j = c.post("/input", json={"text": "take it", "session": "bt"}).json()
 assert noid(j["ui"]) == [{"action": "control", "target": "take"}], j

@@ -11,6 +11,7 @@
                            "properties": {"step": {"type": "integer"}, "ts": {"type": "number"}}}},
     "vision": {"type": "object", "description": "Served: lines for Milo to say, in order. The app picks the moment (not over the person), then POST /vision/notices/{id}/played. Also sent as /events kind vision_notice.",
                "properties": {"on": {"type": "boolean", "description": "The person said \"watching\" and not yet \"end watch\"; off at a run's start."},
+                              "asked": {"type": "integer", "description": "How many times \"watching\" was said this run: a new one means try again."},
                               "notices": {"type": "array", "items": {
                  "type": "object", "required": ["id", "kind", "message", "speak"],
                  "properties": {"id": {"type": "string"}, "kind": {"enum": ["done", "ask"]},

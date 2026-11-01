@@ -603,8 +603,10 @@ class RecordStore:
                 out["code"] = "yes" if self.handoff_code(doc) else "no"
         elif screen == "import_file" and "import_file" in self.screen_items:
             # only once the app said what's there: never "no files" before the list arrives
-            k = len(self.screen_items["import_file"])
-            out = {"files": n_of(k, "file") if k else "", "app": section("persona").get("app_name") or ""}
+            items = self.screen_items["import_file"]
+            k, known = len(items), sum("protocol" in i for i in items)
+            out = {"files": (n_of(k, "file") + (f", {known} already reviewed" if known else "")) if k else "",
+                   "app": section("persona").get("app_name") or ""}
         elif screen == "import_photo" and (k := len(self.screen_items.get("import_photo") or [])):
             out = {"pages": n_of(k, "page")}
         elif screen == "web_source":
@@ -1128,7 +1130,8 @@ class RecordStore:
             t["chip"] = labels.step_short_title(steps[i]) if isinstance(i, int) and 0 <= i < len(steps) \
                 else labels.shorten_title(t.get("step") or t.get("label") or "")
         vision = snap.get("vision") or {}
-        snap["vision"] = {"notices": vision.get("notices") or [], "on": bool(vision.get("on"))}  # the log stays in the run
+        snap["vision"] = {"notices": vision.get("notices") or [], "on": bool(vision.get("on")),
+                          "asked": vision.get("asked", 0)}  # the log stays in the run
         snap["handoff"] = self.handoff_view(self._handoff_here()) if self._handoff_here() else None
         snap["bench"] = self.bench_view(self.r)
         snap["bench"]["vision"]["pending"] = self._pending.get((self.r.get("run") or {}).get("run_id"), 0)
@@ -1994,7 +1997,7 @@ class RecordStore:
         elif name == "control":
             self._control(args, res)
         elif name == "pick":
-            self._pick(args, res)
+            self._pick(args, res, session)
         elif name == "look":
             self._start_look(str(args.get("question") or origin or "").strip(), res, session)
         elif name == "retake_look":
@@ -2164,9 +2167,15 @@ class RecordStore:
         """What a list screen shows now (the app's files, the photos taken):
         the candidates "number 2" and a file's name pick from."""
         with self._lock:
-            self.screen_items[screen] = [{"id": str(i.get("id")), "name": str(i.get("name") or "")}
-                                         for i in items or []][:200]
+            kept = [{"id": str(i.get("id")), "name": str(i.get("name") or ""), **self._known_file(i)}
+                    for i in items or []][:200]
+            self.screen_items[screen] = sorted(kept, key=lambda i: "protocol" in i)  # already reviewed last
             self._commit()  # the prompt counts them
+
+    def _known_file(self, item: dict) -> dict:
+        """A file reviewed before: the protocol it became, by the same rule an import uses."""
+        doc = lib.find_by_source(lib.file_source_hash(str(item.get("sha256") or "")), self.root)
+        return {"protocol": doc["id"], "title": lib.page_title(doc)} if doc else {}
 
     def _control(self, args: dict, res: dict) -> None:
         cur = self.r["view"]["current"]["screen"]
@@ -2182,7 +2191,7 @@ class RecordStore:
             return
         res["ui"].append({"action": "control", "target": cmd, **({"n": int(n)} if n else {})})
 
-    def _pick(self, args: dict, res: dict) -> None:
+    def _pick(self, args: dict, res: dict, session: dict | None = None) -> None:
         cur = self.r["view"]["current"]["screen"]
         items = self.screen_items.get(cur) or []
         if not SCREENS.get(cur, {}).get("pick") or not items:
@@ -2201,6 +2210,10 @@ class RecordStore:
                                        else "I couldn't find that one.")
                 return
             hit = hits[0]
+        if hit.get("protocol"):  # reviewed already: its protocol, no second review
+            self._navigate_locked(res, session, "protocol_detail", hit["protocol"])
+            res["messages"].append(f"Opening {hit['title']}.")
+            return
         res["ui"].append({"action": "pick", "target": hit["id"]})
         res["messages"].append(f"Opening {hit['name']}.")
 
@@ -3245,7 +3258,10 @@ class RecordStore:
         if on and "private" in ((self.r.get("run") or {}).get("mode"), run_mode()):
             res["messages"].append(say("vision_watch_private", session))
             return
-        self._vision()["on"] = on
+        v = self._vision()
+        v["on"] = on
+        if on:
+            v["asked"] = v.get("asked", 0) + 1  # said again: try again, even on a step the stream dropped
         res["messages"].append(say("vision_watch_on" if on else "vision_watch_off", session))
 
     def _undo_vision_locked(self, res: dict, session: dict | None, wells) -> None:

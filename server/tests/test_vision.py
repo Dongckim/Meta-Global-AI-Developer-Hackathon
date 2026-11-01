@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import server.api as api  # noqa: E402
 from server import lab_sam_live as live_mod  # noqa: E402
 from server import runs  # noqa: E402
+from server import sam_wells as sw  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 from server.tone import set_run_mode  # noqa: E402
 
@@ -304,7 +305,26 @@ set_run_mode("private")
 assert "Private" in " ".join(s.apply_calls([{"name": "watch_start", "args": {}}], "voice", "", "grammar", {}).get("messages", []))
 assert s.snapshot()["vision"]["on"] is False
 set_run_mode("full")
+s = fresh()
+said("watching")
+said("watching")
+assert s.snapshot()["vision"]["asked"] == 2  # said again: the app tries again
 print("V19 ok: the person turns the camera on and off")
+
+# Frames the glasses sent smaller keep the timeline, and nothing's judged on them.
+mid = sw.well_center_mm(1, 1)
+stay = [[f, mid[0], mid[1], 100] for f in range(21)]
+live = live_mod.Live("x", "tl", "pen")
+live.dir = Path(tempfile.mkdtemp())
+live.chunks = {0: {"n": 0, "start": 0, "status": "analyzing", "low": []}}
+live.finish(0, {"status": "done", "fps": 7.0, "track": stay, "inliers": {str(f): 200 for f in range(21)}})
+assert [w["well"] for w in live.wells] == ["B2"], live.wells
+live = live_mod.Live("x", "tl", "pen")
+live.dir = Path(tempfile.mkdtemp())
+live.chunks = {0: {"n": 0, "start": 0, "status": "analyzing", "low": list(range(21))}}
+live.finish(0, {"status": "done", "fps": 7.0, "track": stay, "inliers": {str(f): 200 for f in range(21)}})
+assert live.wells == [], live.wells
+print("V20 ok: frames that came in small aren't judged")
 
 # Every event is logged, and the numbers add up. The queue plays through.
 s = fresh()

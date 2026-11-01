@@ -93,8 +93,10 @@ class Live:
             c = self.chunks[n]
             if n and n - 1 not in self.chunks and not self.stopped or c["status"] == "analyzing":
                 break
+            low = set(c.get("low", ()))  # the glasses dropped the size there: too soft to judge a well on
             for f, x, y, a in c.get("track", ()):
-                joined.setdefault(c["start"] + f, (c["start"] + f, (x, y), a))
+                if f not in low:
+                    joined.setdefault(c["start"] + f, (c["start"] + f, (x, y), a))
                 holes.setdefault(c["start"] + f, c.get("ref_wells", 0))
             for f, count in c.get("inliers", {}).items():
                 inliers.setdefault(c["start"] + int(f), count)
@@ -261,8 +263,9 @@ def _analyze(live: Live, n: int, clip: Path) -> None:
 
 @router.post("/{sid}/chunks")
 async def new_chunk(sid: str, background: BackgroundTasks, clip: UploadFile = File(...),
-                    n: int = Form(...), start: int = Form(...)):
-    """Chunk n, its first frame being the session's frame `start`; analysed in the background, alongside the others."""
+                    n: int = Form(...), start: int = Form(...), low: str = Form("")):
+    """Chunk n, its first frame being the session's frame `start`; analysed in the background, alongside the
+    others. `low`, "4,5,6": its frames that came in smaller and were scaled up; they keep the timeline, nothing's judged on them."""
     live = _live(sid)
     if n < 0 or start < 0 or n in live.chunks:
         raise HTTPException(400, "a bad or repeated chunk")
@@ -273,7 +276,8 @@ async def new_chunk(sid: str, background: BackgroundTasks, clip: UploadFile = Fi
     d.mkdir()
     (d / "clip.mp4").write_bytes(data)
     with live.lock:
-        live.chunks[n] = {"n": n, "start": start, "status": "analyzing", "created": time.time()}
+        live.chunks[n] = {"n": n, "start": start, "status": "analyzing", "created": time.time(),
+                          "low": [int(x) for x in low.split(",") if x.isdigit()]}
     live.report_pending()
     background.add_task(_analyze, live, n, d / "clip.mp4")
     return {"n": n}
