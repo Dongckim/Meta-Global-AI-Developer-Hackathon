@@ -67,4 +67,29 @@ ROW = sw.PITCH_MM / sw.PLATE_MM[1]
 T.set_fit(run, {"fit": [(x, y + ROW) for x, y in sw.UNIT], "wells": 40})
 assert shown(run) == ["C8", "C7"], shown(run)
 assert run.fit_wells == 40
+
+# The plate is asked for on a schedule, sooner when the view moved.
+import numpy as np  # noqa: E402
+
+still, other = np.zeros((1280, 720), np.uint8), np.full((1280, 720), 40, np.uint8)
+run = T.Run("x", "tl", sw.TIP)
+assert [T.plate_due(run, n, still) for n in range(7)] == [True, False, False, True, False, False, True]
+assert run.plate_calls == 3
+assert T.plate_due(run, 7, other) and not T.plate_due(run, 8, other)  # moved, and only once for it
+run.stale = True
+assert T.plate_due(run, 9, other) and not run.stale
+
+# A plate that lands after the photos behind it, which were quicker, corrects them.
+run = T.Run("x", "tl", sw.TIP)
+run.quads[0] = [(x + 1000, y) for x, y in QUAD]  # the view before the head moved: the pen's off this grid
+T.place(run, 2, [], pen("D8"), SIZE)
+T.place(run, 3, [], pen("D8"), SIZE)
+assert not run.wells
+T.place(run, 1, ["plate"], pen("D8"), SIZE)
+assert shown(run) == ["D8"] and run.wells[0]["photos"] == 3, run.wells
+
+# A head turning fast: the photo isn't judged, and the next one asks for the plate.
+run = T.Run("x", "tl", sw.TIP)
+T._look(run, 0, b"", 0.0, gyro=T.GYRO_MAX + 1)
+assert run.shaken == 1 and run.stale and run.gyros == {0: T.GYRO_MAX + 1} and not run.failed
 print("ALL PASS")
