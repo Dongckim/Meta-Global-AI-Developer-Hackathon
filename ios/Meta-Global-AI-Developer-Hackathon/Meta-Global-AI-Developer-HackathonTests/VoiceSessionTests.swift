@@ -131,6 +131,40 @@ struct VoiceSessionTests {
                             closeDay: { _ in firstClose })
     }
 
+    @Test func aSessionBrokenMidTurnFreesTheVoice() async throws {
+        let wake = FakeWake()
+        let live = FakeLive()
+        let voice = makeSession(wake: wake, live: live)
+        voice.activate()
+        #expect(await settle { wake.running })
+        #expect(wake.fire())
+        #expect(await settle { voice.inSession && voice.state == .listening })
+        live.send(.stage(TurnStage(stage: "thinking")))
+        #expect(voice.state == .thinking)
+        #expect(voice.quietLeft == nil)
+        live.send(.closed(why: "error"))
+        #expect(voice.state == .ready)
+        #expect(voice.quietLeft == 0)
+    }
+
+    @Test func noticesWaitForQuietInASession() async throws {
+        let wake = FakeWake()
+        let live = FakeLive()
+        let voice = makeSession(wake: wake, live: live)
+        voice.activate()
+        #expect(await settle { wake.running })
+        #expect(wake.fire())
+        #expect(await settle { voice.inSession && voice.state == .listening })
+        #expect((voice.quietLeft ?? 0) > 1)  // the session just opened
+        live.send(.partial("hello"))
+        #expect(voice.quietLeft == nil)  // the person is talking
+        voice.speak("C2 done.")
+        #expect(live.muted)  // as for a reply: Milo doesn't hear itself
+        let cuts = voice.speechCuts
+        voice.speak("A reply.")
+        #expect(voice.speechCuts == cuts + 1)
+    }
+
     private func settle(until: @escaping () -> Bool, timeout: Double = 3) async -> Bool {
         let end = Date().addingTimeInterval(timeout)
         while Date() < end {

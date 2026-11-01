@@ -179,8 +179,26 @@ final class VoiceSession {
     /// gen that set activeTrigger; only that capture's exit may clear it.
     private var captureGen = 0
     private var activated = false
-    /// Speech would actually play (the session has been set up).
-    var canSpeak: Bool { activated }
+    /// Both quiet this long inside a session: a line that isn't a reply may go.
+    static let quietGap: TimeInterval = 1.5
+    /// When the person or Milo last made a sound in this session.
+    private var lastSound = Date.distantPast
+    /// Speech cut off before its end (stopped, or replaced by newer speech).
+    private(set) var speechCuts = 0
+
+    /// Seconds until a line that isn't a reply may be said, nil if it can't yet be known (a turn is
+    /// under way, speech is off). Sessions don't hold it back: the person and Milo being quiet does.
+    var quietLeft: TimeInterval? {
+        guard activated else { return nil }
+        if state == .ready { return 0 }
+        guard state == .listening, live != nil else { return nil }
+        return max(0, Self.quietGap - Date().timeIntervalSince(lastSound))
+    }
+
+    private func cutSpeech() {
+        speechCuts += 1
+        speaker.stop()
+    }
     private var startingWake = false
     private var wakeBroken = false
 
@@ -329,11 +347,11 @@ final class VoiceSession {
         Log.voice.info("[voice] open \(String(describing: trigger), privacy: .public) state=\(self.state.rawValue, privacy: .public) starting=\(starting) -> \(String(describing: a), privacy: .public) press=\(press)/\(self.pressGen)")
         switch a {
         case .ignore: return false
-        case .bargeIn: speaker.stop()
+        case .bargeIn: cutSpeech()
         case .accept: break
         case .interrupt:
             gen += 1
-            speaker.stop()
+            cutSpeech()
             live?.muted = false
             state = restState
             resumeWake()
@@ -402,7 +420,7 @@ final class VoiceSession {
         gen += 1
         activeTrigger = nil
         if state == .listening { try? capture.stop() }
-        speaker.stop()
+        cutSpeech()
         state = .ready
         listeningSince = nil
         resumeWake()
@@ -434,6 +452,7 @@ final class VoiceSession {
         Log.voice.info("[voice] speak len=\(text?.count ?? -1) state=\(self.state.rawValue, privacy: .public) activated=\(self.activated)")
         guard state != .listening || live != nil else { return }
         guard activated else { state = .ready; return }
+        if state == .speaking { speechCuts += 1 }  // the speech under way is replaced
         gen += 1
         let g = gen
         wake.stop()
@@ -468,6 +487,7 @@ final class VoiceSession {
                 // only the latest utterance reopens the mic: an earlier one cut
                 // off by a newer speak() must not unmute it mid-sentence
                 guard let self, g == self.gen, self.state == .speaking else { return }
+                self.lastSound = Date()
                 self.live?.muted = false
                 self.state = self.restState
                 self.resumeWake()
@@ -549,6 +569,7 @@ final class VoiceSession {
             self.liveEvent(ev)
         }
         live = link
+        lastSound = Date()
         edgeFade = Theme.edgeFade
         do {
             try await link.start(session: "bench")
@@ -568,6 +589,7 @@ final class VoiceSession {
     }
 
     private func liveEvent(_ ev: LiveEvent) {
+        lastSound = Date()
         switch ev {
         case .partial(let text):
             partialText = text
@@ -612,6 +634,10 @@ final class VoiceSession {
         link.end()
         partialText = nil
         edgeFade = Theme.edgeSessionFade
+        // the turn's end would have come on this link: nothing else will clear it
+        stage = nil
+        serverBusy = nil
+        if state == .thinking || state == .searching { state = .ready }
         // "Thanks Milo": the reply is said first; the edge stays until it ends
         let waitForReply = why == "end_session" && (closeAfterReply || state == .speaking)
         closeAfterReply = false
@@ -780,7 +806,7 @@ final class VoiceSession {
             guard let self, self.state == s, self.gen == g else { return }
             Log.voice.error("[voice] watchdog: \(s.rawValue, privacy: .public) stuck -> \(self.live != nil ? "listening (session kept)" : "ready", privacy: .public)")
             if live != nil {
-                if s == .speaking { speaker.stop() }
+                if s == .speaking { cutSpeech() }
                 live?.muted = false
                 partialText = nil
                 gen += 1

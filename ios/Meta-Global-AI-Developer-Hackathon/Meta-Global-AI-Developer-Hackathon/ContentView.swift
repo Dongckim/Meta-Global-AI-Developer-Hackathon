@@ -298,7 +298,7 @@ struct ContentView: View {
         // hidden from the first frame on and never toggled: a status bar
         // appearing with Main changed the safe area under it (the bands)
         .statusBarHidden(true)
-        .onChange(of: visionWant, initial: true) { _, want in watcher.update(want, dat: dat) }
+        .onChange(of: visionWant, initial: true) { _, want in watcher.update(want, why: visionOffWhy, dat: dat) }
         .onChange(of: lab.visionNotices) { _, list in notices.step(list, voice: voice) }
         .onChange(of: watcher.chip) { old, new in if old == .looking, new == .watching { visionCue("vision_watching") } }
         .onChange(of: visionChecking) { _, on in if on { visionCue("vision_checking") } }
@@ -735,6 +735,15 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+            .overlay(alignment: .topTrailing) {
+                if lab.runMode != "private" {
+                    // a tap asks A1 and the tool again: a wrong answer shouldn't last the whole run
+                    Button { a1Run = "" } label: { VisionChip(chip: watcher.chip, pending: visionPending, u: u) }
+                        .buttonStyle(.plain)
+                        .padding(.top, (wide ? Theme.Layout.contentTop : 32) * u)
+                        .padding(.trailing, Theme.Layout.side * u)
+                }
+            }
         }
         .ignoresSafeArea(.container, edges: .bottom)
         .background { BenchCanvas() }
@@ -757,6 +766,22 @@ struct ContentView: View {
         return .init(runId: run.runId, step: lab.stepIndex + 1, a1: a1, pointer: pointer)
     }
 
+    /// For the log and the server: the first thing keeping `visionWant` nil.
+    private var visionOffWhy: String {
+        if lab.run == nil { return "no run" }
+        if lab.runMode == nil || lab.runMode == "private" { return "mode \(lab.runMode ?? "unknown")" }
+        if dat?.status != .connected { return "glasses \(dat?.status.rawValue ?? "none")" }
+        if dat?.testing != false { return "test page open" }
+        if !(showsBench || lab.view.current.screen == "web_answer") { return "off the bench (\(currentScreen))" }
+        if a1Run != lab.run?.runId { return "A1 asked" }
+        return lab.remaining.isEmpty ? "no wells left" : "not a pipetting step"
+    }
+
+    private var askA1: Binding<Bool> {
+        Binding(get: { showsBench && visionRun.map { $0.runId != a1Run } == true },
+                set: { if !$0, let id = visionRun?.runId { a1Run = id } })
+    }
+
     private var visionPending: Int { lab.bench?.vision?.pending ?? 0 }
 
     /// Recording is over (or between steps) and wells are still in analysis.
@@ -765,11 +790,6 @@ struct ContentView: View {
     private func visionCue(_ key: String) {
         notices.cue = Persona.line(key)
         notices.step(lab.visionNotices, voice: voice)
-    }
-
-    private var askA1: Binding<Bool> {
-        Binding(get: { showsBench && visionRun.map { $0.runId != a1Run } == true },
-                set: { if !$0, let id = visionRun?.runId { a1Run = id } })
     }
 
     private func plateColumn(_ u: CGFloat) -> some View {
@@ -781,13 +801,6 @@ struct ContentView: View {
             .padding(28 * u)
             .frame(width: 800 * u, height: 566 * u)
             .benchCard(radius: 44 * u)
-            .overlay(alignment: .topTrailing) {
-                if lab.runMode != "private" {
-                    // a tap asks A1 and the tool again: a wrong answer shouldn't last the whole run
-                    Button { a1Run = "" } label: { VisionChip(chip: watcher.chip, pending: visionPending, u: u) }
-                        .buttonStyle(.plain).offset(y: -34 * u)
-                }
-            }
             Spacer(minLength: 24 * u)
             ConditionBars(lab: lab, u: u).frame(height: 97 * u)
         }

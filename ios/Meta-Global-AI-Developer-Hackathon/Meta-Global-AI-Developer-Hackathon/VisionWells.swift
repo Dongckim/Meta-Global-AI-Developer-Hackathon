@@ -81,9 +81,11 @@ enum VisionAPI {
 
     static func live(_ id: String) async throws -> Live { try await send(URLRequest(url: url("live/\(id)"))) }
 
-    static func stopLive(_ id: String) async throws -> Live {
+    static func stopLive(_ id: String, why: String) async throws -> Live {
         var req = URLRequest(url: url("live/\(id)/stop"))
         req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["why": why])
         return try await send(req)
     }
 
@@ -484,7 +486,7 @@ final class SamWellRun {
     func report() -> String? { chunks?.report() }
 
     /// Leaves recording; whatever's open uploads, and the server finishes it.
-    func stop() {
+    func stop(why: String = "test page") {
         guard phase == .recording else { return }
         phase = .finishing
         chunks?.stop()
@@ -492,7 +494,7 @@ final class SamWellRun {
             try? await Task.sleep(for: .seconds(1))  // the last writers report through finishWriting
             for upload in uploads { await upload.value }
             guard let id else { return }
-            do { take(try await VisionAPI.stopLive(id)) } catch { self.error = error.localizedDescription }
+            do { take(try await VisionAPI.stopLive(id, why: why)) } catch { self.error = error.localizedDescription }
         }
     }
 }
@@ -523,12 +525,15 @@ final class VisionWatcher {
     @ObservationIgnored private weak var dat: GlassesDAT?
     @ObservationIgnored private var gen = 0
 
-    func update(_ new: Want?, dat: GlassesDAT?) {
+    /// `why`: what took it off, when `new` is nil.
+    func update(_ new: Want?, why: String, dat: GlassesDAT?) {
         guard new != want else { return }
+        let reason = new == nil ? why : "step changed"
+        if want != nil { Log.dat.info("[watching] stop: \(reason, privacy: .public)") }
         want = new
         gen += 1
         let g = gen
-        finish()
+        finish(why: reason)
         guard let new, let dat, new != dropped else {
             leave()
             return
@@ -562,11 +567,11 @@ final class VisionWatcher {
         self.run = run
         await run.start(a1: want.a1, pointer: want.pointer, targets: "", fps: 7,
                         bench: VisionAPI.BenchLink(runId: want.runId, step: want.step))
-        guard g == gen else { run.stop(); return }
+        guard g == gen else { run.stop(why: "stopped while starting"); return }
         guard let tap = run.tap else {
             Log.dat.error("[watching] no session: \(run.error ?? "?", privacy: .public)")
             self.run = nil
-            drop()
+            drop(why: "no session")
             return
         }
         dat.visionTap.set { finder.frame($0); tap($0) }  // Vision keeps checking: the chip says if the plate left the view
@@ -577,8 +582,8 @@ final class VisionWatcher {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self, !Task.isCancelled else { return }
                 if let why = self.run?.downgrade() {
-                    Log.dat.error("[watching] stream downgraded: \(why, privacy: .public)")
-                    self.drop()
+                    Log.dat.error("[watching] stop: stream downgraded: \(why, privacy: .public)")
+                    self.drop(why: "stream downgraded: \(why)")
                     return
                 }
             }
@@ -586,10 +591,10 @@ final class VisionWatcher {
     }
 
     /// Below what the wells need: this session ends, and the step stays Off.
-    private func drop() {
+    private func drop(why: String) {
         dropped = want
         gen += 1
-        finish()
+        finish(why: why)
         leave()
     }
 
@@ -601,14 +606,14 @@ final class VisionWatcher {
     }
 
     /// What's recorded uploads and the server finishes it; the report goes to the log and to Files.
-    private func finish() {
+    private func finish(why: String) {
         checking?.cancel()
         checking = nil
         guard let run else { return }
         self.run = nil
         dat?.visionTap.set(nil)
         if let line = run.report() { Self.note(line) }
-        run.stop()
+        run.stop(why: why)
     }
 
     private static func note(_ line: String) {
@@ -625,13 +630,17 @@ final class VisionWatcher {
     }
 }
 
-/// Says the server's camera lines, one at a time, only while Milo and the person are quiet.
+/// Says the server's camera lines, one at a time, only while Milo and the person are quiet, in a
+/// session too. A line cut off is said once more; cut off again, it counts as played (the plate still shows it).
 @MainActor
 final class VisionNotices {
     /// Said here, and the server told (or being told); never said twice.
     private var said = Set<String>()
     private var telling = Set<String>()
     private var speaking: String?
+    private var cutsAtStart = 0
+    private var cuts: [String: Int] = [:]
+    private var waiting: Task<Void, Never>?
     /// A short status line ("Watching."): only the latest matters, and it needs no receipt.
     var cue: String?
 
@@ -640,7 +649,12 @@ final class VisionNotices {
         if let id = speaking {
             guard voice.state != .speaking else { return }
             speaking = nil
-            said.insert(id)
+            if voice.speechCuts == cutsAtStart {
+                said.insert(id)
+            } else {
+                cuts[id, default: 0] += 1
+                if cuts[id, default: 0] >= 2 { said.insert(id) }
+            }
         }
         for n in notices where said.contains(n.id) && !telling.contains(n.id) {
             telling.insert(n.id)
@@ -651,7 +665,16 @@ final class VisionNotices {
                 }
             }
         }
-        guard voice.state == .ready, voice.canSpeak else { return }
+        guard cue != nil || notices.contains(where: { !said.contains($0.id) }), let left = voice.quietLeft else { return }
+        guard left == 0 else {  // quiet can come with no event at all: look again when it would have
+            waiting?.cancel()
+            waiting = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(left))
+                guard !Task.isCancelled else { return }
+                self?.step(notices, voice: voice)
+            }
+            return
+        }
         if let line = cue {
             cue = nil
             voice.speak(line)
@@ -659,6 +682,7 @@ final class VisionNotices {
         }
         guard let next = notices.first(where: { !said.contains($0.id) }) else { return }
         speaking = next.id
+        cutsAtStart = voice.speechCuts
         voice.speak(next.speak)
         if voice.state != .speaking { step(notices, voice: voice) }  // speech off: nothing to wait for
     }
