@@ -39,6 +39,8 @@ class Live:
         self.best = None  # the session's one reference, from the frames at Record
         self.ready = threading.Event()
         self.picking = False
+        self.ends: dict = {}  # chunk -> (frame in the next chunk, plate corners there), or None
+        self.turn = threading.Condition()
         self.refs: list = []
         self.stopped = False
         self.fps = None
@@ -53,6 +55,17 @@ class Live:
         """While the stills are being worked on, a chunk's image calls wait: those run first."""
         if self.picking:
             self.ready.wait(REF_FIRST_S)
+
+    def end_of(self, n: int):
+        """Where chunk n last had the plate in the second it shares with the next; waits for it. None: nowhere."""
+        with self.turn:
+            self.turn.wait_for(lambda: n in self.ends, REF_FIRST_S)
+            return self.ends.get(n)
+
+    def hand(self, n: int, end) -> None:
+        with self.turn:
+            self.ends[n] = end
+            self.turn.notify_all()
 
     def set_reference(self, ref: dict | None) -> None:
         self.best = ref
@@ -191,6 +204,7 @@ def _analyze(live: Live, n: int, clip: Path) -> None:
         live.finish(n, {**r, "status": "done" if r["track"] else "empty"})
     except Exception as e:  # the chunks around it still count
         print(f"sam live {live.id}: chunk {n} failed: {type(e).__name__}: {e}", flush=True)
+        live.hand(n, None)
         live.finish(n, {"status": "failed", "error": f"{type(e).__name__}: {e}"})
 
 

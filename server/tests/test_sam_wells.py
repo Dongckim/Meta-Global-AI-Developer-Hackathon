@@ -438,6 +438,10 @@ assert [c["status"] for c in s16["chunks"]] == ["done", "done", "empty"], s16
 one16 = live.Live("x", "tl", "pen")
 one16.set_reference({"frame": 3, "wells": 40, "covered": False})
 assert one16.ref()["frame"] == 3 and one16.refs[0]["wells"] == 40
+one16.hand(4, (3, "quad"))
+assert one16.end_of(4) == (3, "quad")
+one16.hand(5, None)
+assert one16.end_of(5) is None
 one16.picking = True
 one16.first()  # the reference is in: no wait
 assert sw.not_sure_why(1.0, [100] * 8) == []
@@ -462,6 +466,14 @@ class Ref16:
 
     def first(self):
         pass
+
+    def end_of(self, n):
+        return self.lent
+
+    def hand(self, n, end):
+        self.handed = (n, end)
+
+    lent = None
 
 
 class CountPlates(FakeSam):
@@ -528,6 +540,18 @@ session17 = Ref16(ref17)
 r17 = sw.track_chunk(clip, "tl", FakeSam(), out17 / "1", "pen", session17)
 assert r17["track"] and r17["corrected"] and r17["kept"] + r17["redone"] < r17["frames"], r17
 assert sw.track_chunk(clip, "tl", FakeSam(), out17 / "2", "pen", Ref16(None))["corrected"] is False  # no correction yet: no wait
+class NoPlate(FakeSam):
+    def image(self, target, png):
+        return [] if target == sw.PLATE else FakeSam.image(self, target, png)
+
+
+lent17 = Ref16(None)
+lent17.lent = (2, [(40.0, 60.0), (599.0, 60.0), (599.0, 434.0), (40.0, 434.0)])
+r17b = sw.track_chunk(clip, "tl", NoPlate(), out17 / "3", "pen", lent17)  # no plate here: the chunk before lends its place
+assert r17b["track"] and r17b["lent"] and r17b["kept"] < r17b["frames"], {k: r17b.get(k) for k in ("lent", "kept", "why")}
+r17c = sw.track_chunk(clip, "tl", NoPlate(), out17 / "4", "pen", Ref16(None))  # nothing to borrow
+assert r17c["track"] == [] and r17c["why"] == "no plate", r17c
+assert session17.handed[1] is not None
 outline17 = [(10.0, 10.0), (110.0, 10.0), (110.0, 60.0), (10.0, 60.0)]
 moved17 = [(x + 5, y + 2) for x, y in outline17]
 fit17 = sw.outline_fit(outline17, moved17)  # the grid sits 5, 2 px off this outline

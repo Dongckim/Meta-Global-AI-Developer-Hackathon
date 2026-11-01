@@ -1069,18 +1069,19 @@ def corrected(outline_: list, fit: list | None) -> list:
     return [tuple(map(float, p)) for p in cv2.perspectiveTransform(np.float32(fit).reshape(-1, 1, 2), back).reshape(-1, 2)]
 
 
-def follow_chunk(frames: dict, recs: dict, anchor: int, plate: dict, fit: list | None) -> dict:
+def follow_chunk(frames: dict, recs: dict, anchor: int, plate: dict | None, fit: list | None, quad: list | None = None) -> dict:
     """A chunk on its own: `plate`, SAM's on frame `anchor`, flattened and corrected by the session's
     `fit`, then ORB from that frame to the rest of the chunk (features fade as the view moves away,
     so nothing matches back to the session's first seconds). The pen's mask isn't in yet, so
     RANSAC drops its matches and the hand's. A bent `plate` means no frame gets inliers: _carry
-    won't take a bent grid, so the chunk's wells come out not sure."""
+    won't take a bent grid, so the chunk's wells come out not sure. `quad`, in place of `plate`:
+    where the chunk before had the plate on `anchor`."""
     import cv2
     import numpy as np
     orb = cv2.ORB_create(ORB_FEATURES)
-    quad = corrected(plate_corners(mask_points(plate, 2)), fit)
+    quad = quad or corrected(plate_corners(mask_points(plate, 2)), fit)
     out = {"quads": {}, "redone": 0, "kept": 0}
-    base = orb_base(orb, frames[anchor], quad, None, seen_points(plate))
+    base = orb_base(orb, frames[anchor], quad, None, seen_points(plate) if plate else None)
     if base is None:
         return out
     out["quads"][anchor] = quad
@@ -1098,16 +1099,31 @@ def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) 
     plate is asked for on the middle look, and on the others only when that one won't do. No tip
     or no plate: {"track": []}, no SAM video."""
     t, t_all = {}, time.perf_counter()
+    n_chunk = int(out_dir.name)
     info = ffprobe(clip)
     nframes, fps = info["frames"], info["fps"]
     out_dir.mkdir(parents=True, exist_ok=True)
     done = lambda r: {"frames": nframes, "fps": fps, "timing": t, **r}  # noqa: E731
     gray = gray_frames(clip, nframes)
 
-    def follow(plate0: tuple, fit: list | None) -> dict:
+    def follow(plate0: tuple | None, fit: list | None) -> dict:
+        """With no unbent plate in this chunk, and only then, it waits for the chunk before and
+        starts from the last place that one matched in the second they share."""
+        lent = None
+        if (not plate0 or distorted(plate_corners(mask_points(plate0[1], 2)))) and n_chunk:
+            lent = session.end_of(n_chunk - 1)
         t0 = time.perf_counter()
-        followed = follow_chunk(gray, {}, plate0[0], plate0[1], fit)
+        if lent:
+            followed = follow_chunk(gray, {}, lent[0], None, fit, lent[1])
+        elif plate0:
+            followed = follow_chunk(gray, {}, plate0[0], plate0[1], fit)
+        else:
+            followed = {"quads": {}, "redone": 0, "kept": 0}
+        followed["lent"] = lent is not None
         t["follow_s"] = time.perf_counter() - t0
+        overlap = round(fps)
+        last = max((n for n in followed.get("inliers", {}) if n >= nframes - overlap), default=None)
+        session.hand(n_chunk, None if last is None else (last - nframes + overlap, followed["quads"][last]))
         return followed
 
     looks = [(2 * i + 1) * nframes // (2 * CHUNK_TIP_LOOKS) for i in range(CHUNK_TIP_LOOKS)]
@@ -1129,11 +1145,12 @@ def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) 
         if plates:
             best = best_plate([m for _, m in plates], gray[0].shape[::-1], pens)
             plate0 = next(p for p in plates if p[1] is best)
-        if not tips or not plate0:
+        if not tips:
             shutil.rmtree(fdir)
             sending.result()
+            session.hand(n_chunk, None)
             t["total_s"] = time.perf_counter() - t_all
-            return done({"track": [], "why": "no tip" if not tips else "no plate"})
+            return done({"track": [], "why": "no tip"})
         ref = session.ref()
         following = pool.submit(follow, plate0, ref["fit"] if ref else None)
         # every look that saw the tip prompts it, in one video call: a second round repeats the whole video
@@ -1143,10 +1160,14 @@ def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) 
         decode_masks(recs)
         t["masks_s"] = time.perf_counter() - t0
         followed = following.result()
+    if not plate0 and not followed["lent"]:
+        t["total_s"] = time.perf_counter() - t_all
+        return done({"track": [], "why": "no plate"})
     track, *_ = locate(recs, nframes, a1, quads=followed["quads"])
     t["total_s"] = time.perf_counter() - t_all
     return done({"track": [[n, mm[0], mm[1], a] for n, mm, a in track], "rounds": rounds, "ref_wells": ref["wells"] if ref else 0,
-                 "corrected": ref is not None, "anchor": plate0[0], "bent_anchor": "inliers" not in followed, "inliers": followed.get("inliers", {}),
+                 "corrected": ref is not None, "anchor": plate0[0] if plate0 else None, "lent": followed["lent"],
+                 "bent_anchor": "inliers" not in followed, "inliers": followed.get("inliers", {}),
                  "redone": followed["redone"], "kept": followed["kept"]})
 
 
