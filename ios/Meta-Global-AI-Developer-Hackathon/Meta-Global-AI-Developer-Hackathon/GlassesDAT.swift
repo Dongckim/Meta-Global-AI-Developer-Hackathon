@@ -8,7 +8,6 @@ import Foundation
 import os
 import MWDATCamera
 import MWDATCore
-import MWDATMotion
 import Observation
 import SwiftUI
 import UIKit
@@ -230,10 +229,6 @@ final class GlassesDAT {
     nonisolated let frameTap = FrameTap()
     /// The same frames for Bench Watching (VisionWatcher), alongside whatever else listens.
     nonisolated let visionTap = FrameTap()
-    /// The head's turn rate while `wantsMotion` (Diagnostics' One a second).
-    nonisolated let gyro = GyroPeak()
-    var wantsMotion = false
-    private var motionTask: Task<Void, Never>?
     /// A Diagnostics test page is open: it owns the camera, Watching stays out.
     var testing = false
     /// Who has the stream: `startLive` callers (a photo question), Watching, or both, sharing it.
@@ -322,7 +317,6 @@ final class GlassesDAT {
                     Task { @MainActor in self?.livePhoto?.set(photo.data) }
                 }.store(in: liveTokens)
                 stream.start()
-                if wantsMotion { startMotion(session) }
                 if resolution != .medium, !hold {
                     try? await Task.sleep(for: .seconds(6))
                     if liveSession === session, liveFrame == nil {
@@ -338,28 +332,6 @@ final class GlassesDAT {
         }
     }
 
-    /// Motion is a beta the Developer Center enables: without it the photos just carry no reading.
-    private func startMotion(_ session: DeviceSession) {
-        do {
-            guard let motion = try session.addMotion(configuration: MotionConfiguration(samplingRate: .hz30)) else {
-                Log.dat.info("[look] motion: not available")
-                return
-            }
-            let peak = gyro
-            let samples = motion.samples
-            motionTask = Task {
-                for await sample in samples {
-                    guard let g = sample.gyroscope else { continue }
-                    let (x, y, z) = (Double(g.x), Double(g.y), Double(g.z))
-                    peak.note((x * x + y * y + z * z).squareRoot())
-                }
-            }
-            motion.start()
-        } catch {
-            Log.dat.error("[look] motion: \(String(describing: error), privacy: .public)")
-        }
-    }
-
     func stopLive() {
         plainUser = false
         if !watching { closeLive() }
@@ -369,8 +341,6 @@ final class GlassesDAT {
         liveAsked = nil
         guard liveSession != nil else { return }
         livePhoto?.set(nil)
-        motionTask?.cancel()
-        motionTask = nil
         liveStream?.stop()
         liveSession?.stop()
         liveStream = nil

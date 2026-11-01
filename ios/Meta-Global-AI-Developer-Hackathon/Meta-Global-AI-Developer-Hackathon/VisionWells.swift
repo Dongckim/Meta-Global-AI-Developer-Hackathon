@@ -90,11 +90,10 @@ enum VisionAPI {
     }
 
     /// The frames at Record; the server picks the session's one reference from them.
-    static func uploadStills(path: String, stills: [(frame: Int, jpeg: Data)], gyro: Double? = nil) async throws {
+    static func uploadStills(path: String, stills: [(frame: Int, jpeg: Data)]) async throws {
         struct Out: Decodable { let frames: [Int] }
         let boundary = "----samwell\(UUID().uuidString)"
         var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"numbers\"\r\n\r\n\(stills.map { String($0.frame) }.joined(separator: ","))\r\n".utf8)
-        if let gyro { body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"gyro\"\r\n\r\n\(gyro)\r\n".utf8)) }
         for s in stills {
             body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"frames\"; filename=\"\(s.frame).jpg\"\r\n".utf8))
             body.append(Data("Content-Type: image/jpeg\r\n\r\n".utf8))

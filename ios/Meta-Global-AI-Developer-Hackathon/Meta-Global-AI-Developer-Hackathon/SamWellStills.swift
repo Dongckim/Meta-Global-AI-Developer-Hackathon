@@ -31,7 +31,6 @@ extension SamWellAPI {
         let tookS: Double?
         let lookS: Double?
         let plateCalls: Int
-        let shaken: Int
         let error: String?
     }
 
@@ -54,41 +53,23 @@ extension SamWellAPI {
     }
 }
 
-/// The fastest head turn since it was last read, rad/s. Samples arrive off the main thread.
-final class GyroPeak: @unchecked Sendable {
-    private let lock = NSLock()
-    private var peak: Double?
-
-    func note(_ rate: Double) { lock.withLock { peak = max(peak ?? 0, rate) } }
-
-    func take() -> Double? {
-        lock.withLock {
-            defer { peak = nil }
-            return peak
-        }
-    }
-}
-
-/// Takes the stream's next frame once a second, with the head's turn over the frame before it.
-/// Frames arrive on the SDK's thread.
+/// Takes the stream's next frame once a second. Frames arrive on the SDK's thread.
 final class StillTaker: @unchecked Sendable {
     private let lock = NSLock()
     private let images = CIContext()
     private var next = 0.0
     private var count = 0
-    private var onPhoto: (@Sendable (Int, Double?, Data) -> Void)?
-    private var gyro: GyroPeak?
+    private var onPhoto: (@Sendable (Int, Data) -> Void)?
 
-    func start(gyro: GyroPeak?, _ onPhoto: @escaping @Sendable (Int, Double?, Data) -> Void) {
-        lock.withLock { next = 0; count = 0; self.gyro = gyro; self.onPhoto = onPhoto }
+    func start(_ onPhoto: @escaping @Sendable (Int, Data) -> Void) {
+        lock.withLock { next = 0; count = 0; self.onPhoto = onPhoto }
     }
 
     func stop() { lock.withLock { onPhoto = nil } }
 
     func frame(_ sb: CMSampleBuffer) {
         let now = CACurrentMediaTime()
-        let turn = lock.withLock { gyro }?.take()
-        let due: (Int, @Sendable (Int, Double?, Data) -> Void)? = lock.withLock {
+        let due: (Int, @Sendable (Int, Data) -> Void)? = lock.withLock {
             guard let onPhoto, now >= next else { return nil }
             next = now + 1
             count += 1
@@ -97,7 +78,7 @@ final class StillTaker: @unchecked Sendable {
         guard let due, let raw = CMSampleBufferGetImageBuffer(sb),
               let jpeg = images.jpegRepresentation(of: CIImage(cvPixelBuffer: raw), colorSpace: CGColorSpaceCreateDeviceRGB())
         else { return }
-        due.1(due.0, turn, jpeg)
+        due.1(due.0, jpeg)
     }
 }
 
@@ -138,7 +119,7 @@ struct SamWellStillsView: View {
                         Text("\(name(w))  at \(w.first) s · \(w.photos) photos · \(String(format: "%.1f", w.offMm)) mm")
                             .font(.callout.monospaced()).opacity(w.sure ? 1 : 0.5)
                     }
-                    Text("\(run.taken) photos · \(run.failed) failed · \(run.skipped) skipped · \(run.shaken) shaken · \(run.plateCalls) plate calls · \(seconds(run.lookS)) s a photo · \(seconds(run.tookS)) s after Stop")
+                    Text("\(run.taken) photos · \(run.failed) failed · \(run.skipped) skipped · \(run.plateCalls) plate calls · \(seconds(run.lookS)) s a photo · \(seconds(run.tookS)) s after Stop")
                         .font(.callout).foregroundStyle(.secondary)
                     if let why = run.error { Text(why).foregroundStyle(.red) }
                     Button("Again") { reset() }.buttonStyle(.bordered)
@@ -175,7 +156,6 @@ struct SamWellStillsView: View {
             let finder = PlateFinder { quad in Task { @MainActor in aimQuad = quad } }
             self.finder = finder
             dat?.testing = true
-            dat?.wantsMotion = true
             dat?.frameTap.set { taker.frame($0); finder.frame($0) }
             dat?.stopLive()
             dat?.startLive(resolution: .high, frameRate: 7, hold: true)
@@ -184,7 +164,6 @@ struct SamWellStillsView: View {
             taker.stop()
             dat?.frameTap.set(nil)
             dat?.stopLive()
-            dat?.wantsMotion = false
             dat?.testing = false
             finder = nil
         }
@@ -204,14 +183,14 @@ struct SamWellStillsView: View {
             let new = try await SamWellAPI.newStills(a1: a1, pointer: pointer)
             run = new
             phase = .recording
-            taker.start(gyro: dat?.gyro) { n, turn, jpeg in Task { @MainActor in upload(new.id, n, turn, jpeg) } }
+            taker.start { n, jpeg in Task { @MainActor in upload(new.id, n, jpeg) } }
         } catch { self.error = error.localizedDescription }
     }
 
-    private func upload(_ id: String, _ n: Int, _ turn: Double?, _ jpeg: Data) {
+    private func upload(_ id: String, _ n: Int, _ jpeg: Data) {
         uploads.append(Task {
             do {
-                try await VisionAPI.uploadStills(path: "stills/\(id)/photo", stills: [(n, jpeg)], gyro: turn)
+                try await VisionAPI.uploadStills(path: "stills/\(id)/photo", stills: [(n, jpeg)])
                 sent += 1
             } catch {
                 Log.dat.error("[samwell] photo \(n): \(error.localizedDescription, privacy: .public)")
