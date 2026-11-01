@@ -147,6 +147,22 @@ struct VoiceSessionTests {
         #expect(voice.quietLeft == 0)
     }
 
+    @Test func theStreamClosesTheSessionAndTurnsGoOneByOne() async throws {
+        let wake = FakeWake()
+        let live = FakeLive()
+        let voice = makeSession(wake: wake, live: live)
+        voice.activate()
+        #expect(await settle { wake.running })
+        #expect(wake.fire())
+        #expect(await settle { voice.inSession && voice.state == .listening })
+        voice.keepLiveClosed = true
+        #expect(!voice.inSession && live.ends == 1)
+        #expect(await settle { wake.running })
+        #expect(wake.fire())
+        #expect(await settle { voice.state == .listening })
+        #expect(!voice.inSession && live.starts == 1)  // a capture, no second session
+    }
+
     @Test func noticesWaitForQuietInASession() async throws {
         let wake = FakeWake()
         let live = FakeLive()

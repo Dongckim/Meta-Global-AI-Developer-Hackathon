@@ -179,6 +179,12 @@ final class VoiceSession {
     /// gen that set activeTrigger; only that capture's exit may clear it.
     private var captureGen = 0
     private var activated = false
+    /// The glasses' stream is on: live audio and the stream can't share the Bluetooth link (the
+    /// link falls behind real time and Meta closes it), so turns go one by one, as without a session.
+    var keepLiveClosed = false {
+        didSet { if keepLiveClosed, live != nil { endLive("client") } }
+    }
+
     /// Both quiet this long inside a session: a line that isn't a reply may go.
     static let quietGap: TimeInterval = 1.5
     /// When the person or Milo last made a sound in this session.
@@ -370,7 +376,7 @@ final class VoiceSession {
         // Wake keeps running until capture is attached (beginCapture): the
         // shared engine stays up, so no route re-switch eats the press.
         if trigger.handsFree { chime() }
-        if trigger.handsFree, let make = liveFactory, Date() >= liveBackoffUntil {
+        if trigger.handsFree, let make = liveFactory, Date() >= liveBackoffUntil, !keepLiveClosed {
             Task { await beginLive(make, trigger: trigger, gen: g, press: press) }
         } else {
             Task { await beginCapture(trigger: trigger, gen: g, press: press) }

@@ -477,12 +477,12 @@ final class SamWellRun {
         sentChunks += 1
         uploads.append(Task { [weak self] in
             defer { try? FileManager.default.removeItem(at: chunk.url) }
-            for attempt in 1...3 {
+            for attempt in 1...6 {  // about a minute: the wells in it are worth waiting out a bad link
                 do {
                     try await VisionAPI.uploadChunk(live: id, n: chunk.n, start: chunk.start, low: chunk.low, clip: chunk.url)
                     return
-                } catch where attempt < 3 {
-                    try? await Task.sleep(for: .seconds(1))
+                } catch where attempt < 6 {
+                    try? await Task.sleep(for: .seconds(attempt * 2))
                 } catch {
                     Log.dat.error("[samwell] chunk \(chunk.n) upload failed: \(error.localizedDescription, privacy: .public)")
                     self?.sentChunks -= 1
@@ -556,6 +556,7 @@ final class VisionWatcher {
     @ObservationIgnored private var finder: PlateFinder?
     @ObservationIgnored private var checking: Task<Void, Never>?
     @ObservationIgnored private weak var dat: GlassesDAT?
+    @ObservationIgnored private weak var voice: VoiceSession?
     @ObservationIgnored private var gen = 0
     private static let longestWait: TimeInterval = 15
 
@@ -578,6 +579,7 @@ final class VisionWatcher {
             return
         }
         self.dat = dat
+        self.voice = voice
         aim = PlateAimState()
         chip = .looking
         Log.dat.info("[watching] step \(new.step) looking for the plate")
@@ -593,6 +595,7 @@ final class VisionWatcher {
                 try? await Task.sleep(for: .milliseconds(250))
             }
             guard let self, g == self.gen else { return }
+            voice.keepLiveClosed = true
             dat.startWatching()
         }
     }
@@ -649,6 +652,7 @@ final class VisionWatcher {
     private func leave() {
         dat?.visionTap.set(nil)
         dat?.stopWatching()
+        voice?.keepLiveClosed = false
         finder = nil
         chip = .off
     }
