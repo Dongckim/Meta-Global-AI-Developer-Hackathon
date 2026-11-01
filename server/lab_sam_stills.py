@@ -1,6 +1,6 @@
 """Diagnostics "One a second": a photo a second instead of video. Each photo is judged as it lands:
 SAM finds the plate and the pen, the photo's own plate (or the last usable one before it) gives the
-grid, and the wells the pen stayed in for at least MIN_STILLS photos show on the page right away.
+grid, corrected by the session's grid correction from the first REF_PHOTOS photos, and the wells the pen stayed in for at least MIN_STILLS photos show on the page right away.
 No ORB: at a second apart it lost the plate on two of three saved sessions, and it needs every photo
 at once. Everything stays in server/data/lab/sam_stills/<session>/ (never committed).
 """
@@ -23,6 +23,7 @@ from server import sam_wells as sw
 router = APIRouter(prefix="/lab/sam-wells/stills")
 ROOT = Path(__file__).resolve().parent / "data" / "lab" / "sam_stills"
 MIN_STILLS = 2  # one photo in a well is the pen passing over it
+REF_PHOTOS = 3  # as Watching's frames at Record
 MAX_GAP = 2  # a photo with no pen between two of the same well doesn't end the stay
 _SID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
 _POOL = ThreadPoolExecutor(6)
@@ -58,9 +59,12 @@ class Run:
         self.dir = ROOT / sid
         self.lock = threading.Lock()
         self.quads: dict = {}  # photo: its plate's corners
+        self.pens: dict = {}  # photo: its pen, decoded
         self.ends: dict = {}  # photo: where the tip was, in px
         self.track: dict = {}  # photo: (mm, tip area)
         self.look_s: list = []
+        self.stills: list = []  # the first photos: [(photo, gray, png)]
+        self.fit, self.fit_wells = None, 0  # the session's grid correction
         self.jobs: list = []
         self.taken = self.looked = self.failed = self.skipped = 0
         self.status, self.error, self.wells, self.took_s = "recording", None, [], None
@@ -70,7 +74,8 @@ class Run:
         with self.lock:
             return {"id": self.id, "status": self.status, "taken": self.taken, "looked": self.looked,
                     "failed": self.failed, "skipped": self.skipped, "wells": self.wells, "took_s": self.took_s,
-                    "look_s": round(statistics.median(self.look_s), 1) if self.look_s else None, "error": self.error}
+                    "look_s": round(statistics.median(self.look_s), 1) if self.look_s else None,
+                    "fit_wells": self.fit_wells, "error": self.error}
 
 
 def before(found: dict, n: int):
@@ -101,20 +106,49 @@ def stays_out(stays: list) -> list:
 def place(run: Run, n: int, plates: list, pens: list, size: tuple) -> None:
     """One photo's finds -> the wells so far. Photos can land out of order: wells_of takes them sorted."""
     quad = own_grid(plates, pens, size)
+    pen = {**pens[0], "points": sw.mask_points(pens[0], 2)} if pens else None
     with run.lock:
         if quad:
             run.quads[n] = quad
-        grid = quad or before(run.quads, n)
+        run.pens[n] = pen
+    read(run, n)
+
+
+def read(run: Run, n: int) -> None:
+    """Where the pen is on photo n, on the plate's grid with the session's correction when it's in."""
+    with run.lock:
+        grid, pen, fit = run.quads.get(n) or before(run.quads, n), run.pens.get(n), run.fit
         near = before(run.ends, n)
-    if not grid or not pens:
+    if not grid or not pen:
         return
-    track, per, *_ = sw.locate({0: {2: pens[0]}}, 1, run.a1, quads={0: grid}, near=near)
+    track, per, *_ = sw.locate({0: {2: pen}}, 1, run.a1, quads={0: sw.corrected(grid, fit)}, near=near)
     if not track:
         return
     with run.lock:
+        if run.fit is not fit:  # the correction came in meanwhile: set_fit reads this photo again
+            return
         run.track[n] = (track[0][1], track[0][2])
         run.ends[n] = per[0][4]
         run.wells = stays_out(wells_of([(k, *run.track[k]) for k in sorted(run.track)]))
+
+
+def set_fit(run: Run, ref: dict) -> None:
+    """The correction is in: the photos judged without it are read again."""
+    with run.lock:
+        run.fit, run.fit_wells = ref["fit"], ref["wells"]
+        ns = sorted(run.pens)
+    for n in ns:
+        read(run, n)
+
+
+def _reference(run: Run) -> None:
+    try:
+        ref = sw.pick_reference(lab_sam.make_sam(), run.stills, run.pointer)
+        print(f"sam stills {run.id}: reference " + (f"{ref['wells']} wells" if ref else "none"), flush=True)
+        if ref:
+            set_fit(run, ref)
+    except Exception as e:  # the wells still come, uncorrected
+        print(f"sam stills {run.id}: reference failed: {type(e).__name__}: {e}", flush=True)
 
 
 def _look(run: Run, n: int, data: bytes, landed: float) -> None:
@@ -131,6 +165,11 @@ def _look(run: Run, n: int, data: bytes, landed: float) -> None:
                 return
         png = run.dir / f"{n:05d}.png"
         cv2.imwrite(str(png), img)
+        with run.lock:
+            if len(run.stills) < REF_PHOTOS:
+                run.stills.append((n, cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), png))
+                if len(run.stills) == REF_PHOTOS:
+                    run.jobs.append(_POOL.submit(_reference, run))
         with ThreadPoolExecutor(2) as both:
             plates = both.submit(lab_sam.make_sam().image, sw.PLATE, png)
             pens = both.submit(lab_sam.make_sam(light=True).image, run.pointer, png)
@@ -146,7 +185,10 @@ def _look(run: Run, n: int, data: bytes, landed: float) -> None:
 
 def _finish(run: Run) -> None:
     t0 = time.perf_counter()
-    wait(run.jobs)
+    seen = 0
+    while seen < len(run.jobs):  # a last photo can start the reference
+        seen = len(run.jobs)
+        wait(run.jobs)
     run.took_s = round(time.perf_counter() - t0, 1)
     run.status = "done"
     (run.dir / "stills.json").write_text(json.dumps({**run.out(), "a1": run.a1, "pointer": run.pointer}, indent=1))

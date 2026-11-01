@@ -61,4 +61,10 @@ T.place(run, 5, ["plate"], pen("D7"), SIZE)
 T.place(run, 4, ["plate"], pen("D7"), SIZE)  # landed late
 assert shown(run) == ["D8", "D7"], shown(run)
 assert run.wells[0]["confidence"] == "sure", run.wells
+
+# The correction moves the grid a row down: the photos already judged are read again.
+ROW = sw.PITCH_MM / sw.PLATE_MM[1]
+T.set_fit(run, {"fit": [(x, y + ROW) for x, y in sw.UNIT], "wells": 40})
+assert shown(run) == ["C8", "C7"], shown(run)
+assert run.fit_wells == 40
 print("ALL PASS")
