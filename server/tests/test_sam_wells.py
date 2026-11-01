@@ -531,6 +531,26 @@ assert few17.holes == 4, few17.holes  # all three at once, then the best again w
 good17 = {"box": PLATE_BOX, "points": box17, "shown": 0.8, "mask": None}
 bent17 = {"box": PLATE_BOX, "points": [(100, 100), (500, 110), (560, 400), (60, 200)], "shown": 0.95, "mask": None}
 assert sw.best_plate([bent17, good17], (W, H)) is good17  # unbent beats showing more
+class OnlyOn(Stills):
+    """A usable plate only on frame `on`: no plate on the frames in `gone`, a bent one on the rest. Notes who's asked."""
+    def __init__(self, on, gone=()):
+        Stills.__init__(self, ())
+        self.on, self.gone, self.asked = on, gone, []
+
+    def image(self, target, png):
+        if target != sw.PLATE:
+            return Stills.image(self, target, png)
+        self.asked.append(int(png.stem))
+        n = int(png.stem)
+        return [] if n in self.gone else [{**bent17, "w": W, "h": H, "c": 0.9}] if n != self.on else Stills.image(self, target, png)
+
+
+for gone17 in ((3,), ()):  # the middle still shows no plate, or a bent one
+    other17 = OnlyOn(6, gone17)
+    assert sw.pick_reference(other17, stills17, "pen") and other17.asked == [3, 0, 6], other17.asked
+    assert other17.holes == 4, other17.holes  # the wells are still asked on all three
+none17 = OnlyOn(None, (0, 3, 6))
+assert sw.pick_reference(none17, stills17, "pen") is None and none17.asked == [3, 0, 6]
 far17 = {"box": (300, 100, 500, 200), "points": [(300, 100), (500, 100), (500, 200), (300, 200)], "shown": 1.0, "mask": None}
 near17 = {"box": (40, 220, 400, 460), "points": [(40, 220), (400, 220), (400, 460), (40, 460)], "shown": 0.8, "mask": None}
 pen17 = {"box": (100, 300, 200, 320), "points": [(100.0 + i, 310.0) for i in range(100)]}

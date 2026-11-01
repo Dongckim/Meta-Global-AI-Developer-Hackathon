@@ -1023,18 +1023,22 @@ def best_plate(plates: list, size: tuple, pens: list = ()) -> dict:
 
 def pick_reference(sam, stills: list, pointer: str) -> dict | None:
     """The session's grid correction from the frames at Record: stills are [(frame, gray, png)]. The
-    middle one gives the plate; a second apart the view barely moves, so its outline flattens all
-    three for SAM's wells, and the one with the most wells sets the correction, asked again once
-    when that's too few to fit (SAM can miss them all on a good view). Few image calls: chunks
-    queue behind these. None when the middle one shows no usable plate."""
-    frame, gray, png = stills[len(stills) // 2]
-    plates = sam.image(PLATE, png)
-    if not plates:
-        return None
-    pens = sam.image(pointer, png)
-    plate = best_plate(plates, gray.shape[::-1], pens)
-    corners_ = [tuple(map(float, p)) for p in plate_corners(mask_points(plate, 2))]
-    if touches_edge(plate, gray.shape[::-1]) or distorted(corners_):
+    middle one gives the plate, or the others when it shows none usable (SAM can miss a plate in
+    plain view); a second apart the view barely moves, so that outline flattens all three for SAM's
+    wells, and the one with the most wells sets the correction, asked again once when that's too
+    few to fit (SAM can miss them all on a good view). Few image calls: chunks queue behind these.
+    None when no still shows a usable plate."""
+    mid = len(stills) // 2
+    for _, gray, png in [stills[mid], *stills[:mid], *stills[mid + 1:]]:
+        plates = sam.image(PLATE, png)
+        if not plates:
+            continue
+        pens = sam.image(pointer, png)
+        plate = best_plate(plates, gray.shape[::-1], pens)
+        corners_ = [tuple(map(float, p)) for p in plate_corners(mask_points(plate, 2))]
+        if not touches_edge(plate, gray.shape[::-1]) and not distorted(corners_):
+            break
+    else:
         return None
     covered = shown(plate) < MIN_SHOWN or any(_overlap(m["box"], plate["box"]) for m in pens)
     fit = lambda g: fit_wells(g, corners_, lambda p: sam.image(WELL, p))  # noqa: E731
@@ -1103,7 +1107,7 @@ def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) 
     info = ffprobe(clip)
     nframes, fps = info["frames"], info["fps"]
     out_dir.mkdir(parents=True, exist_ok=True)
-    done = lambda r: {"frames": nframes, "fps": fps, "timing": t, **r}  # noqa: E731
+    done = lambda r: {"frames": nframes, "fps": fps, "w": info["w"], "h": info["h"], "timing": t, **r}  # noqa: E731
     gray = gray_frames(clip, nframes)
 
     def follow(plate0: tuple | None, fit: list | None) -> dict:

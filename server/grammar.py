@@ -320,6 +320,12 @@ def _verb(action: str) -> str:
     return "(?:" + "|".join(r"\s+".join(map(re.escape, v.lower().split())) for v in vs) + ")" if vs else "(?!)"
 
 
+def named_no(text: str) -> str | None:
+    """The well in "No, not C2" / "No, C2": that names what's wrong, so it's never a card's bare no."""
+    m = re.fullmatch(r"\s*no\s+(?:not\s+)?([a-h]\d{1,2})[?!]?\s*", re.sub(r"[,.:]", " ", (text or "").lower()))
+    return m.group(1).upper() if m else None
+
+
 def split_card_answer(text: str) -> tuple[str | None, str]:
     """A leading card answer and the rest of the turn ("Yes. Exclude C6." ->
     ("yes", "Exclude C6.")); (None, text) when the turn doesn't open with one."""
@@ -349,6 +355,10 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
             return None
         spec = wells[0] if m.group(2) is None else f"{wells[0]} to {wells[-1]}"
         return [{"name": "mark_done", "args": {"wells": wells}}], f"{spec} done."
+    if re.fullmatch(r"\s*undo(?: that)?[?!]?\s*", low):
+        return [{"name": "undo_vision", "args": {}}], ""
+    if (well := named_no(text)):
+        return [{"name": "undo_vision", "args": {"wells": [well]}}], ""
     if re.fullmatch(rf"\s*{_verb('next_step')}[?!]?\s*", low):
         return [{"name": "next_step", "args": {}}], "Next step."
     if re.fullmatch(r"\s*where am i[?!]?\s*", low):

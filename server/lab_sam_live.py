@@ -25,14 +25,21 @@ REFS = ROOT.parent / "sam_refs"
 MAX_CHUNK_BYTES = 100_000_000
 #: Longest a chunk's image calls stay behind the session's first ones.
 REF_FIRST_S = 30
+#: The only stream the judging was tried on; a session that drops from it isn't judged.
+STREAM = (720, 1280, 7.0)
+#: Gets a bound session's new wells, a chunk at a time (server/api.py points it at the store).
+on_wells = None
 _SID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
 #: Open sessions, in memory (the reference holds an image).
 _LIVE: dict = {}
 
 
 class Live:
-    def __init__(self, sid: str, a1: str, pointer: str, targets: list | None = None):
+    def __init__(self, sid: str, a1: str, pointer: str, targets: list | None = None,
+                 run_id: str = "", started_at: float | None = None):
         self.id, self.a1, self.pointer, self.dir = sid, a1, pointer, ROOT / sid
+        self.run_id, self.started_at = run_id, started_at or time.time()
+        self.sent: set = set()  # wells already passed to the run
         self.targets = targets or []  # debug only: what the tester says they'll fill
         self.lock = threading.Lock()
         self.chunks: dict = {}  # n -> {"n", "start", "status", ...}
@@ -96,18 +103,45 @@ class Live:
                                    "ref_wells": holes[w["frame"]],
                                    "inliers": sorted(inliers.get(f, 0) for f in frames)[len(frames) // 2]})
 
+    def _chunk_of(self, frame: int) -> dict:
+        return max((c for c in self.chunks.values() if c["start"] <= frame), key=lambda c: c["start"])
+
+    def _usable(self, c: dict) -> bool:
+        return (c.get("w"), c.get("h")) == STREAM[:2] and abs((c.get("fps") or 0) - STREAM[2]) < 0.5
+
+    def _new_events(self) -> dict:
+        """Wells not yet passed to the run, by chunk: {n: [event]}. Holds the lock."""
+        if not self.run_id or not on_wells:
+            return {}
+        fresh: dict = {}
+        for w in self.wells:
+            if (w["well"], w["frame"]) not in self.sent:
+                self.sent.add((w["well"], w["frame"]))
+                c = self._chunk_of(w["frame"])
+                fresh.setdefault(c["n"], []).append({"well": w["well"], "ts": self.started_at + w["f0"] / self.fps,
+                                                     "confidence": w["confidence"], "usable": self._usable(c)})
+        return fresh
+
+    def _deliver(self, fresh: dict) -> None:
+        for n in sorted(fresh):
+            on_wells(self.run_id, fresh[n])
+
     def finish(self, n: int, result: dict) -> None:
         with self.lock:
             self.chunks[n].update(result)
             self.fps = self.fps or result.get("fps")
             self._judge()
             self._save()
+            fresh = self._new_events()
+        self._deliver(fresh)
 
     def stop(self) -> None:
         with self.lock:
             self.stopped = True
             self._judge()
             self._save()
+            fresh = self._new_events()
+        self._deliver(fresh)
 
     def summary(self) -> dict:
         """Sure and not-sure wells; with a target list, how those compare. to_catch: targets seen only as not sure."""
@@ -135,6 +169,8 @@ class LiveIn(BaseModel):
     a1: str = "tl"
     pointer: str = "pen"
     targets: str = ""
+    run_id: str = ""  # the Bench run this session reports to; empty: the test page
+    started_at: float | None = None  # when frame 0 was taken
 
 
 @router.post("")
@@ -148,7 +184,7 @@ def new_live(body: LiveIn):
     except ValueError as e:
         raise HTTPException(400, str(e))
     sid = time.strftime("%Y%m%d-%H%M%S-") + os.urandom(2).hex()
-    live = _LIVE[sid] = Live(sid, body.a1, body.pointer, targets)
+    live = _LIVE[sid] = Live(sid, body.a1, body.pointer, targets, body.run_id, body.started_at)
     live.dir.mkdir(parents=True)
     return live.out()
 

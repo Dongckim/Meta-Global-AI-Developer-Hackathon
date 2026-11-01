@@ -34,6 +34,28 @@ def done_wells(record: dict, step: int | None = None) -> set[str]:
     return {m["well"] for m in done_marks(record) if step is None or m.get("step") == step}
 
 
+def step_at(record: dict, ts: float) -> int:
+    """The step (1-based) a moment belongs to, by when each step began. Before the first
+    entry: the first one. A record without the log (older runs): its current step."""
+    log = (record or {}).get("step_log") or []
+    if not log:
+        return (record or {}).get("step_index", 0) + 1
+    return next((e["step"] for e in reversed(log) if e["ts"] <= ts), log[0]["step"])
+
+
+def vision_agreement(record: dict) -> dict:
+    """How vision's sure wells compared with what people logged, per (step, well): the numbers
+    the vision log is kept for. both: logged and seen; camera_only: seen sure, nobody logged it;
+    person_only: logged, never seen; undone: the camera's wells people took back."""
+    v = (record or {}).get("vision") or {}
+    seen = {(s["step"], s["well"]) for s in v.get("seen") or []}
+    marks = done_marks(record)
+    people = {(m.get("step"), m["well"]) for m in marks if m.get("source") != "vision"}
+    camera = {(m.get("step"), m["well"]) for m in marks if m.get("source") == "vision"}
+    return {"both": len(people & seen), "camera_only": len(camera - people), "person_only": len(people - seen),
+            "undone": len(v.get("rejected") or [])}
+
+
 def _dir(root: Path | None) -> Path:
     return (root or DATA_DIR) / "runs"
 

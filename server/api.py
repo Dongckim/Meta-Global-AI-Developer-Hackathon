@@ -42,6 +42,7 @@ from server.grammar import (
     join_wells_ranges,
     mark_each_timers,
     match_card_answer,
+    named_no,
     match_grammar,
     needs_minutes_ask,
     normalize_text,
@@ -100,7 +101,7 @@ load_dotenv()
 
 #: Snapshot/action contract version. Bump on any shared/schemas or
 #: view/action-shape change; the app compares at startup.
-API_VERSION = 30
+API_VERSION = 31
 #: Seconds between keepalives on /events and /voice/live. The app drops a
 #: link that stays silent for three of these and reconnects.
 HEARTBEAT_S = 15.0
@@ -196,7 +197,7 @@ PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "skip_sync", "review_draft", "save_draft", "start_run", "discard_draft", "look", "retake_look",
                    "show_step", "open_source_page", "web_search", "open_source", "control", "pick",
                    "resume_run", "approve_handoff", "save_handoff", "next_change", "retry_handoff",
-                   "export_handoff", "set_timing", "choose_mode"]
+                   "export_handoff", "set_timing", "choose_mode", "undo_vision"]
 #: Model actions the turn runs itself, not the store: they leave the turn for
 #: their own path (web_search -> _web_search_turn, a card first in Private).
 #: Every other PERFORM_ACTIONS entry is the store's (pinned by test).
@@ -220,7 +221,8 @@ TOOLS = [
         "edit_note{well?,text}; save_tip{step_id,text}; "
         "set_timer{minutes,wells?,on_done?} (minutes stated, else ask); "
         "cancel_timer{label?}; extend_timer{label?,minutes?} (+5 default); "
-        "next_step; end_run; show{view?,target?}; navigate{screen,target?}; "
+        "next_step; end_run; undo_vision{wells?} (undo what the camera logged: all of its last wells, or those named); "
+        "show{view?,target?}; navigate{screen,target?}; "
         "open{target} (well/screen/original/importer, or \"run <as said>\" e.g. \"run 2\", "
         "\"run latest of Drug A/B\"; a well is always open{target}); "
         "back; make_robot (a finished run's final protocol, for the robot); "
@@ -478,6 +480,7 @@ def _spawn_wake(session: dict, gen: int) -> None:
 
 
 store.spawn_wake = _spawn_wake
+lab_sam_live.on_wells = lambda run_id, events: store.vision_events(run_id, events)
 
 
 class OrchestrateIn(BaseModel):
@@ -1108,6 +1111,12 @@ def _expand_perform(calls: list) -> list:
     return out
 
 
+def _card_wells(card: dict) -> set:
+    """The wells a card is asking about."""
+    p = card.get("payload") or {}
+    return {*(p.get("wells") or []), *(p.get("unmarked") or []), *([p["well"]] if p.get("well") else [])}
+
+
 async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session: dict, source: str):
     """Cards first (no model call), then grammar, else Spark with one lookup round.
     The model hears the raw transcript; normalization lives inside grammar only.
@@ -1115,10 +1124,15 @@ async def run_utterance(client: httpx.AsyncClient, key: str, text: str, session:
     if _stop_search(session, text):
         return [], [], "", 0, "grammar", [], {"dropped": 0, "drop_reasons": []}, []
     if store.r["cards"]:
+        named = named_no(text)
+        about = next((c for c in sorted(store.r["cards"].values(), key=lambda c: c["ts"], reverse=True)
+                      if named and named in _card_wells(c)), None)
+        if about:  # "No, C9" to the card asking about C9
+            return _resolve_cards([(about["id"], False)], session)
         ans = _offered(match_card_answer(text))
         if ans is not None:
             return _answer_cards(ans, session)
-        ans, rest = split_card_answer(text)
+        ans, rest = (None, text) if named_no(text) else split_card_answer(text)
         if _offered(ans) is not None:
             # "Yes. Exclude C6.": the answer goes to the latest card, the rest is a new turn
             head = _answer_cards(ans, session, latest=True)
@@ -1819,6 +1833,13 @@ def _resolve_card(card_id: str, answer: str, session: dict, choice: str = ""):
     ok = answer.strip().lower() not in ("no", "cancel", "false", "0", "dismiss")
     message, new_cards, _ = store.confirm(card_id, ok, "card", session, choice)
     return message, new_cards
+
+
+@app.post("/vision/notices/{notice_id}/played")
+def vision_notice_played(notice_id: str):
+    """The app said a camera line; it leaves the queue."""
+    store.vision_notice_played(notice_id)
+    return {"ok": True}
 
 
 @app.post("/input")
