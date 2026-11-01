@@ -551,7 +551,7 @@ r17b = sw.track_chunk(clip, "tl", NoPlate(), out17 / "3", "pen", lent17)  # no p
 assert r17b["track"] and r17b["lent"] and r17b["kept"] < r17b["frames"], {k: r17b.get(k) for k in ("lent", "kept", "why")}
 r17c = sw.track_chunk(clip, "tl", NoPlate(), out17 / "4", "pen", Ref16(None))  # nothing to borrow
 assert r17c["track"] == [] and r17c["why"] == "no plate", r17c
-assert session17.handed[1] is not None
+assert lent17.handed[0] == 3 and lent17.handed[1] is not None  # it passes its own end on
 outline17 = [(10.0, 10.0), (110.0, 10.0), (110.0, 60.0), (10.0, 60.0)]
 moved17 = [(x + 5, y + 2) for x, y in outline17]
 fit17 = sw.outline_fit(outline17, moved17)  # the grid sits 5, 2 px off this outline
