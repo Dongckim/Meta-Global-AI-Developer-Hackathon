@@ -166,6 +166,8 @@ struct RunCode: Decodable, Equatable {
 
 enum SSEvent {
     case snapshot(RecordSnapshot)
+    /// Chunks in analysis, between snapshots.
+    case visionPending(Int)
     case timerWarning(message: String, speak: String?)
     case timerDone(message: String, speak: String?)
     case ui(UIAction)
@@ -407,6 +409,8 @@ enum PipClient {
                         } catch {
                             cont.yield(.broken(syncReason(error)))
                         }
+                    case "vision_pending":
+                        if case .number(let count)? = obj["count"] { cont.yield(.visionPending(Int(count))) }
                     case "timer_warning":
                         let msg = obj["message"]?.string ?? "⏰ \(obj["label"]?.string ?? "timer"): 5 minutes left"
                         cont.yield(.timerWarning(message: msg, speak: obj["speak"]?.string))

@@ -1193,7 +1193,7 @@ struct WordReveal: View {
             textFlow
             if dots { ThinkingDots(color: dotColor) }
         }
-        .id(text)
+        .id(prefix ?? text)  // a person's words grow in place: each new one fading in would flicker
         .onAppear { shown = true }
     }
 

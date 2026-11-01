@@ -980,6 +980,7 @@ final class LabState {
     var visionNotices: [RecordSnapshot.VisionNotice] = []
     /// "Watching" said, "End watch" not yet.
     var visionOn = false
+    var visionPending = 0
     var visionAsked = 0
     var headerMode: RecordSnapshot.RunModeLabel?
     /// The server's bench (plate well states, legend, Done rows); drawn as is.
@@ -1029,6 +1030,7 @@ final class LabState {
         runMode = snap.headerMode?.id ?? runMode
         visionNotices = snap.visionNotices
         visionOn = snap.visionOn
+        visionPending = snap.bench?.vision?.pending ?? 0
         visionAsked = snap.visionAsked
         if view.current.screen == "private_wait", privateWake?.state == "warming", snap.privateWake?.state == "ready" {
             wakeEnding = true

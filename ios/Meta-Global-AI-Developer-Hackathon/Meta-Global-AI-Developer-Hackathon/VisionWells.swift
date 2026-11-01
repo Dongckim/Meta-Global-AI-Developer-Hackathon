@@ -746,6 +746,8 @@ final class VisionNotices {
     private var waiting: Task<Void, Never>?
     /// A short status line ("Watching."): only the latest matters, and it needs no receipt.
     var cue: String?
+    /// Puts a line on screen as it's said.
+    var show: ((String) -> Void)?
 
     /// Called on every change of the queue or of the voice state, and with a new `cue`.
     func step(_ notices: [RecordSnapshot.VisionNotice], voice: VoiceSession) {
@@ -781,12 +783,14 @@ final class VisionNotices {
         }
         if let line = cue {
             cue = nil
+            show?(line)
             voice.speak(line)
             if voice.state == .speaking { return }
         }
         guard let next = notices.first(where: { !said.contains($0.id) }) else { return }
         speaking = next.id
         cutsAtStart = voice.speechCuts
+        show?(next.speak)
         voice.speak(next.speak)
         if voice.state != .speaking { step(notices, voice: voice) }  // speech off: nothing to wait for
     }

@@ -783,22 +783,28 @@ struct ContentView: View {
     private var visionWatchers: some View {
         Color.clear
         .onChange(of: visionWant, initial: true) { _, want in watcher.update(want, why: visionOffWhy, dat: dat, voice: voice) }
-        .onChange(of: lab.visionNotices) { _, list in notices.step(list, voice: voice) }
+        .onChange(of: lab.visionNotices) { stepNotices() }
         .onChange(of: watcher.chip) { old, new in if old == .looking, new == .watching { SamTone.rising.play() } }
         .onChange(of: visionChecking) { _, on in if on { visionCue("vision_checking") } }
         .onChange(of: watcher.drops) { visionCue("vision_dropped") }
-        .onChange(of: lab.visionOn) { was, on in if was, !on, lab.run != nil { voice.continueSession() } }
-        .onChange(of: voice.state) { notices.step(lab.visionNotices, voice: voice) }
+        .onChange(of: lab.visionOn) { was, on in if was, !on, showsBench { voice.continueSession() } }
+        .onChange(of: voice.state) { stepNotices() }
     }
 
-    private var visionPending: Int { lab.bench?.vision?.pending ?? 0 }
+    private var visionPending: Int { lab.visionPending }
+
+    /// What's said is what's on screen, as for a reply.
+    private func stepNotices() {
+        notices.show = { lastReply = $0 }
+        notices.step(lab.visionNotices, voice: voice)
+    }
 
     /// Recording is over (or between steps) and wells are still in analysis.
     private var visionChecking: Bool { watcher.chip != .watching && watcher.chip != .plateLost && visionPending > 0 }
 
     private func visionCue(_ key: String) {
         notices.cue = Persona.line(key)
-        notices.step(lab.visionNotices, voice: voice)
+        stepNotices()
     }
 
     private func plateColumn(_ u: CGFloat) -> some View {
@@ -962,6 +968,8 @@ struct ContentView: View {
             lab.sync(snap)
             renderView()
             syncError = nil
+        case .visionPending(let count):
+            lab.visionPending = count
         case .broken(let reason):
             syncError = reason
         case .timerWarning(let message, let speak):
