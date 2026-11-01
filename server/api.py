@@ -197,7 +197,7 @@ PERFORM_ACTIONS = ["mark_done", "exclude_well", "record_redo", "add_note",
                    "skip_sync", "review_draft", "save_draft", "start_run", "discard_draft", "look", "retake_look",
                    "show_step", "open_source_page", "web_search", "open_source", "control", "pick",
                    "resume_run", "approve_handoff", "save_handoff", "next_change", "retry_handoff",
-                   "export_handoff", "set_timing", "choose_mode", "undo_vision"]
+                   "export_handoff", "set_timing", "choose_mode", "undo_vision", "watch_start", "watch_end"]
 #: Model actions the turn runs itself, not the store: they leave the turn for
 #: their own path (web_search -> _web_search_turn, a card first in Private).
 #: Every other PERFORM_ACTIONS entry is the store's (pinned by test).
@@ -222,6 +222,7 @@ TOOLS = [
         "set_timer{minutes,wells?,on_done?} (minutes stated, else ask); "
         "cancel_timer{label?}; extend_timer{label?,minutes?} (+5 default); "
         "next_step; end_run; undo_vision{wells?} (undo what the camera logged: all of its last wells, or those named); "
+        "watch_start (the glasses start following the wells: \"watching\"); watch_end (they stop: \"end watch\"); "
         "show{view?,target?}; navigate{screen,target?}; "
         "open{target} (well/screen/original/importer, or \"run <as said>\" e.g. \"run 2\", "
         "\"run latest of Drug A/B\"; a well is always open{target}); "

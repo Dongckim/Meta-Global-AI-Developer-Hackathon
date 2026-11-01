@@ -10,7 +10,8 @@
                  "items": {"type": "object", "required": ["step", "ts"],
                            "properties": {"step": {"type": "integer"}, "ts": {"type": "number"}}}},
     "vision": {"type": "object", "description": "Served: lines for Milo to say, in order. The app picks the moment (not over the person), then POST /vision/notices/{id}/played. Also sent as /events kind vision_notice.",
-               "properties": {"notices": {"type": "array", "items": {
+               "properties": {"on": {"type": "boolean", "description": "The person said \"watching\" and not yet \"end watch\"; off at a run's start."},
+                              "notices": {"type": "array", "items": {
                  "type": "object", "required": ["id", "kind", "message", "speak"],
                  "properties": {"id": {"type": "string"}, "kind": {"enum": ["done", "ask"]},
                                 "message": {"type": "string"}, "speak": {"type": "string"},

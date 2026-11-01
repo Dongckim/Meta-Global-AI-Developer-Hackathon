@@ -288,6 +288,24 @@ assert c.post(f"/lab/sam-wells/live/{sid}/stop").status_code == 200
 del live_mod._LIVE[sid]
 print("V18 ok: the reason a session stopped")
 
+# "Watching" and "End watch" turn the camera on and off; a run starts off, Private refuses.
+s = fresh()
+assert s.snapshot()["vision"]["on"] is False
+assert "plate" in said("watching")["reply"] and s.snapshot()["vision"]["on"] is True
+assert s.r["cards"] == {} and "Stopped" in said("End watch.")["reply"] and s.snapshot()["vision"]["on"] is False
+said("Start watching.")
+assert s.snapshot()["vision"]["on"] is True
+said("stop watching")
+assert s.snapshot()["vision"]["on"] is False
+said("watching")
+s._begin_locked(json.loads(json.dumps(PLAN)), "p2", "Next")
+assert s.snapshot()["vision"]["on"] is False  # a new run asks again
+set_run_mode("private")
+assert "Private" in " ".join(s.apply_calls([{"name": "watch_start", "args": {}}], "voice", "", "grammar", {}).get("messages", []))
+assert s.snapshot()["vision"]["on"] is False
+set_run_mode("full")
+print("V19 ok: the person turns the camera on and off")
+
 # Every event is logged, and the numbers add up. The queue plays through.
 s = fresh()
 s.apply_calls([{"name": "mark_done", "args": {"wells": ["C2", "C3"]}}], "voice", "", "grammar", {})

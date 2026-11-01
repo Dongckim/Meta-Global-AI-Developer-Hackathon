@@ -1127,7 +1127,8 @@ class RecordStore:
             i = t.get("step_index")
             t["chip"] = labels.step_short_title(steps[i]) if isinstance(i, int) and 0 <= i < len(steps) \
                 else labels.shorten_title(t.get("step") or t.get("label") or "")
-        snap["vision"] = {"notices": ((snap.get("vision") or {}).get("notices") or [])}  # the log stays in the run
+        vision = snap.get("vision") or {}
+        snap["vision"] = {"notices": vision.get("notices") or [], "on": bool(vision.get("on"))}  # the log stays in the run
         snap["handoff"] = self.handoff_view(self._handoff_here()) if self._handoff_here() else None
         snap["bench"] = self.bench_view(self.r)
         snap["bench"]["vision"]["pending"] = self._pending.get((self.r.get("run") or {}).get("run_id"), 0)
@@ -1577,7 +1578,7 @@ class RecordStore:
 
     RUN_WRITES = frozenset({"mark_done", "exclude_well", "record_redo", "add_note",
                                 "edit_note", "save_tip", "set_timer", "cancel_timer",
-                                "extend_timer", "next_step", "end_run", "undo_vision"})
+                                "extend_timer", "next_step", "end_run", "undo_vision", "watch_start", "watch_end"})
 
     def _apply_call(self, call, source, origin, route, session, res, force: bool,
                     evidence=None):
@@ -1878,6 +1879,8 @@ class RecordStore:
                             "run_id": (self.r.get("run") or {}).get("run_id")})
         elif name == "undo_vision":
             self._undo_vision_locked(res, session, args.get("wells"))
+        elif name in ("watch_start", "watch_end"):
+            self._watch_locked(res, session, name == "watch_start")
         elif name == "show":
             # the person-facing line is the registry result, never the raw view id
             wells = parse_wellref(args.get("target")) if args.get("target") else []
@@ -3236,6 +3239,14 @@ class RecordStore:
         for step, wells in sorted(steps.items()):
             self._vision_ask(res, sort_wells(set(wells)), step)
         return True
+
+    def _watch_locked(self, res: dict, session: dict | None, on: bool) -> None:
+        """"Watching" / "End watch": the person turns the camera on and off; a run starts with it off."""
+        if on and "private" in ((self.r.get("run") or {}).get("mode"), run_mode()):
+            res["messages"].append(say("vision_watch_private", session))
+            return
+        self._vision()["on"] = on
+        res["messages"].append(say("vision_watch_on" if on else "vision_watch_off", session))
 
     def _undo_vision_locked(self, res: dict, session: dict | None, wells) -> None:
         """"Undo": the last wells the camera logged together. "No, not C2": that well's camera
