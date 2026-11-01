@@ -19,7 +19,8 @@ struct Meta_Global_AI_Developer_HackathonApp: App {
 
     init() {
         Boot.mark("app init")
-        if CBManager.authorization == .allowedAlways {
+        DemoMode.prepare()
+        if CBManager.authorization == .allowedAlways || DemoMode.isOn {
             // before the first frame (the black launch screen), never during the splash
             _dat = State(initialValue: Boot.time("configure DAT") { Self.makeDAT() })
         }
@@ -39,6 +40,9 @@ struct Meta_Global_AI_Developer_HackathonApp: App {
         if let configError {
             d.noteError(configError)
         }
+        #if DEBUG
+        if DemoMode.isOn { d.startDemo() }
+        #endif
         return d
     }
 

@@ -293,6 +293,11 @@ struct ContentView: View {
                     .allowsHitTesting(false)
             }
         }
+        #if DEBUG
+        .overlay(alignment: .bottomTrailing) {
+            if DemoMode.isOn { DemoBar(dat: dat, voice: voice) }
+        }
+        #endif
         // Private's look; light everywhere else, whatever the iPad's setting
         .preferredColorScheme(lab.headerMode?.id == "private" ? .dark : .light)
         // hidden from the first frame on and never toggled: a status bar
@@ -328,7 +333,7 @@ struct ContentView: View {
             // inactive (Control Center, alerts) keeps a live session; background ends it
             if phase == .active, devicesStarted {
                 voice.systemSheet(false)  // back from any iOS picker
-                voice.activate()
+                if !DemoMode.isOn { voice.activate() }
                 // a stream that slept in the background may be dead: open a fresh one
                 if connectStarted { openEvents() }
             } else if phase == .background || !voice.inSession {
@@ -381,7 +386,9 @@ struct ContentView: View {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(wait))
             Boot.time("audio route") { refreshRoute() }
-            Boot.time("voice activate (wake listener start is async)") { voice.activate() }
+            if !DemoMode.isOn {  // the mic's turns need the Meta Model API; the demo types them
+                Boot.time("voice activate (wake listener start is async)") { voice.activate() }
+            }
             Boot.time("glasses camera permission check") { dat?.checkCameraPermission() }
         }
     }
