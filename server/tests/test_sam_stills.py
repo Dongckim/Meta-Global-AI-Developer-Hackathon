@@ -33,6 +33,12 @@ assert names(["D8", "D8", "D7", "D7", "D8", "D8"]) == [("D8", 2), ("D7", 2), ("D
 assert names(["D8", None, None, None, "D8"]) == []  # too far apart to be one stay
 assert T.wells_of([(0, (-50, -50), 1), (1, (-50, -50), 1)]) == []  # off the plate
 
+x, y = at("B12")
+past = x + sw.PITCH_MM / 2 + 1.5  # a slanted pen reads just past the last column
+assert sw.cell_at((past, y)) is None
+assert [c["well"] for c in T.wells_of([(0, (past, y), 1), (1, (past, y), 1)])] == ["B12"]
+assert T.wells_of([(0, (past + 3, y), 1), (1, (past + 3, y), 1)]) == []  # too far past it
+
 assert T.before({1: "a", 3: "b"}, 3) == "a" and T.before({1: "a"}, 1) is None and T.before({}, 5) is None
 
 # Judged as each photo lands, with stand-ins for SAM's masks and the plate's outline.

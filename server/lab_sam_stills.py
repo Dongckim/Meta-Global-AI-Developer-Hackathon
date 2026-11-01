@@ -28,6 +28,9 @@ PLATE_EVERY = 3  # a plate call costs what two pen calls do; at every photo the 
 #: Mean change of a 45x80 gray picture (0-255) since the last plate call that means the head moved. On
 #: 3 saved sessions, 12 flagged 63% of the moves of half a well or more, and 88% of what it flagged moved.
 MOVED = 12
+#: A pen slanting into an outer well reads past its cell. On 8 saved sessions 2 mm brought A12 and B12 back
+#: (12th column, 174307) and changed nothing else; 3 mm added false E1 and D1 (035124).
+EDGE_MM = 2
 REF_PHOTOS = 3  # as Watching's frames at Record
 MAX_GAP = 2  # a photo with no pen between two of the same well doesn't end the stay
 _SID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
@@ -35,12 +38,21 @@ _POOL = ThreadPoolExecutor(6)
 _RUNS: dict = {}
 
 
+def onto_grid(mm: tuple) -> tuple:
+    """A point within EDGE_MM past the outer cells, moved onto them."""
+    half = sw.PITCH_MM / 2 * 0.99  # just inside: a cell's outer edge rounds to the next
+    out = []
+    for v, first, last in zip(mm, sw.well_center_mm(0, 0), sw.well_center_mm(7, 11)):
+        out.append(min(max(v, first - half), last + half) if first - half - EDGE_MM <= v <= last + half + EDGE_MM else v)
+    return tuple(out)
+
+
 def wells_of(track: list) -> list:
     """track: [(photo, (x_mm, y_mm), tip_area)] -> the stays, in order: [{"well", "photos", ...}].
     The well is the one the most photos in a row fall in; a pass over another well doesn't split a stay."""
     runs: list = []
     for n, mm, _ in track:
-        cell = sw.cell_at(mm)
+        cell = sw.cell_at(onto_grid(mm))
         if not cell:
             continue
         if runs and runs[-1]["well"] == cell and n - runs[-1]["ns"][-1] <= MAX_GAP:
