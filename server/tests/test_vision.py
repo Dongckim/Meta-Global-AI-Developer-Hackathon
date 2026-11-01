@@ -150,15 +150,45 @@ s.apply_calls([{"name": "end_run", "args": {}}], "voice", "", "grammar", {})
 assert any(c["kind"] == "end_run" for c in s.r["cards"].values())
 print("V8 ok: off plan on a passed step waits for the run's end")
 
-# Not sure: a hint, nothing else.
+# Not sure: asked on a well the step wants, a hint on any other. Sure later settles it.
 s = fresh()
 sees(s, "C4", confidence="not_sure")
 sees(s, "H9", confidence="not_sure")
-assert marks(s) == {} and lines(s) == [] and not s.r["cards"]
+assert marks(s) == {} and [c["kind"] for c in s.r["cards"].values()] == ["vision_check"]
+assert lines(s) == ["Did C4 go in?"], lines(s)
 assert s.snapshot()["bench"]["vision"]["hints"] == ["C4", "H9"]
 sees(s, "C4")
+assert marks(s) == {(1, "C4"): "vision"} and not s.r["cards"]
 assert s.snapshot()["bench"]["vision"]["hints"] == ["H9"]  # logged since
-print("V9 ok: not sure is a hint")
+print("V9 ok: not sure asks")
+
+# Yes logs it and shows the eye; no drops it, and the camera won't bring it up again.
+s = fresh()
+sees(s, "C4", "C5", confidence="not_sure")
+assert [c["question"] for c in s.r["cards"].values()] == ["Did C4 go in?"], s.r["cards"]  # one at a time, oldest first
+sees(s, "C3", confidence="not_sure")
+assert lines(s) == ["Did C4 go in?"]
+said("yes")
+assert marks(s).get((1, "C4")) and [c["question"] for c in s.r["cards"].values()] == ["Did C5 go in?"], s.r["cards"]
+said("yes")
+assert [c["question"] for c in s.r["cards"].values()] == ["Did C3 go in?"], s.r["cards"]
+said("yes")
+assert marks(s).get((1, "C5")) and marks(s).get((1, "C3")) and not s.r["cards"]
+assert s.snapshot()["bench"]["vision"]["seen"] == ["C3", "C4", "C5"]
+assert lines(s) == ["Did C4 go in?", "Did C5 go in?", "Did C3 go in?"], lines(s)
+s = fresh()
+sees(s, "C4", "C5", confidence="not_sure")
+sees(s, "C5")  # logged while it waits its turn: never asked
+said("no")
+assert not s.r["cards"] and lines(s) == ["Did C4 go in?", "C5 done."], lines(s)
+s = fresh()
+sees(s, "C4", confidence="not_sure")
+said("no")
+assert marks(s) == {} and not s.r["cards"] and s.snapshot()["bench"]["vision"]["hints"] == []
+sees(s, "C4", confidence="not_sure")
+sees(s, "C4")
+assert marks(s) == {} and not s.r["cards"]
+print("V23 ok: the person settles a not-sure well")
 
 # Catch clears when the camera logs the well after all, asked or already skipped.
 s = fresh()
@@ -292,7 +322,7 @@ print("V18 ok: the reason a session stopped")
 # "Watching" and "End watch" turn the camera on and off; a run starts off, Private refuses.
 s = fresh()
 assert s.snapshot()["vision"]["on"] is False
-assert "plate" in said("watching")["reply"] and s.snapshot()["vision"]["on"] is True
+assert "Call me" in said("watching")["reply"] and s.snapshot()["vision"]["on"] is True
 assert s.r["cards"] == {} and "Stopped" in said("End watch.")["reply"] and s.snapshot()["vision"]["on"] is False
 said("Start watching.")
 assert s.snapshot()["vision"]["on"] is True
