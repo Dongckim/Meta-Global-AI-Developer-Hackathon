@@ -92,18 +92,7 @@ def events_for(steps, wrong=None):
     return wrong(ev) if wrong else ev
 
 
-def code_for(approved) -> str:
-    """Protocol code that does exactly these steps (what Spark should write): the head, then the steps."""
-    lines = []
-    for s in approved["steps"]:
-        lines.append(f"    protocol.comment({json.dumps(s['comment'], ensure_ascii=False)})")
-        if s["kind"] == "delay":
-            lines.append(f"    protocol.delay(seconds={s['seconds']}, msg={json.dumps(s['msg'], ensure_ascii=False)})")
-        else:
-            for src in s["sources"]:
-                lines.append(f"    {s['pipette']}.transfer({s['volume_ul']}, {src['labware']}[\"{src['well']}\"], "
-                             f"[plate[w] for w in {src['wells']}], new_tip=\"always\")")
-    return approved["setup"] + "\n".join(lines) + "\n"
+code_for = hand.plain_code
 
 
 # HO1. Changes, each with the record event it came from; step 5 never reached.

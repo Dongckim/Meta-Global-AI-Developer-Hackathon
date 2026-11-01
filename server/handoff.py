@@ -662,6 +662,20 @@ TOOLS = [
 ]
 
 
+def plain_code(approved: dict) -> str:
+    """Protocol code that does exactly the approved steps: the head, then the steps."""
+    lines = []
+    for s in approved["steps"]:
+        lines.append(f"    protocol.comment({json.dumps(s['comment'], ensure_ascii=False)})")
+        if s["kind"] == "delay":
+            lines.append(f"    protocol.delay(seconds={s['seconds']}, msg={json.dumps(s['msg'], ensure_ascii=False)})")
+        else:
+            for src in s["sources"]:
+                lines.append(f"    {s['pipette']}.transfer({s['volume_ul']}, {src['labware']}[\"{src['well']}\"], "
+                             f"[plate[w] for w in {src['wells']}], new_tip=\"always\")")
+    return approved["setup"] + "\n".join(lines) + "\n"
+
+
 async def run_loop(call, approved: dict, sim, on_stage) -> dict:
     """Spark drives; code keeps the stage and decides pass. `approved` is the
     approval (steps, liquids, setup, seconds); `call(body)` posts one
