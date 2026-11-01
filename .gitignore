@@ -14,3 +14,5 @@ server/data/
 .claude/settings.local.json
 *.wav
 .venv-sim/
+eval/results/*
+!eval/results/.gitkeep
