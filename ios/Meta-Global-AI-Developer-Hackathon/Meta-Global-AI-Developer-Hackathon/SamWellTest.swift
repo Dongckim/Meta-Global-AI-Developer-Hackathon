@@ -131,6 +131,21 @@ enum SamWellAPI {
         return out.targets
     }
 
+    struct Latency: Decodable {
+        let running: Bool
+        let step: String
+        let lines: [String]
+        let error: String?
+    }
+
+    static func latency() async throws -> Latency { try await send(URLRequest(url: url("latency"))) }
+
+    static func startLatency() async throws -> Latency {
+        var req = URLRequest(url: url("latency"))
+        req.httpMethod = "POST"
+        return try await send(req)
+    }
+
     static func sessions() async throws -> [SessionRow] { try await send(URLRequest(url: url("sessions"))) }
 
     static func session(_ id: String) async throws -> Session { try await send(URLRequest(url: url("sessions/\(id)"))) }
@@ -282,6 +297,41 @@ final class WellCam: @unchecked Sendable {
 
 // MARK: - Sessions
 
+/// Where a chunk's seconds go: the server sends one saved chunk to SAM and splits the times.
+struct SamLatencyView: View {
+    @State private var state: SamWellAPI.Latency?
+    @State private var error: String?
+
+    private var running: Bool { state?.running ?? false }
+
+    var body: some View {
+        List {
+            Section("Run with Watching off. About 30 SAM calls.") {
+                Button(running ? "Measuring…" : "Run") {
+                    Task {
+                        do { state = try await SamWellAPI.startLatency(); error = nil } catch { self.error = error.localizedDescription }
+                    }
+                }
+                .disabled(running)
+                if running, let step = state?.step { Text(step).foregroundStyle(.secondary) }
+                if let why = error ?? state?.error { Text(why).foregroundStyle(.red) }
+            }
+            if let lines = state?.lines, !lines.isEmpty {
+                Section("Seconds, median") {
+                    ForEach(lines, id: \.self) { Text($0).font(.caption.monospaced()).textSelection(.enabled) }
+                }
+            }
+        }
+        .navigationTitle("SAM latency")
+        .task {
+            while !Task.isCancelled {
+                if let now = try? await SamWellAPI.latency() { state = now }
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+}
+
 struct SamWellTestView: View {
     var dat: GlassesDAT?
     @State private var rows: [SamWellAPI.SessionRow] = []
@@ -289,6 +339,7 @@ struct SamWellTestView: View {
     @State private var pointer = "pen"
     @State private var opened: String?
     @State private var continuous = false
+    @State private var stills = false
     @State private var error: String?
 
     var body: some View {
@@ -304,6 +355,7 @@ struct SamWellTestView: View {
                 }
                 .pickerStyle(.segmented)
                 Button("Continuous (no target wells)") { continuous = true }
+                Button("One a second (photos)") { stills = true }
                 Button("Start session (5 attempts)") {
                     Task {
                         do { opened = try await SamWellAPI.newSession(a1: a1, pointer: pointer).id } catch { self.error = error.localizedDescription }
@@ -330,6 +382,7 @@ struct SamWellTestView: View {
         .navigationTitle("SAM well test")
         .navigationDestination(item: $opened) { SamWellSessionView(sessionID: $0, dat: dat) }
         .navigationDestination(isPresented: $continuous) { SamWellLiveView(dat: dat, a1: a1, pointer: pointer) }
+        .navigationDestination(isPresented: $stills) { SamWellStillsView(dat: dat, a1: a1, pointer: pointer) }
         .task(id: opened) {
             if opened == nil { rows = (try? await SamWellAPI.sessions()) ?? rows }
         }

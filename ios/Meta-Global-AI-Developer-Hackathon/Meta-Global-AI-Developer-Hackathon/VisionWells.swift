@@ -90,7 +90,7 @@ enum VisionAPI {
     }
 
     /// The frames at Record; the server picks the session's one reference from them.
-    static func uploadStills(live id: String, stills: [(frame: Int, jpeg: Data)]) async throws {
+    static func uploadStills(path: String, stills: [(frame: Int, jpeg: Data)]) async throws {
         struct Out: Decodable { let frames: [Int] }
         let boundary = "----samwell\(UUID().uuidString)"
         var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"numbers\"\r\n\r\n\(stills.map { String($0.frame) }.joined(separator: ","))\r\n".utf8)
@@ -101,7 +101,7 @@ enum VisionAPI {
             body.append(Data("\r\n".utf8))
         }
         body.append(Data("--\(boundary)--\r\n".utf8))
-        var req = URLRequest(url: url("live/\(id)/reference"))
+        var req = URLRequest(url: url(path))
         req.httpMethod = "POST"
         req.timeoutInterval = 30
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
@@ -508,7 +508,7 @@ final class SamWellRun {
         guard let live = id else { return }
         chunks = WellChunks(fps: fps, stillsReady: { stills in
             let copy = stills
-            Task { try? await VisionAPI.uploadStills(live: live, stills: copy) }
+            Task { try? await VisionAPI.uploadStills(path: "live/\(live)/reference", stills: copy) }
         }, closed: { chunk in
             Task { @MainActor [weak self] in self?.send(chunk) }
         })

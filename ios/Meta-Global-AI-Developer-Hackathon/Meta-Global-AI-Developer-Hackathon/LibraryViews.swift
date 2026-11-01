@@ -289,6 +289,7 @@ struct DiagnosticsView: View {
                     }
                     // test only (tap, not in the registry): can SAM tell which wells a tip went into?
                     NavigationLink("SAM well test") { SamWellTestView(dat: dat) }.font(.headline)
+                    NavigationLink("SAM latency") { SamLatencyView() }.font(.headline)
                     if let photoThumb {
                         Image(uiImage: photoThumb).resizable().scaledToFit().frame(height: 120)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
