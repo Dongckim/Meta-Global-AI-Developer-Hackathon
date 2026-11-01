@@ -90,7 +90,7 @@ def live_keywords(record: dict, limit: int = 40) -> list[str]:
     """Bias words: wake phrase, agent name, this protocol's reagents and
     conditions, well spellings from the plan, and command words."""
     p = persona()
-    out: list[str] = [p.get("wake_phrase") or "", p.get("agent_name") or ""]
+    out: list[str] = [p.get("wake_phrase") or "", p.get("agent_name") or "", "watching", "end watch"]
     plan = (record or {}).get("plan") or {}
     for c in (plan.get("conditions") or {}).values():
         out.append((c or {}).get("label") or "")

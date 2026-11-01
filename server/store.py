@@ -506,6 +506,8 @@ class RecordStore:
     def _navigate_locked(self, res: dict, session: dict, screen: str, target) -> None:
         """Navigate with target validation; the app renders view."""
         screen = self._flow_gate(screen, session)
+        if screen == "home" and (self.r.get("vision") or {}).get("on"):
+            self.r["vision"]["on"] = False  # the camera comes on when asked, not on the way back to the bench
         t = target.strip() if isinstance(target, str) else ""
         if screen == "run_view":
             # no run named: the one on screen ("here"), else the latest
@@ -2245,6 +2247,7 @@ class RecordStore:
         if draft is not None:
             self.r["draft"] = draft
         runlog.write_run({**doc, "status": "active"}, self.root)
+        self._vision()["on"] = False
         self._vision_release_locked(doc["run_id"], res)
         lab = self.run_label(self.active_run_doc())
         line = say("run_resumed", session, run=lab["display"], step=self.current_step())
@@ -3146,8 +3149,8 @@ class RecordStore:
             if self._pending.get(run_id, 0) == count:
                 return
             self._pending[run_id] = count
-            if (self.r.get("run") or {}).get("run_id") == run_id:
-                self._commit()
+            if (self.r.get("run") or {}).get("run_id") == run_id:  # a number on the chip: no new record, no redraw
+                self._broadcast({"kind": "vision_pending", "count": count})
 
     def vision_events(self, run_id: str, events: list[dict]) -> None:
         """One chunk's wells: [{well, ts (when the pen stayed), confidence, usable}]. Each goes to

@@ -21,6 +21,7 @@ import server.api as api  # noqa: E402
 from server import lab_sam_live as live_mod  # noqa: E402
 from server import runs  # noqa: E402
 from server import sam_wells as sw  # noqa: E402
+from server.live_session import live_keywords  # noqa: E402
 from server.store import RecordStore  # noqa: E402
 from server.tone import set_run_mode  # noqa: E402
 
@@ -296,7 +297,7 @@ one.report_pending()
 assert s.snapshot()["bench"]["vision"]["pending"] == 2 and counts == [2]
 version = s.r["version"]
 two.report_pending()
-assert s.r["version"] == version  # no change, no snapshot
+assert s.r["version"] == version  # a number for the chip: never a new record
 one.chunks[0]["status"] = two.chunks[0]["status"] = "done"
 one.report_pending()
 assert s.snapshot()["bench"]["vision"]["pending"] == 0 and "pending" not in (s.r.get("vision") or {})
@@ -339,6 +340,13 @@ s = fresh()
 said("watching")
 said("watching")
 assert s.snapshot()["vision"]["asked"] == 2  # said again: the app tries again
+c.post("/input", json={"action": {"id": "navigate", "args": {"screen": "home"}}, "session": "v"})
+assert s.r["view"]["current"]["screen"] == "home" and s.snapshot()["vision"]["on"] is False  # asked for, not resumed
+for text, on in (("Watch this.", True), ("finish the watch.", False), ("watch", True), ("End the watch", False)):
+    s.r["view"]["current"] = {"screen": "main", "target": ""}
+    said(text)
+    assert s.snapshot()["vision"]["on"] is on, text
+assert "watching" in live_keywords(s.r)
 print("V19 ok: the person turns the camera on and off")
 
 # Frames the glasses sent smaller keep the timeline, and nothing's judged on them.

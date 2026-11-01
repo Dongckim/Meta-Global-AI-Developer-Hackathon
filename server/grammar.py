@@ -355,9 +355,9 @@ def match_grammar(text: str, state: dict) -> tuple[list, str] | None:
             return None
         spec = wells[0] if m.group(2) is None else f"{wells[0]} to {wells[-1]}"
         return [{"name": "mark_done", "args": {"wells": wells}}], f"{spec} done."
-    if re.fullmatch(r"\s*(?:start )?watching[.?!]?\s*", low):
+    if re.fullmatch(r"\s*(?:start )?watch(?:ing| this)?[.?!]?\s*", low):
         return [{"name": "watch_start", "args": {}}], ""
-    if re.fullmatch(r"\s*(?:end|stop) watch(?:ing)?[.?!]?\s*", low):
+    if re.fullmatch(r"\s*(?:end|stop|finish)(?: the)? watch(?:ing)?[.?!]?\s*", low):
         return [{"name": "watch_end", "args": {}}], ""
     if re.fullmatch(r"\s*undo(?: that)?[?!]?\s*", low):
         return [{"name": "undo_vision", "args": {}}], ""
