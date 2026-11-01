@@ -1000,6 +1000,9 @@ def _carry(orb, base: tuple, frames: dict, recs: dict, quad0: list, ways: tuple,
 
 # ---------- continuous: the plate once a session ----------
 
+#: A plate this many times smaller than the biggest is a picture of one, not one.
+MIN_AREA_SHARE = 4
+
 def _overlap(a: list, b: list) -> bool:
     return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
@@ -1012,11 +1015,14 @@ def plates_with_pen(plates: list, pens: list) -> list:
 def best_plate(plates: list, size: tuple, pens: list = ()) -> dict:
     """Of SAM's plates, the one to build on. There can be another plate on the desk, so only those
     with a pen's end in their box count; with the pen on none, those over the biggest (the nearest).
-    Of them: unbent (a hand on the plate bends the outline SAM gives), off the screen's edge, the most showing."""
+    Of them: unbent (a hand on the plate bends the outline SAM gives), off the screen's edge, the most
+    showing. A plate far smaller than the biggest isn't a candidate: it's a picture of the plate, the
+    glasses' own preview on the iPad, where the pen shows too."""
+    area = lambda b: (b[2] - b[0]) * (b[3] - b[1])  # noqa: E731
+    big = max(plates, key=lambda m: area(m["box"]))
+    plates = [m for m in plates if area(m["box"]) * MIN_AREA_SHARE >= area(big["box"])]
     holding = plates_with_pen(plates, pens)
     if not holding:
-        area = lambda b: (b[2] - b[0]) * (b[3] - b[1])  # noqa: E731
-        big = max(plates, key=lambda m: area(m["box"]))
         holding = [m for m in plates if _overlap(m["box"], big["box"])]
     return max(holding, key=lambda m: (not distorted(plate_corners(mask_points(m, 2))), not touches_edge(m, size), shown(m)))
 

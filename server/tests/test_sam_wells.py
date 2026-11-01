@@ -556,6 +556,8 @@ near17 = {"box": (40, 220, 400, 460), "points": [(40, 220), (400, 220), (400, 46
 pen17 = {"box": (100, 300, 200, 320), "points": [(100.0 + i, 310.0) for i in range(100)]}
 assert sw.best_plate([far17, near17], (W, H), [pen17]) is near17  # a second plate on the desk shows more but has no pen
 assert sw.best_plate([far17, near17], (W, H)) is near17  # no pen yet: the nearer
+tiny17 = {"box": (100, 300, 180, 360), "points": [(100, 300), (180, 300), (180, 360), (100, 360)], "shown": 1.0, "mask": None}
+assert sw.best_plate([tiny17, near17], (W, H), [pen17]) is near17  # the iPad's preview holds the pen too, and shows more
 session17 = Ref16(ref17)
 r17 = sw.track_chunk(clip, "tl", FakeSam(), out17 / "1", "pen", session17)
 assert r17["track"] and r17["corrected"] and r17["kept"] + r17["redone"] < r17["frames"], r17
