@@ -68,6 +68,7 @@ from server.screens import SCREENS
 from server.screens import (PLAIN_ANSWERS, ask_choice, button_match, button_words, buttons_for, card_choices,
                             control_call, look_call, planned_screen, start_call, verbs)
 from server import handoff
+from server import recorded
 from server import lab_sam
 from server import lab_sam_latency
 from server import lab_sam_stills
@@ -353,6 +354,9 @@ def git_commit() -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if recorded.on():
+        recorded.block_network()
+        print("MODEL_MODE=recorded: no key, no outside calls", flush=True)
     store.restore_mode()
     print(f"pip-server commit={git_commit()} tools={len(TOOLS)} "
           f"ph={prefix_hash()} memory={'chain' if CHAIN_ENABLED else 'summary'}", flush=True)
@@ -395,7 +399,7 @@ async def _handoff_task(run_id: str) -> None:
                 "model": SPARK_MODEL, "reasoning": {"effort": HANDOFF_EFFORT},
                 "max_output_tokens": HANDOFF_MAX_TOKENS, **body})
 
-        out = await handoff.run_loop(call, plan, lambda code: asyncio.to_thread(handoff.simulate, code),
+        out = await handoff.run_loop(recorded.handoff_call(plan) if recorded.on() else call, plan, lambda code: asyncio.to_thread(handoff.simulate, code),
                                      lambda stage, **st: store.handoff_stage(run_id, stage, **st))
     print(f"handoff {run_id}: {out['stage']} after {out['attempt']} simulation(s), tips {out['tips']}", flush=True)
 
@@ -539,6 +543,8 @@ class RunStartIn(BaseModel):
 
 
 def _key() -> str:
+    if recorded.on():
+        return "recorded"
     key = os.environ.get("MODEL_API_KEY")
     if not key:
         raise HTTPException(500, "MODEL_API_KEY is not set (check .env)")
@@ -552,6 +558,8 @@ def _check(name: str, resp: httpx.Response) -> None:
 
 
 async def _post(client: httpx.AsyncClient, name: str, *a, **k) -> httpx.Response:
+    if recorded.on():
+        return recorded.post(name)
     try:
         return await client.post(*a, **k)
     except httpx.HTTPError as e:
@@ -811,6 +819,8 @@ async def _web_search_turn(client, key, question: str, query: str, session: dict
     else search now. Returns the run_utterance tuple."""
     q = search.clean_query(query, store.private_texts())
     info = {"dropped": 0, "drop_reasons": []}
+    if recorded.on():
+        return [], [], say("needs_key", session), ms, "spark", [], info, []
     if not q:
         return [], [], say("search_private", session), ms, "spark", [], info, []
     if _confirm_search():
@@ -1999,6 +2009,9 @@ async def voice_live(ws: WebSocket):
     await ws.accept()
     sender = LiveSender(ws)
     start = await ws.receive_json()
+    if recorded.on():
+        await sender.send({"type": "error", "message": say("needs_key")})
+        return
     session = get_session((start or {}).get("session") or "bench")
     mode = run_mode()
     device = route("asr") == "device"
@@ -2450,6 +2463,10 @@ async def protocol_import(file: list[UploadFile] = File(default=[]), text: str =
         card = store.ask_known_import(known["id"], sess)
         return {"draft": None, "review": [], "errors": [], "reply": card["question"],
                 "speak": speak_text(card["question"]), "card": card, "ms": 0, "protocol_id": known["id"],
+                "record_version": store.r["version"]}
+    if recorded.on():
+        reply = say("needs_key", sess)
+        return {"draft": None, "review": [], "errors": [], "reply": reply, "speak": speak_text(reply), "ms": 0,
                 "record_version": store.r["version"]}
     try:
         return await _extract_import(sess, uploads, text, filename, original_id, h)

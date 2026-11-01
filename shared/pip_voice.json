@@ -67,6 +67,9 @@
     "Exclude {wells_spoken}?",
     "Take {wells_spoken} out?"
   ],
+  "needs_key": ["Needs a Meta Model API key."],
+  "recorded_watch": ["Needs glasses and SAM 3.1 — see the demo video."],
+  "recorded_private": ["Private needs the model we run — see the demo video."],
   "vision_watch_on": ["Watching. Call me when you're done."],
   "vision_check": ["Did {wells_spoken} go in?"],
   "vision_watch_off": ["Stopped watching."],

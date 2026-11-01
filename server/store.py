@@ -40,6 +40,7 @@ from server import runs as runlog
 from server import look as lookmod
 from server import search as searchmod
 from server import handoff as hand
+from server import recorded
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 RECORD_PATH = DATA_DIR / "record.json"
@@ -433,6 +434,9 @@ class RecordStore:
         to stay private."""
         if mode not in section("modes"):
             res["messages"].append("Full or Private?")
+            return
+        if recorded.on() and route("commands", mode) == "glimmer":
+            res["messages"].append(say("recorded_private", session))
             return
         v = self.r["view"]["current"]
         if v["screen"] not in ("mode", "private_wait"):
@@ -2004,6 +2008,8 @@ class RecordStore:
             self._control(args, res)
         elif name == "pick":
             self._pick(args, res, session)
+        elif name == "look" and recorded.on():
+            res["messages"].append(say("needs_key", session))
         elif name == "look":
             self._start_look(str(args.get("question") or origin or "").strip(), res, session)
         elif name == "retake_look":
@@ -3333,6 +3339,9 @@ class RecordStore:
 
     def _watch_locked(self, res: dict, session: dict | None, on: bool) -> None:
         """"Watching" / "End watch": the person turns the camera on and off; a run starts with it off."""
+        if on and recorded.on():
+            res["messages"].append(say("recorded_watch", session))
+            return
         if on and "private" in ((self.r.get("run") or {}).get("mode"), run_mode()):
             res["messages"].append(say("vision_watch_private", session))
             return
