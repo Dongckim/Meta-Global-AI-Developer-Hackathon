@@ -109,11 +109,11 @@ enum VisionAPI {
         let _: Out = try await send(req)
     }
 
-    static func uploadChunk(live id: String, n: Int, start: Int, clip: URL) async throws {
+    static func uploadChunk(live id: String, n: Int, start: Int, low: [Int], clip: URL) async throws {
         struct Out: Decodable { let n: Int }
         let boundary = "----samwell\(UUID().uuidString)"
         var body = Data()
-        for (k, v) in [("n", "\(n)"), ("start", "\(start)")] {
+        for (k, v) in [("n", "\(n)"), ("start", "\(start)"), ("low", low.map(String.init).joined(separator: ","))] {
             body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(k)\"\r\n\r\n\(v)\r\n".utf8))
         }
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"clip\"; filename=\"chunk.mp4\"\r\n".utf8))
@@ -237,12 +237,15 @@ final class PlateFinder: @unchecked Sendable {
 
 /// Cuts the stream into overlapping chunks. Frames arrive on the SDK's thread.
 final class WellChunks: @unchecked Sendable {
-    struct Chunk { let n: Int; let start: Int; let url: URL }
+    /// `low`: frames that came in below the wanted size, scaled up to keep the timeline.
+    struct Chunk { let n: Int; let start: Int; let url: URL; let low: [Int] }
 
     /// What the stream must stay at: fewer than this, over `watchSeconds`, is a downgrade.
     nonisolated static let wantedSize = "720x1280"
+    nonisolated static let width = 720
+    nonisolated static let height = 1280
     nonisolated static let minFPS = 5
-    nonisolated static let watchSeconds = 3
+    nonisolated static let watchSeconds = 6
 
     /// 10 s with 1 s shared with the next.
     static let seconds = 10
@@ -255,6 +258,7 @@ final class WellChunks: @unchecked Sendable {
         let input: AVAssetWriterInput
         let adaptor: AVAssetWriterInputPixelBufferAdaptor
         var written = 0
+        var low: [Int] = []
     }
 
     private let queue = DispatchQueue(label: "samwell.chunks")
@@ -270,6 +274,7 @@ final class WellChunks: @unchecked Sendable {
     private var sizes = Set<String>()
     private var refused = 0
     private var worstGap = 0.0
+    private var lowFrames = 0
 
     init(fps: Int, stillsReady: @escaping @Sendable ([(frame: Int, jpeg: Data)]) -> Void,
          closed: @escaping @Sendable (Chunk) -> Void) {
@@ -284,14 +289,17 @@ final class WellChunks: @unchecked Sendable {
     private var stillFrames: [Int] { [0, fps * 3 / 7, fps * 6 / 7] }
 
     func frame(_ sb: CMSampleBuffer) {
-        guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
+        guard let raw = CMSampleBufferGetImageBuffer(sb) else { return }
         queue.sync {
             guard !stopped else { return }
+            let isLow = CVPixelBufferGetWidth(raw) != Self.width || CVPixelBufferGetHeight(raw) != Self.height
+            guard let pb = isLow ? scaled(raw) : raw else { return }
             let frame = arrivals.count
+            if isLow { lowFrames += 1 }
             let now = CACurrentMediaTime()
             if let last = arrivals.last { worstGap = max(worstGap, now - last) }
             arrivals.append(now)
-            sizes.insert("\(CVPixelBufferGetWidth(pb))x\(CVPixelBufferGetHeight(pb))")
+            sizes.insert("\(CVPixelBufferGetWidth(raw))x\(CVPixelBufferGetHeight(raw))")
             if stillFrames.contains(frame),
                let jpeg = images.jpegRepresentation(of: CIImage(cvPixelBuffer: pb), colorSpace: CGColorSpaceCreateDeviceRGB()) {
                 stills.append((frame, jpeg))
@@ -299,7 +307,7 @@ final class WellChunks: @unchecked Sendable {
             }
             if frame % step == 0 {
                 let url = FileManager.default.temporaryDirectory.appending(path: "samwell-chunk-\(UUID().uuidString).mp4")
-                if let (w, i, a) = Self.writer(url: url, width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb), fps: fps) {
+                if let (w, i, a) = Self.writer(url: url, width: Self.width, height: Self.height, fps: fps) {
                     open.append(Open(n: frame / step, start: frame, writer: w, input: i, adaptor: a))
                 }
             }
@@ -307,6 +315,7 @@ final class WellChunks: @unchecked Sendable {
                 // shortcut: a refused frame shifts the rest of its chunk one frame early, fine unless "refused" shows up in the log
                 let pts = CMTime(value: CMTimeValue(open[k].written), timescale: CMTimeScale(fps))
                 if open[k].input.isReadyForMoreMediaData, open[k].adaptor.append(pb, withPresentationTime: pts) {
+                    if isLow { open[k].low.append(open[k].written) }
                     open[k].written += 1
                 } else {
                     refused += 1
@@ -318,9 +327,21 @@ final class WellChunks: @unchecked Sendable {
         }
     }
 
+    /// A small frame at the size the chunk is written in: same view, softer.
+    private func scaled(_ pb: CVPixelBuffer) -> CVPixelBuffer? {
+        var out: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, Self.width, Self.height, kCVPixelFormatType_32BGRA,
+                            [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &out)
+        guard let out else { return nil }
+        let x = CGFloat(Self.width) / CGFloat(CVPixelBufferGetWidth(pb))
+        let y = CGFloat(Self.height) / CGFloat(CVPixelBufferGetHeight(pb))
+        images.render(CIImage(cvPixelBuffer: pb).transformed(by: CGAffineTransform(scaleX: x, y: y)), to: out)
+        return out
+    }
+
     private func close(_ c: Open) {
         c.input.markAsFinished()
-        let chunk = Chunk(n: c.n, start: c.start, url: c.writer.outputURL)
+        let chunk = Chunk(n: c.n, start: c.start, url: c.writer.outputURL, low: c.low)
         let closed = closed
         c.writer.finishWriting { [writer = c.writer] in
             if writer.status == .completed { closed(chunk) }
@@ -342,10 +363,10 @@ final class WellChunks: @unchecked Sendable {
         }
     }
 
-    /// Why this stream is below what the wells need, or nil. Watched once it has run `watchSeconds`.
+    /// Why this stream is below what the wells need, or nil: too few frames, whatever their size (a
+    /// spell of small frames goes on, the server leaves them out). Watched once it has run `watchSeconds`.
     func downgrade(at now: Double) -> String? {
         queue.sync {
-            if let other = sizes.first(where: { $0 != Self.wantedSize }) { return "size \(other)" }
             guard let first = arrivals.first, now - first >= Double(Self.watchSeconds) else { return nil }
             let got = arrivals.reversed().prefix { now - $0 <= Double(Self.watchSeconds) }.count
             return got < Self.minFPS * Self.watchSeconds ? "\(got) frames in \(Self.watchSeconds) s" : nil
@@ -359,7 +380,7 @@ final class WellChunks: @unchecked Sendable {
             let span = (arrivals.last ?? 0) - (arrivals.first ?? 0)
             let rate = Double(max(1, arrivals.count) - 1) / max(0.001, span)
             return "\(sizes.sorted().joined(separator: ", ")) · HFP \(hfp ? "on" : "off") · \(String(format: "%.2f", rate)) fps of \(fps) "
-                + "· \(arrivals.count) frames over \(String(format: "%.1f", span)) s · \(refused) refused · worst gap \(Int(worstGap * 1000)) ms"
+                + "· \(arrivals.count) frames (\(lowFrames) small) over \(String(format: "%.1f", span)) s · \(refused) refused · worst gap \(Int(worstGap * 1000)) ms"
         }
     }
 
@@ -458,7 +479,7 @@ final class SamWellRun {
             defer { try? FileManager.default.removeItem(at: chunk.url) }
             for attempt in 1...3 {
                 do {
-                    try await VisionAPI.uploadChunk(live: id, n: chunk.n, start: chunk.start, clip: chunk.url)
+                    try await VisionAPI.uploadChunk(live: id, n: chunk.n, start: chunk.start, low: chunk.low, clip: chunk.url)
                     return
                 } catch where attempt < 3 {
                     try? await Task.sleep(for: .seconds(1))
@@ -520,9 +541,13 @@ final class VisionWatcher {
         let step: Int
         let a1: String
         let pointer: String
+        /// "Watching" said this many times: one more means try again.
+        let asked: Int
     }
 
     private(set) var chip = Chip.off
+    /// Counts streams lost for good on a step: each is said aloud.
+    private(set) var drops = 0
     @ObservationIgnored private var want: Want?
     /// A step whose stream fell below what the wells need: Off until the step changes.
     @ObservationIgnored private var dropped: Want?
@@ -532,10 +557,16 @@ final class VisionWatcher {
     @ObservationIgnored private var checking: Task<Void, Never>?
     @ObservationIgnored private weak var dat: GlassesDAT?
     @ObservationIgnored private var gen = 0
+    private static let longestWait: TimeInterval = 15
 
     /// `why`: what took it off, when `new` is nil.
-    func update(_ new: Want?, why: String, dat: GlassesDAT?) {
+    func update(_ new: Want?, why: String, dat: GlassesDAT?, voice: VoiceSession) {
         guard new != want else { return }
+        if let want, let new, want != dropped, want.runId == new.runId, want.step == new.step,
+           want.a1 == new.a1, want.pointer == new.pointer {
+            self.want = new  // "watching" said again while it's going: nothing to restart
+            return
+        }
         let reason = new == nil ? why : "step changed"
         if want != nil { Log.dat.info("[watching] stop: \(reason, privacy: .public)") }
         want = new
@@ -555,7 +586,15 @@ final class VisionWatcher {
         }
         self.finder = finder
         dat.visionTap.set { finder.frame($0) }
-        dat.startWatching()
+        Task { [weak self] in
+            // the stream shares the Bluetooth link with Milo's voice; a long talk doesn't hold it back for good
+            let latest = Date().addingTimeInterval(Self.longestWait)
+            while !voice.quietForStream, Date() < latest {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            guard let self, g == self.gen else { return }
+            dat.startWatching()
+        }
     }
 
     private func aimed(_ quad: [CGPoint]?, gen g: Int) {
@@ -601,6 +640,7 @@ final class VisionWatcher {
     /// Below what the wells need: this session ends, and the step stays Off.
     private func drop(why: String) {
         dropped = want
+        drops += 1
         gen += 1
         finish(why: why)
         leave()
@@ -626,7 +666,7 @@ final class VisionWatcher {
 
     private static func note(_ line: String) {
         Log.dat.info("[watching] clip \(line, privacy: .public)")
-        let url = URL.documentsDirectory.appending(path: "watching-log.txt")
+        let url = URL.documentsDirectory.appending(path: "watching-log.log")
         let text = Data("\(Date.now.formatted(date: .numeric, time: .standard))  \(line)\n".utf8)
         if let file = try? FileHandle(forWritingTo: url) {
             defer { try? file.close() }

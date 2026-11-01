@@ -195,6 +195,12 @@ final class VoiceSession {
         return max(0, Self.quietGap - Date().timeIntervalSince(lastSound))
     }
 
+    /// Nobody has made a sound for `quietGap`: a good moment to start the glasses' stream, which shares
+    /// the Bluetooth link with the voice.
+    var quietForStream: Bool {
+        (state == .ready || state == .listening) && Date().timeIntervalSince(lastSound) >= Self.quietGap
+    }
+
     private func cutSpeech() {
         speechCuts += 1
         speaker.stop()

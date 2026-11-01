@@ -332,6 +332,15 @@ enum PipClient {
         let _: Out = try await post("vision/notices/\(id)/played", [:])
     }
 
+    /// The app's files; back in the order to show, each reviewed one with its protocol's title.
+    static func reportFiles(_ files: [(id: String, name: String, sha256: String)]) async throws -> [(id: String, title: String?)] {
+        struct Item: Decodable { let id: String; let title: String? }
+        struct Out: Decodable { let items: [Item] }
+        let out: Out = try await post("screen/items", [
+            "screen": "import_file", "items": files.map { ["id": $0.id, "name": $0.name, "sha256": $0.sha256] }])
+        return out.items.map { ($0.id, $0.title) }
+    }
+
     static func protocols() async throws -> [ProtocolSummary] {
         let r: ProtocolListResponse = try await get("protocols")
         return r.protocols

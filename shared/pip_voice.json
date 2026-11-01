@@ -70,6 +70,7 @@
   "vision_watch_on": ["Looking for the plate."],
   "vision_watch_off": ["Stopped watching."],
   "vision_watch_private": ["The camera stays off in Private."],
+  "vision_dropped": ["The camera stream dropped. Say watching to try again."],
   "vision_watching": ["Watching."],
   "vision_checking": ["Checking."],
   "vision_done": ["{wells_spoken} done."],

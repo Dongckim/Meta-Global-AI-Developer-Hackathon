@@ -1,3 +1,4 @@
+import CryptoKit
 import AVFoundation
 import PhotosUI
 import SwiftUI
@@ -30,6 +31,8 @@ final class ScreenCommands {
 struct LocalFile: Identifiable, Equatable {
     var url: URL
     var date: Date
+    /// The protocol this file became, when it's been reviewed before (the server says).
+    var protocolTitle: String? = nil
     var id: String { url.lastPathComponent }
     /// "drug_ab-dosing.pdf" -> "drug ab dosing".
     var name: String {
@@ -38,9 +41,17 @@ struct LocalFile: Identifiable, Equatable {
     }
     var kind: String { url.pathExtension.lowercased() == "pdf" ? "PDF" : "Text" }
 
+    /// What the server knows a file by; "" when it can't be read.
+    nonisolated static func sha256(_ url: URL) -> String {
+        guard let data = try? Data(contentsOf: url) else { return "" }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     /// Newest first; folders (the originals kept for protocols) left out.
     static func all() -> [LocalFile] {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        // shortcut: the old log's name passed for a protocol file, drop this line once the iPad has run it
+        try? FileManager.default.removeItem(at: dir.appending(path: "watching-log.txt"))
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey])) ?? []
         return urls.compactMap { u in
@@ -71,6 +82,11 @@ struct FileListScreen: View {
                         .font(Theme.ui(26 * u)).foregroundStyle(Theme.text2).padding(.top, 12 * u)
                 }
                 ForEach(Array(files.prefix(shown).enumerated()), id: \.element.id) { i, f in
+                    if f.protocolTitle != nil, i == 0 || files[i - 1].protocolTitle == nil {
+                        Text("Already reviewed · say its name or number to open it")
+                            .font(Theme.ui(22 * u, weight: .semibold)).foregroundStyle(Theme.text2)
+                            .padding(.top, i == 0 ? 0 : 20 * u).padding(.bottom, 6 * u)
+                    }
                     Button { onPick(i + 1) } label: {
                         HStack(spacing: 22 * u) {
                             Text("\(i + 1)").font(Theme.ui(22 * u, weight: .semibold))
@@ -78,7 +94,7 @@ struct FileListScreen: View {
                                 .frame(width: 44 * u, height: 44 * u).background(Circle().fill(Theme.wellEmpty))
                             Image(systemName: f.kind == "PDF" ? "doc.fill" : "text.alignleft")
                                 .foregroundStyle(Theme.polishBlue)
-                            Text(f.name).font(Theme.ui(30 * u, weight: .semibold)).foregroundStyle(Theme.text1)
+                            Text(f.protocolTitle ?? f.name).font(Theme.ui(30 * u, weight: .semibold)).foregroundStyle(Theme.text1)
                                 .lineLimit(1).minimumScaleFactor(0.6)
                             Spacer(minLength: 12 * u)
                             Text("\(f.kind) · \(f.date.formatted(.dateTime.month(.abbreviated).day()))")

@@ -298,10 +298,11 @@ struct ContentView: View {
         // hidden from the first frame on and never toggled: a status bar
         // appearing with Main changed the safe area under it (the bands)
         .statusBarHidden(true)
-        .onChange(of: visionWant, initial: true) { _, want in watcher.update(want, why: visionOffWhy, dat: dat) }
+        .onChange(of: visionWant, initial: true) { _, want in watcher.update(want, why: visionOffWhy, dat: dat, voice: voice) }
         .onChange(of: lab.visionNotices) { _, list in notices.step(list, voice: voice) }
         .onChange(of: watcher.chip) { old, new in if old == .looking, new == .watching { visionCue("vision_watching") } }
         .onChange(of: visionChecking) { _, on in if on { visionCue("vision_checking") } }
+        .onChange(of: watcher.drops) { visionCue("vision_dropped") }
         .onChange(of: voice.state) { notices.step(lab.visionNotices, voice: voice) }
         .sheet(isPresented: askA1) {
             VisionSetupSheet(a1: $a1, pointer: $pointer) { askA1.wrappedValue = false }
@@ -763,7 +764,7 @@ struct ContentView: View {
               let run = visionRun, a1Run == run.runId, lab.stepIndex < lab.planSteps.count else { return nil }
         let step = lab.planSteps[lab.stepIndex]
         guard step.kind == "pipette", !step.wells.isEmpty, !lab.remaining.isEmpty else { return nil }
-        return .init(runId: run.runId, step: lab.stepIndex + 1, a1: a1, pointer: pointer)
+        return .init(runId: run.runId, step: lab.stepIndex + 1, a1: a1, pointer: pointer, asked: lab.visionAsked)
     }
 
     /// For the log and the server: the first thing keeping `visionWant` nil.
@@ -1160,8 +1161,17 @@ struct ContentView: View {
 
     /// The app's files, newest first, told to the server ("number 2", a name).
     private func refreshFiles() {
-        files = LocalFile.all()
-        report("import_file", files.map { ($0.id, $0.name) })
+        let found = LocalFile.all()
+        files = found
+        Task {
+            let digests = await Task.detached {
+                found.map { f in (id: f.id, name: f.name, sha256: LocalFile.sha256(f.url)) }
+            }.value
+            guard let order = try? await PipClient.reportFiles(digests) else { return }
+            files = order.compactMap { item in
+                found.first { $0.id == item.id }.map { LocalFile(url: $0.url, date: $0.date, protocolTitle: item.title) }
+            }
+        }
     }
 
     private func report(_ screen: String, _ items: [(String, String)]) {

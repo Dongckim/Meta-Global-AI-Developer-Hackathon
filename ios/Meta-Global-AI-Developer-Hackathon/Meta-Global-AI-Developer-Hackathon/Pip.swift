@@ -753,6 +753,7 @@ struct RecordSnapshot: Decodable {
     var headerMode: RunModeLabel?
     var visionNotices: [VisionNotice]
     var visionOn: Bool
+    var visionAsked: Int
     /// The bench as the server worked it out from the run so far.
     var bench: Bench?
     /// The private model's wake-up (server `private`); nil until Private asks for it.
@@ -808,7 +809,7 @@ struct RecordSnapshot: Decodable {
         var speak: String
     }
 
-    private struct Vision: Decodable { var notices: [VisionNotice]?; var on: Bool? }
+    private struct Vision: Decodable { var notices: [VisionNotice]?; var on: Bool?; var asked: Int? }
 
     /// The run mode as the header shows it (`header.mode`): id full / private, its label.
     struct RunModeLabel: Decodable, Equatable {
@@ -848,6 +849,7 @@ struct RecordSnapshot: Decodable {
         let vision = (try? c.decodeIfPresent(Vision.self, forKey: .vision)) ?? nil
         visionNotices = vision?.notices ?? []
         visionOn = vision?.on ?? false
+        visionAsked = vision?.asked ?? 0
         handoff = (try? c.decodeIfPresent(Handoff.self, forKey: .handoff)) ?? nil  // auxiliary, like draft
         run = try c.decodeIfPresent(RunBlock.self, forKey: .run)
         recent = try c.decodeIfPresent([HistoryEntry].self, forKey: .recent) ?? []
@@ -976,6 +978,7 @@ final class LabState {
     var visionNotices: [RecordSnapshot.VisionNotice] = []
     /// "Watching" said, "End watch" not yet.
     var visionOn = false
+    var visionAsked = 0
     var headerMode: RecordSnapshot.RunModeLabel?
     /// The server's bench (plate well states, legend, Done rows); drawn as is.
     var bench: RecordSnapshot.Bench?
@@ -1024,6 +1027,7 @@ final class LabState {
         runMode = snap.headerMode?.id ?? runMode
         visionNotices = snap.visionNotices
         visionOn = snap.visionOn
+        visionAsked = snap.visionAsked
         if view.current.screen == "private_wait", privateWake?.state == "warming", snap.privateWake?.state == "ready" {
             wakeEnding = true
         }
