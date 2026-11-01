@@ -197,6 +197,7 @@ class RecordStore:
         self.root = self.path.parent
         self._listeners: list = []
         self._lock = threading.Lock()
+        self._pending: dict = {}  # run -> chunks in analysis: gone with the sessions, so never saved
         #: App-side lists on screen now (import_file's files, import_photo's pages).
         self.screen_items: dict[str, list[dict]] = {}
         #: Starts a run's hand off loop (api sets it; None in plain store tests).
@@ -1129,6 +1130,7 @@ class RecordStore:
         snap["vision"] = {"notices": ((snap.get("vision") or {}).get("notices") or [])}  # the log stays in the run
         snap["handoff"] = self.handoff_view(self._handoff_here()) if self._handoff_here() else None
         snap["bench"] = self.bench_view(self.r)
+        snap["bench"]["vision"]["pending"] = self._pending.get((self.r.get("run") or {}).get("run_id"), 0)
         snap["private"] = self.wake.view()
         snap["transcribe"] = "device" if route("asr") == "device" else "server"
         snap["modes"] = [mode_view(m) for m in all_modes()]
@@ -3116,6 +3118,14 @@ class RecordStore:
             v = self._vision()
             v["notices"] = [n for n in v["notices"] if n["id"] != notice_id]
             self._commit()
+
+    def vision_pending(self, run_id: str, count: int) -> None:
+        with self._lock:
+            if self._pending.get(run_id, 0) == count:
+                return
+            self._pending[run_id] = count
+            if (self.r.get("run") or {}).get("run_id") == run_id:
+                self._commit()
 
     def vision_events(self, run_id: str, events: list[dict]) -> None:
         """One chunk's wells: [{well, ts (when the pen stayed), confidence, usable}]. Each goes to

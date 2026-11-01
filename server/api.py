@@ -481,6 +481,7 @@ def _spawn_wake(session: dict, gen: int) -> None:
 
 store.spawn_wake = _spawn_wake
 lab_sam_live.on_wells = lambda run_id, events: store.vision_events(run_id, events)
+lab_sam_live.on_pending = lambda run_id, n: store.vision_pending(run_id, n)
 
 
 class OrchestrateIn(BaseModel):

@@ -29,6 +29,9 @@ REF_FIRST_S = 30
 STREAM = (720, 1280, 7.0)
 #: Gets a bound session's new wells, a chunk at a time (server/api.py points it at the store).
 on_wells = None
+#: Gets a run's count of chunks uploaded and not analysed yet, on every change of it.
+on_pending = None
+_PENDING = threading.Lock()
 _SID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
 #: Open sessions, in memory (the reference holds an image).
 _LIVE: dict = {}
@@ -104,7 +107,8 @@ class Live:
                                    "inliers": sorted(inliers.get(f, 0) for f in frames)[len(frames) // 2]})
 
     def _chunk_of(self, frame: int) -> dict:
-        return max((c for c in self.chunks.values() if c["start"] <= frame), key=lambda c: c["start"])
+        """The last finished chunk holding the frame: the next may share it and still be analysing, with no size or rate yet."""
+        return max((c for c in self.chunks.values() if c["start"] <= frame and "fps" in c), key=lambda c: c["start"])
 
     def _usable(self, c: dict) -> bool:
         return (c.get("w"), c.get("h")) == STREAM[:2] and abs((c.get("fps") or 0) - STREAM[2]) < 0.5
@@ -134,6 +138,15 @@ class Live:
             self._save()
             fresh = self._new_events()
         self._deliver(fresh)
+        self.report_pending()
+
+    def report_pending(self) -> None:
+        """All of the run's sessions: a finished step's chunks can still be in analysis."""
+        if not self.run_id or not on_pending:
+            return
+        with _PENDING:
+            on_pending(self.run_id, sum(c["status"] == "analyzing" for s in list(_LIVE.values()) if s.run_id == self.run_id
+                                        for c in list(s.chunks.values())))
 
     def stop(self) -> None:
         with self.lock:
@@ -259,6 +272,7 @@ async def new_chunk(sid: str, background: BackgroundTasks, clip: UploadFile = Fi
     (d / "clip.mp4").write_bytes(data)
     with live.lock:
         live.chunks[n] = {"n": n, "start": start, "status": "analyzing", "created": time.time()}
+    live.report_pending()
     background.add_task(_analyze, live, n, d / "clip.mp4")
     return {"n": n}
 

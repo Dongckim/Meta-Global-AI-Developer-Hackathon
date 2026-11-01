@@ -237,6 +237,46 @@ assert got == []
 live_mod.on_wells = None
 print("V14 ok: a session reports to its run")
 
+# The well's frame is shared with the next chunk, still in analysis: the chunk that gave it answers for the stream.
+live_mod.on_wells = lambda rid, ev: got.append((rid, ev))
+live = live_mod.Live("x", "tl", "pen", run_id="r1", started_at=100.0)
+live.fps = 7.0
+live.chunks = {3: {"n": 3, "start": 189, "status": "done", "w": 720, "h": 1280, "fps": 7.0},
+               4: {"n": 4, "start": 252, "status": "analyzing", "created": 0.0}}
+live.wells = [{"well": "D8", "frame": 253, "f0": 246, "confidence": "sure"}]
+live._deliver(live._new_events())
+assert [(n["well"], n["usable"]) for _, ev in got for n in ev] == [("D8", True)], got
+live_mod.on_wells = None
+print("V16 ok: a chunk in analysis doesn't judge the stream")
+
+# Chunks in analysis, over all the run's sessions, reach the snapshot; only the run's own, never saved.
+s = fresh()
+counts = []
+rid = run_id(s)
+live_mod.on_pending = lambda r, n: (counts.append(n), s.vision_pending(r, n))
+one = live_mod.Live("p1", "tl", "pen", run_id=rid)
+two = live_mod.Live("p2", "tl", "pen", run_id=rid)
+other = live_mod.Live("p3", "tl", "pen")
+one.chunks = {0: {"status": "analyzing"}, 1: {"status": "done"}}
+two.chunks = {0: {"status": "analyzing"}}
+other.chunks = {0: {"status": "analyzing"}}
+live_mod._LIVE.update(p1=one, p2=two, p3=other)
+one.report_pending()
+assert s.snapshot()["bench"]["vision"]["pending"] == 2 and counts == [2]
+version = s.r["version"]
+two.report_pending()
+assert s.r["version"] == version  # no change, no snapshot
+one.chunks[0]["status"] = two.chunks[0]["status"] = "done"
+one.report_pending()
+assert s.snapshot()["bench"]["vision"]["pending"] == 0 and "pending" not in (s.r.get("vision") or {})
+assert "pending" not in s.bench_view(s.r)["vision"]
+other.report_pending()
+assert counts == [2, 2, 0]  # a test page's session reports to nobody
+for k in ("p1", "p2", "p3"):
+    del live_mod._LIVE[k]
+live_mod.on_pending = None
+print("V17 ok: chunks in analysis")
+
 # Every event is logged, and the numbers add up. The queue plays through.
 s = fresh()
 s.apply_calls([{"name": "mark_done", "args": {"wells": ["C2", "C3"]}}], "voice", "", "grammar", {})
