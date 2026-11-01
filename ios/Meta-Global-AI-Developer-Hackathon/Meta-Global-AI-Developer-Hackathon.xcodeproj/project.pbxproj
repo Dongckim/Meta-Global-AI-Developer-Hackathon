@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		88B6F86130927CE9009723F2 /* MWDATCore in Frameworks */ = {isa = PBXBuildFile; productRef = 9A1EC0DE0000000000000011 /* MWDATCore */; };
 		88B6F86230927CE9009723F2 /* MWDATCamera in Frameworks */ = {isa = PBXBuildFile; productRef = 9A1EC0DE0000000000000012 /* MWDATCamera */; };
+		9A1EC0DE0000000000000016 /* MWDATMotion in Frameworks */ = {isa = PBXBuildFile; productRef = 9A1EC0DE0000000000000015 /* MWDATMotion */; };
 		88B6F86330927CE9009723F2 /* MWDATMockDevice in Frameworks */ = {isa = PBXBuildFile; productRef = 9A1EC0DE0000000000000013 /* MWDATMockDevice */; };
 		88B6F86430927CE9009723F2 /* MWDATCore in Frameworks */ = {isa = PBXBuildFile; productRef = 9A1EC0DE0000000000000014 /* MWDATCore */; };
 		9A1EC0DE0000000000000004 /* plan_demo.json in Resources */ = {isa = PBXBuildFile; fileRef = 9A1EC0DE0000000000000003 /* plan_demo.json */; };
@@ -82,6 +83,7 @@
 			files = (
 				88B6F86330927CE9009723F2 /* MWDATMockDevice in Frameworks */,
 				88B6F86230927CE9009723F2 /* MWDATCamera in Frameworks */,
+				9A1EC0DE0000000000000016 /* MWDATMotion in Frameworks */,
 				88B6F86130927CE9009723F2 /* MWDATCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -151,6 +153,7 @@
 			packageProductDependencies = (
 				9A1EC0DE0000000000000011 /* MWDATCore */,
 				9A1EC0DE0000000000000012 /* MWDATCamera */,
+				9A1EC0DE0000000000000015 /* MWDATMotion */,
 				9A1EC0DE0000000000000013 /* MWDATMockDevice */,
 			);
 			productName = "Meta-Global-AI-Developer-Hackathon";
@@ -645,6 +648,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 9A1EC0DE0000000000000010 /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */;
 			productName = MWDATCamera;
+		};
+		9A1EC0DE0000000000000015 /* MWDATMotion */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9A1EC0DE0000000000000010 /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */;
+			productName = MWDATMotion;
 		};
 		9A1EC0DE0000000000000013 /* MWDATMockDevice */ = {
 			isa = XCSwiftPackageProductDependency;
