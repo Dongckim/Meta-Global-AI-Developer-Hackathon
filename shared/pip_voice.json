@@ -67,6 +67,8 @@
     "Exclude {wells_spoken}?",
     "Take {wells_spoken} out?"
   ],
+  "vision_watching": ["Watching."],
+  "vision_checking": ["Checking."],
   "vision_done": ["{wells_spoken} done."],
   "vision_done_past": ["Step {step}: {wells_spoken} done."],
   "vision_undone": ["Okay, {wells_spoken} taken off."],

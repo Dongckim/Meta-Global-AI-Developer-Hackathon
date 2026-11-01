@@ -793,7 +793,9 @@ struct RecordSnapshot: Decodable {
             var seen: [String]?
             var loggedBy: [String: String]?
             var hints: [String]?
-            enum CodingKeys: String, CodingKey { case seen, loggedBy = "logged_by", hints }
+            /// Chunks uploaded and not analysed yet.
+            var pending: Int?
+            enum CodingKeys: String, CodingKey { case seen, loggedBy = "logged_by", hints, pending }
         }
         struct Legend: Decodable, Equatable { var key: String; var label: String; var n: Int }
         struct Row: Decodable, Equatable { var wells: String; var name: String; var state: String }

@@ -300,6 +300,8 @@ struct ContentView: View {
         .statusBarHidden(true)
         .onChange(of: visionWant, initial: true) { _, want in watcher.update(want, dat: dat) }
         .onChange(of: lab.visionNotices) { _, list in notices.step(list, voice: voice) }
+        .onChange(of: watcher.chip) { old, new in if old == .looking, new == .watching { visionCue("vision_watching") } }
+        .onChange(of: visionChecking) { _, on in if on { visionCue("vision_checking") } }
         .onChange(of: voice.state) { notices.step(lab.visionNotices, voice: voice) }
         .sheet(isPresented: askA1) {
             VisionSetupSheet(a1: $a1, pointer: $pointer) { askA1.wrappedValue = false }
@@ -755,6 +757,16 @@ struct ContentView: View {
         return .init(runId: run.runId, step: lab.stepIndex + 1, a1: a1, pointer: pointer)
     }
 
+    private var visionPending: Int { lab.bench?.vision?.pending ?? 0 }
+
+    /// Recording is over (or between steps) and wells are still in analysis.
+    private var visionChecking: Bool { watcher.chip != .watching && watcher.chip != .plateLost && visionPending > 0 }
+
+    private func visionCue(_ key: String) {
+        notices.cue = Persona.line(key)
+        notices.step(lab.visionNotices, voice: voice)
+    }
+
     private var askA1: Binding<Bool> {
         Binding(get: { showsBench && visionRun.map { $0.runId != a1Run } == true },
                 set: { if !$0, let id = visionRun?.runId { a1Run = id } })
@@ -772,7 +784,7 @@ struct ContentView: View {
             .overlay(alignment: .topTrailing) {
                 if lab.runMode != "private" {
                     // a tap asks A1 and the tool again: a wrong answer shouldn't last the whole run
-                    Button { a1Run = "" } label: { VisionChip(chip: watcher.chip, u: u) }
+                    Button { a1Run = "" } label: { VisionChip(chip: watcher.chip, pending: visionPending, u: u) }
                         .buttonStyle(.plain).offset(y: -34 * u)
                 }
             }

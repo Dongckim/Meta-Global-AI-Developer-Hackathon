@@ -632,8 +632,10 @@ final class VisionNotices {
     private var said = Set<String>()
     private var telling = Set<String>()
     private var speaking: String?
+    /// A short status line ("Watching."): only the latest matters, and it needs no receipt.
+    var cue: String?
 
-    /// Called on every change of the queue or of the voice state.
+    /// Called on every change of the queue or of the voice state, and with a new `cue`.
     func step(_ notices: [RecordSnapshot.VisionNotice], voice: VoiceSession) {
         if let id = speaking {
             guard voice.state != .speaking else { return }
@@ -649,7 +651,13 @@ final class VisionNotices {
                 }
             }
         }
-        guard voice.state == .ready, voice.canSpeak, let next = notices.first(where: { !said.contains($0.id) }) else { return }
+        guard voice.state == .ready, voice.canSpeak else { return }
+        if let line = cue {
+            cue = nil
+            voice.speak(line)
+            if voice.state == .speaking { return }
+        }
+        guard let next = notices.first(where: { !said.contains($0.id) }) else { return }
         speaking = next.id
         voice.speak(next.speak)
         if voice.state != .speaking { step(notices, voice: voice) }  // speech off: nothing to wait for
@@ -661,10 +669,18 @@ final class VisionNotices {
 /// The temporary chip (no Figma yet): is the camera following this step?
 struct VisionChip: View {
     let chip: VisionWatcher.Chip
+    /// Chunks still in analysis: recording may be over, the wells aren't.
+    var pending = 0
     var u: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduce
 
     private var look: (icon: String, label: String, color: Color) {
+        if chip == .off, pending > 0 { return ("hourglass", "Checking \(pending)", Theme.polishBlue) }
+        let base = state
+        return (base.icon, pending > 0 ? "\(base.label) · checking \(pending)" : base.label, base.color)
+    }
+
+    private var state: (icon: String, label: String, color: Color) {
         switch chip {
         case .watching: ("eye.fill", "Watching", Theme.polishBlue)
         case .looking: ("viewfinder", "Looking for plate", Theme.text2)
