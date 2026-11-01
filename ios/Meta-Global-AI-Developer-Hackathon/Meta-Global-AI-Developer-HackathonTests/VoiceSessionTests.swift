@@ -89,9 +89,12 @@ final class FakeLive: LiveControlling {
     var fail = false
     var starts = 0
     var ends = 0
+    var hold = false
+    var opening: CheckedContinuation<Void, Never>?
     func start(session: String) async throws {
         starts += 1
         if fail { throw LiveError.refused("test") }
+        if hold { await withCheckedContinuation { opening = $0 } }
     }
     func end() { ends += 1 }
     var audioRestarts = 0
@@ -161,6 +164,21 @@ struct VoiceSessionTests {
         #expect(wake.fire())
         #expect(await settle { voice.state == .listening })
         #expect(!voice.inSession && live.starts == 1)  // a capture, no second session
+    }
+
+    @Test func noticesWaitForASessionStillOpening() async throws {
+        let wake = FakeWake()
+        let live = FakeLive()
+        live.hold = true
+        let voice = makeSession(wake: wake, live: live)
+        voice.activate()
+        #expect(await settle { wake.running })
+        #expect(wake.fire())
+        #expect(await settle { live.opening != nil })
+        #expect(voice.state == .ready && voice.quietLeft == nil)
+        live.opening?.resume()
+        #expect(await settle { voice.inSession && voice.state == .listening })
+        #expect(live.ends == 0)
     }
 
     @Test func noticesWaitForQuietInASession() async throws {

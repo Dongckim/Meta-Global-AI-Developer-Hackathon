@@ -218,7 +218,7 @@ final class VoiceSession {
     /// under way, speech is off). Sessions don't hold it back: the person and Milo being quiet does.
     var quietLeft: TimeInterval? {
         guard activated else { return nil }
-        if state == .ready { return 0 }
+        if state == .ready, live == nil { return 0 }  // a session still opening: speech now would cancel it
         guard state == .listening, live != nil else { return nil }
         return max(0, Self.quietGap - Date().timeIntervalSince(lastSound))
     }
