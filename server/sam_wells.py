@@ -102,6 +102,8 @@ SURE_INLIERS, SURE_OFF_MM = 70, 3.0  # 70: the lowest 5th percentile of matched 
 #: A chunk's looks for the tip. SAM's image calls run about one at a time however many are sent
 #: (1.6 s each), and a chunk closes every 9 s: 40 a chunk took 270 s, and dropped connections.
 CHUNK_TIP_LOOKS = 3
+#: The clip SAM gets; `light` is the Diagnostics trial, Watching stays on CLIP_CRF and PNG until replays match.
+CLIP_CRF, LIGHT_CRF = 18, 23
 #: Tries of an image call whose connection dropped.
 IMAGE_TRIES = 3
 
@@ -491,13 +493,19 @@ def ffprobe(clip: Path) -> dict:
             "duration_s": float(j.get("format", {}).get("duration") or frames / fps)}
 
 
-def for_sam(clip: Path, out: Path, fps: float) -> None:
+def for_sam(clip: Path, out: Path, fps: float, crf: int = CLIP_CRF) -> None:
     """The clip as SAM's video request gets it. Some files as the app writes them make SAM
     fail (server_error) when it turns back from the prompt: a keyframe a second, no B-frames.
     Every frame stays, so frame numbers still match the clip."""
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(clip), "-an", "-c:v", "libx264", "-crf", "18",
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(clip), "-an", "-c:v", "libx264", "-crf", str(crf),
                     "-preset", "veryfast", "-g", str(max(1, round(fps))), "-bf", "0", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                     "-vsync", "0", str(out)], check=True)
+
+
+def as_jpeg(png: Path) -> bytes:
+    """A tenth of the PNG's bytes, for a `light` MetaSam."""
+    return subprocess.run(["ffmpeg", "-v", "error", "-i", str(png), "-q:v", "3", "-f", "mjpeg", "-"],
+                          check=True, capture_output=True, stdin=subprocess.DEVNULL).stdout
 
 
 def frames_dir(clip: Path, frames: list) -> Path:
@@ -525,15 +533,25 @@ def frame_png(d: Path, n: int) -> Path:
     return d / f"{n + 1:05d}.png"
 
 
+def video_body(part: dict, prompt: str) -> dict:
+    return {"model": look.SAM_MODEL, "stream": True,
+            "metadata": {"propagation_direction": "both", "include_confidence": "true"},
+            "input": [{"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": prompt}, part]}]}
+
+
 class MetaSam:
     """SAM 3.1 on the Meta Model API (the key from .env, never sent elsewhere)."""
 
-    def __init__(self, key: str, timeout: float = 600):
+    def __init__(self, key: str, timeout: float = 600, light: bool = False):
+        self.light = light
+        self.crf = LIGHT_CRF if light else CLIP_CRF
         self.headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         self.client = httpx.Client(timeout=timeout)
 
     def image(self, target: str, png: Path) -> list:
-        body = look.build_sam_body(target, look.data_url(png.read_bytes(), "image/png"))
+        url = look.data_url(as_jpeg(png)) if self.light else look.data_url(png.read_bytes(), "image/png")
+        body = look.build_sam_body(target, url)
         for attempt in range(IMAGE_TRIES):
             try:
                 r = self.client.post(f"{BASE_URL}/responses", json=body,
@@ -559,10 +577,7 @@ class MetaSam:
 
     def video(self, part: dict, prompt: str, on_frame=None) -> tuple[str, float]:
         """The streamed text, and seconds to the first frame line; on_frame(lines so far)."""
-        body = {"model": look.SAM_MODEL, "stream": True,
-                "metadata": {"propagation_direction": "both", "include_confidence": "true"},
-                "input": [{"type": "message", "role": "user", "content": [
-                    {"type": "input_text", "text": prompt}, part]}]}
+        body = video_body(part, prompt)
         t0, first, chunks = time.perf_counter(), None, []
         with self.client.stream("POST", f"{BASE_URL}/responses", json=body,
                                 headers={**self.headers, "Accept": "text/event-stream"}) as r:
@@ -1183,10 +1198,11 @@ def track_chunk(clip: Path, a1: str, sam, out_dir: Path, pointer: str, session) 
 
 # ---------- one clip ----------
 
-def locate(recs: dict, nframes: int, a1: str, say=_quiet, quads: dict | None = None) -> tuple:
+def locate(recs: dict, nframes: int, a1: str, say=_quiet, quads: dict | None = None, near: tuple | None = None) -> tuple:
     """SAM's records -> (track, {frame: what to draw}, well pitches in px, failed frames by why).
-    `quads` (follow_plate): each frame's plate corners; a frame without finds its own edges."""
-    track, per, pitches, last = [], {}, [], None
+    `quads` (follow_plate): each frame's plate corners; a frame without finds its own edges.
+    `near`: where the tip last was, for a caller going a frame at a time."""
+    track, per, pitches, last = [], {}, [], near
     fails = {"no_plate": 0, "no_tip": 0, "bad_grid": 0}
     for n in range(nframes):
         say("Placing the grid on each frame", n, nframes)
@@ -1222,7 +1238,7 @@ def send_video(clip: Path, out_dir: Path, sam, fps: float, t: dict, say=_quiet) 
     t0 = time.perf_counter()
     say("Uploading the clip to SAM")
     sent = out_dir / "clip_sam.mp4"
-    for_sam(clip, sent, fps)
+    for_sam(clip, sent, fps, crf=sam.crf)
     t["encode_s"] = time.perf_counter() - t0
     part = sam.upload(sent)
     sent.unlink()

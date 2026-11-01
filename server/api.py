@@ -69,6 +69,8 @@ from server.screens import (PLAIN_ANSWERS, ask_choice, button_match, button_word
                             control_call, look_call, planned_screen, start_call, verbs)
 from server import handoff
 from server import lab_sam
+from server import lab_sam_latency
+from server import lab_sam_stills
 from server import lab_sam_live
 from server import look as lookmod
 from server.screens import guide as _screen_guide
@@ -369,6 +371,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Pip server", lifespan=lifespan)
+app.include_router(lab_sam_latency.router)  # Diagnostics test page only
+app.include_router(lab_sam_stills.router)  # Diagnostics test page only
 app.include_router(lab_sam_live.router)  # before lab_sam: the same prefix
 app.include_router(lab_sam.router)  # Diagnostics test page only
 

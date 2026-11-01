@@ -29,12 +29,12 @@ _IMG = re.compile(r"\d{5}_[A-Za-z0-9]+\.jpg")
 _LOCK = threading.Lock()
 
 
-def make_sam():
+def make_sam(light: bool = False):
     """The real SAM; tests put a fake here."""
     key = os.environ.get("MODEL_API_KEY")
     if not key:
         raise RuntimeError("MODEL_API_KEY is not set (check .env)")
-    return sw.MetaSam(key)
+    return sw.MetaSam(key, light=light)
 
 
 def _dir(sid: str) -> Path:
@@ -157,7 +157,7 @@ def _analyze(d: Path, session: dict) -> None:
         started = time.time()
         try:
             clip = next(d.glob("clip.*"))
-            r = sw.analyze(clip, session["a1"], make_sam(), d, session.get("pointer", sw.TIP), say)
+            r = sw.analyze(clip, session["a1"], make_sam(light=True), d, session.get("pointer", sw.TIP), say)
             a.update(status="done", result=r, judge=sw.judge(a["targets"], [f["well"] for f in r["found"]]))
         except Exception as e:
             print(f"sam wells: attempt {d} failed: {type(e).__name__}: {e}", flush=True)

@@ -173,6 +173,10 @@ class FakeSam:
     targets: list = []
     hide: range = range(0)
     prompts: list = []
+    crf = sw.CLIP_CRF
+
+    def __init__(self, light=False):
+        pass
 
     def image(self, target, png):
         if target == sw.WELL:
@@ -314,6 +318,7 @@ calls = []
 
 
 class CountSam:
+    crf = sw.CLIP_CRF
     def image(self, target, png):
         calls.append(png.name)
         n = int(png.stem) - 1
@@ -559,6 +564,10 @@ assert sw.best_plate([far17, near17], (W, H)) is near17  # no pen yet: the neare
 tiny17 = {"box": (100, 300, 180, 360), "points": [(100, 300), (180, 300), (180, 360), (100, 360)], "shown": 1.0, "mask": None}
 assert sw.best_plate([tiny17, near17], (W, H), [pen17]) is near17  # the iPad's preview holds the pen too, and shows more
 session17 = Ref16(ref17)
+# the Diagnostics trial: Watching's default stays PNG at CLIP_CRF
+assert (sw.MetaSam("k").light, sw.MetaSam("k").crf) == (False, 18) and sw.MetaSam("k", light=True).crf == 23
+still = sw.frame_png(sw.frames_dir(clip, [0]), 0)
+assert sw.as_jpeg(still)[:2] == b"\xff\xd8"
 r17 = sw.track_chunk(clip, "tl", FakeSam(), out17 / "1", "pen", session17)
 assert r17["track"] and r17["corrected"] and r17["kept"] + r17["redone"] < r17["frames"], r17
 assert sw.track_chunk(clip, "tl", FakeSam(), out17 / "2", "pen", Ref16(None))["corrected"] is False  # no correction yet: no wait
