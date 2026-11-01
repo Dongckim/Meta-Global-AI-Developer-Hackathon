@@ -86,6 +86,12 @@ struct ContentView: View {
     private var answered: [WebSearch] { searches.filter { $0.status == "ok" } }
     @State private var syncError: String?
     @State private var apiMismatch: String?
+    @State private var watcher = VisionWatcher()
+    @State private var notices = VisionNotices()
+    @AppStorage("pip.a1") private var a1 = "tl"
+    @AppStorage("pip.pointer") private var pointer = "pipette tip"
+    /// The run A1 was last asked for: once a run.
+    @AppStorage("pip.a1Run") private var a1Run = ""
     private let registry = loadScreens()
     private var screens: [ScreenDef] { registry.screens }
     var dat: GlassesDAT? = nil
@@ -292,6 +298,12 @@ struct ContentView: View {
         // hidden from the first frame on and never toggled: a status bar
         // appearing with Main changed the safe area under it (the bands)
         .statusBarHidden(true)
+        .onChange(of: visionWant, initial: true) { _, want in watcher.update(want, dat: dat) }
+        .onChange(of: lab.visionNotices) { _, list in notices.step(list, voice: voice) }
+        .onChange(of: voice.state) { notices.step(lab.visionNotices, voice: voice) }
+        .sheet(isPresented: askA1) {
+            VisionSetupSheet(a1: $a1, pointer: $pointer) { askA1.wrappedValue = false }
+        }
         .sheet(isPresented: $showSettings) {
             VoiceSettingsView(onOpenSync: { showSettings = false; openSync() }, voice: voice, dat: dat)
         }
@@ -726,6 +738,28 @@ struct ContentView: View {
         .background { BenchCanvas() }
     }
 
+    /// Watching can run: a run that isn't Private, glasses connected, no test page holding the camera.
+    private var visionRun: RunBlock? {
+        guard let run = lab.run, lab.runMode != nil, lab.runMode != "private",
+              dat?.status == .connected, dat?.testing == false else { return nil }
+        return run
+    }
+
+    /// The pipetting step Watching should follow now, or nil: off the bench (a photo question counts
+    /// as on it, Home doesn't, though the run stays active), A1 not given yet, no wells left to fill.
+    private var visionWant: VisionWatcher.Want? {
+        guard showsBench || lab.view.current.screen == "web_answer",
+              let run = visionRun, a1Run == run.runId, lab.stepIndex < lab.planSteps.count else { return nil }
+        let step = lab.planSteps[lab.stepIndex]
+        guard step.kind == "pipette", !step.wells.isEmpty, !lab.remaining.isEmpty else { return nil }
+        return .init(runId: run.runId, step: lab.stepIndex + 1, a1: a1, pointer: pointer)
+    }
+
+    private var askA1: Binding<Bool> {
+        Binding(get: { showsBench && visionRun.map { $0.runId != a1Run } == true },
+                set: { if !$0, let id = visionRun?.runId { a1Run = id } })
+    }
+
     private func plateColumn(_ u: CGFloat) -> some View {
         VStack(spacing: 0) {
             PlateView(lab: lab, selected: Binding(
@@ -735,6 +769,13 @@ struct ContentView: View {
             .padding(28 * u)
             .frame(width: 800 * u, height: 566 * u)
             .benchCard(radius: 44 * u)
+            .overlay(alignment: .topTrailing) {
+                if lab.runMode != "private" {
+                    // a tap asks A1 and the tool again: a wrong answer shouldn't last the whole run
+                    Button { a1Run = "" } label: { VisionChip(chip: watcher.chip, u: u) }
+                        .buttonStyle(.plain).offset(y: -34 * u)
+                }
+            }
             Spacer(minLength: 24 * u)
             ConditionBars(lab: lab, u: u).frame(height: 97 * u)
         }

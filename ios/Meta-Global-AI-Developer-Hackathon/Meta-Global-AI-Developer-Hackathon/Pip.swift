@@ -751,6 +751,7 @@ struct RecordSnapshot: Decodable {
     var recent: [HistoryEntry]
     /// The header's mode label, decided by the server (nil: not drawn).
     var headerMode: RunModeLabel?
+    var visionNotices: [VisionNotice]
     /// The bench as the server worked it out from the run so far.
     var bench: Bench?
     /// The private model's wake-up (server `private`); nil until Private asks for it.
@@ -786,9 +787,25 @@ struct RecordSnapshot: Decodable {
         var wells: [String: String]
         var legend: [Legend]
         var rows: [Row]
+        var vision: BenchVision?
+        /// What the glasses saw. seen and logged_by: the eye; hints: this step's not-sure wells, faint "C4?".
+        struct BenchVision: Decodable, Equatable {
+            var seen: [String]?
+            var loggedBy: [String: String]?
+            var hints: [String]?
+            enum CodingKeys: String, CodingKey { case seen, loggedBy = "logged_by", hints }
+        }
         struct Legend: Decodable, Equatable { var key: String; var label: String; var n: Int }
         struct Row: Decodable, Equatable { var wells: String; var name: String; var state: String }
     }
+
+    /// A camera line for Milo (snapshot `vision.notices`): the app picks the moment, then says it was played.
+    struct VisionNotice: Decodable, Equatable {
+        var id: String
+        var speak: String
+    }
+
+    private struct Vision: Decodable { var notices: [VisionNotice]? }
 
     /// The run mode as the header shows it (`header.mode`): id full / private, its label.
     struct RunModeLabel: Decodable, Equatable {
@@ -800,7 +817,7 @@ struct RecordSnapshot: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case epoch, view, version, plan, stepIndex = "step_index", done, excluded, redo,
-             notes, tips, timers, stamps, cards, draft, handoff, run, recent, header, bench
+             notes, tips, timers, stamps, cards, draft, handoff, run, recent, header, bench, vision
         case privateWake = "private"
         case transcribe, modes
     }
@@ -825,6 +842,7 @@ struct RecordSnapshot: Decodable {
         cards = (try c.decodeIfPresent([String: ServerCard].self, forKey: .cards) ?? [:])
             .values.sorted { $0.ts > $1.ts }
         draft = (try? c.decodeIfPresent(ProtocolDraft.self, forKey: .draft)) ?? nil
+        visionNotices = ((try? c.decodeIfPresent(Vision.self, forKey: .vision)) ?? nil)?.notices ?? []
         handoff = (try? c.decodeIfPresent(Handoff.self, forKey: .handoff)) ?? nil  // auxiliary, like draft
         run = try c.decodeIfPresent(RunBlock.self, forKey: .run)
         recent = try c.decodeIfPresent([HistoryEntry].self, forKey: .recent) ?? []
@@ -948,6 +966,9 @@ final class LabState {
     var notes: [Memo] = []
     var timers: [TimerEntry] = []
     /// The header's mode label (server `header.mode`); nil: hidden on this screen.
+    /// The mode last seen in the header: some screens draw none, and Watching needs it on all of them.
+    var runMode: String?
+    var visionNotices: [RecordSnapshot.VisionNotice] = []
     var headerMode: RecordSnapshot.RunModeLabel?
     /// The server's bench (plate well states, legend, Done rows); drawn as is.
     var bench: RecordSnapshot.Bench?
@@ -993,6 +1014,8 @@ final class LabState {
         notes = snap.notes
         timers = snap.timers
         headerMode = snap.headerMode
+        runMode = snap.headerMode?.id ?? runMode
+        visionNotices = snap.visionNotices
         if view.current.screen == "private_wait", privateWake?.state == "warming", snap.privateWake?.state == "ready" {
             wakeEnding = true
         }

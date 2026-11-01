@@ -1,7 +1,7 @@
 // SamWellLive.swift
 // Diagnostics "SAM well test", Continuous (DEBUG, no registry or voice): nobody lists the wells.
 // Recording never stops; every chunk uploads as it closes, and the wells the server finds
-// (server/lab_sam_live.py) appear on the plate as they come.
+// (server/lab_sam_live.py) appear on the plate as they come. The engine is VisionWells.swift.
 
 #if DEBUG
 import AVFoundation
@@ -9,213 +9,6 @@ import CoreImage
 import MWDATCamera
 import os
 import SwiftUI
-
-/// Cuts the stream into overlapping chunks. Frames arrive on the SDK's thread.
-final class WellChunks: @unchecked Sendable {
-    struct Chunk { let n: Int; let start: Int; let url: URL }
-
-    /// 10 s with 1 s shared with the next.
-    static let seconds = 10
-    static let overlap = 1
-
-    private struct Open {
-        let n: Int
-        let start: Int
-        let writer: AVAssetWriter
-        let input: AVAssetWriterInput
-        let adaptor: AVAssetWriterInputPixelBufferAdaptor
-        var written = 0
-    }
-
-    private let queue = DispatchQueue(label: "samwell.chunks")
-    private let fps: Int
-    private let closed: @Sendable (Chunk) -> Void
-    private let stillsReady: @Sendable ([(frame: Int, jpeg: Data)]) -> Void
-    private var stills: [(frame: Int, jpeg: Data)] = []
-    private let images = CIContext()
-    private var open: [Open] = []
-    private var arrivals: [Double] = []
-    private var stopped = false
-
-    init(fps: Int, stillsReady: @escaping @Sendable ([(frame: Int, jpeg: Data)]) -> Void,
-         closed: @escaping @Sendable (Chunk) -> Void) {
-        self.fps = fps
-        self.stillsReady = stillsReady
-        self.closed = closed
-    }
-
-    private var length: Int { Self.seconds * fps }
-    private var step: Int { (Self.seconds - Self.overlap) * fps }
-    /// Three frames over about the first second: the server picks the plate's reference from them.
-    private var stillFrames: [Int] { [0, fps * 3 / 7, fps * 6 / 7] }
-
-    func frame(_ sb: CMSampleBuffer) {
-        guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
-        queue.sync {
-            guard !stopped else { return }
-            let frame = arrivals.count
-            arrivals.append(CACurrentMediaTime())
-            if stillFrames.contains(frame),
-               let jpeg = images.jpegRepresentation(of: CIImage(cvPixelBuffer: pb), colorSpace: CGColorSpaceCreateDeviceRGB()) {
-                stills.append((frame, jpeg))
-                if stills.count == stillFrames.count { stillsReady(stills) }
-            }
-            if frame % step == 0 {
-                let url = FileManager.default.temporaryDirectory.appending(path: "samwell-chunk-\(UUID().uuidString).mp4")
-                if let (w, i, a) = WellCam.writer(url: url, width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb), fps: fps) {
-                    open.append(Open(n: frame / step, start: frame, writer: w, input: i, adaptor: a))
-                }
-            }
-            for k in open.indices where open[k].input.isReadyForMoreMediaData {
-                // shortcut: a refused frame shifts the rest of its chunk one frame early, fine unless "refused" shows up in the log
-                let pts = CMTime(value: CMTimeValue(open[k].written), timescale: CMTimeScale(fps))
-                if open[k].adaptor.append(pb, withPresentationTime: pts) { open[k].written += 1 }
-            }
-            let full = open.filter { frame + 1 - $0.start >= length }
-            open.removeAll { frame + 1 - $0.start >= length }
-            full.forEach(close)
-        }
-    }
-
-    private func close(_ c: Open) {
-        c.input.markAsFinished()
-        let chunk = Chunk(n: c.n, start: c.start, url: c.writer.outputURL)
-        let closed = closed
-        c.writer.finishWriting { [writer = c.writer] in
-            if writer.status == .completed { closed(chunk) }
-        }
-    }
-
-    /// No more frames. What's open closes, but a tail the chunk before already holds doesn't.
-    func stop() {
-        queue.sync {
-            stopped = true
-            for c in open {
-                if c.written < 2 || (c.n > 0 && c.written <= Self.overlap * fps) {
-                    c.writer.cancelWriting()
-                } else {
-                    close(c)
-                }
-            }
-            open = []
-        }
-    }
-
-    /// When a session frame arrived here.
-    func arrival(_ frame: Int) -> Double? {
-        queue.sync { frame < arrivals.count ? arrivals[frame] : nil }
-    }
-}
-
-/// One continuous run. Outlives the page, so leaving it still finishes what's in hand.
-@MainActor @Observable
-final class SamWellRun {
-    enum Phase { case idle, recording, finishing, done }
-
-    struct Seen: Identifiable {
-        let id: String
-        let well: String
-        let sure: Bool
-        /// Seconds from the tip stopping at the well to the well showing here.
-        let delay: Double?
-    }
-
-    private(set) var phase = Phase.idle
-    private(set) var seen: [Seen] = []
-    private(set) var live: SamWellAPI.Live?
-    private(set) var sentChunks = 0
-    var error: String?
-
-    private var id: String?
-    private var chunks: WellChunks?
-    private var uploads: [Task<Void, Never>] = []
-    private var polling: Task<Void, Never>?
-
-    var waiting: Int { sentChunks - (live?.chunks.filter { $0.status != "analyzing" }.count ?? 0) }
-
-    /// nil when no run is recording.
-    var tap: (@Sendable (CMSampleBuffer) -> Void)? {
-        guard phase == .recording, let chunks else { return nil }
-        return { chunks.frame($0) }
-    }
-
-    func start(a1: String, pointer: String, targets: String, fps: Int) async {
-        guard phase == .idle else { return }
-        do {
-            let s = try await SamWellAPI.newLive(a1: a1, pointer: pointer, targets: targets)
-            id = s.id
-            live = s
-        } catch {
-            self.error = error.localizedDescription
-            return
-        }
-        guard let live = id else { return }
-        chunks = WellChunks(fps: fps, stillsReady: { stills in
-            let copy = stills
-            Task { try? await SamWellAPI.uploadStills(live: live, stills: copy) }
-        }, closed: { chunk in
-            Task { @MainActor [weak self] in self?.send(chunk) }
-        })
-        phase = .recording
-        polling = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                guard let self, await self.poll() else { return }
-            }
-        }
-    }
-
-    private func send(_ chunk: WellChunks.Chunk) {
-        guard let id else { return }
-        sentChunks += 1
-        uploads.append(Task { [weak self] in
-            defer { try? FileManager.default.removeItem(at: chunk.url) }
-            for attempt in 1...3 {
-                do {
-                    try await SamWellAPI.uploadChunk(live: id, n: chunk.n, start: chunk.start, clip: chunk.url)
-                    return
-                } catch where attempt < 3 {
-                    try? await Task.sleep(for: .seconds(1))
-                } catch {
-                    Log.dat.error("[samwell] chunk \(chunk.n) upload failed: \(error.localizedDescription, privacy: .public)")
-                    self?.sentChunks -= 1
-                    self?.error = "Chunk \(chunk.n) didn't upload: \(error.localizedDescription)"
-                }
-            }
-        })
-    }
-
-    /// True to keep polling.
-    private func poll() async -> Bool {
-        guard let id, let s = try? await SamWellAPI.live(id) else { return phase != .done }
-        take(s)
-        return phase != .done
-    }
-
-    private func take(_ s: SamWellAPI.Live) {
-        live = s
-        let now = CACurrentMediaTime()
-        for w in s.wells where !seen.contains(where: { $0.id == "\(w.well)-\(w.frame)" }) {
-            let delay = chunks?.arrival(w.f0).map { now - $0 }
-            seen.append(Seen(id: "\(w.well)-\(w.frame)", well: w.well, sure: w.confidence == "sure", delay: delay))
-            Log.dat.info("[samwell] live \(w.well, privacy: .public) frame \(w.frame) delay \(delay ?? -1)")
-        }
-        if s.done, phase == .finishing { phase = .done }
-    }
-
-    /// Leaves recording; whatever's open uploads, and the server finishes it.
-    func stop() {
-        guard phase == .recording else { return }
-        phase = .finishing
-        chunks?.stop()
-        Task {
-            try? await Task.sleep(for: .seconds(1))  // the last writers report through finishWriting
-            for upload in uploads { await upload.value }
-            guard let id else { return }
-            do { take(try await SamWellAPI.stopLive(id)) } catch { self.error = error.localizedDescription }
-        }
-    }
-}
 
 struct SamWellLiveView: View {
     var dat: GlassesDAT?
@@ -278,6 +71,7 @@ struct SamWellLiveView: View {
             let cam = cam
             let finder = PlateFinder { quad in Task { @MainActor in aimed(quad) } }
             self.finder = finder
+            dat?.testing = true
             dat?.frameTap.set { cam.frame($0); finder.frame($0) }
             dat?.stopLive()
             dat?.startLive(resolution: .high, frameRate: fps, hold: true)
@@ -286,6 +80,7 @@ struct SamWellLiveView: View {
             run.stop()
             dat?.frameTap.set(nil)
             dat?.stopLive()
+            dat?.testing = false
             finder = nil
         }
     }

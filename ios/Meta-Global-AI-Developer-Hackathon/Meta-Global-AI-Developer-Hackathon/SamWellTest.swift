@@ -123,16 +123,7 @@ enum SamWellAPI {
 
     private static func url(_ path: String) -> URL { Config.baseURL.appending(path: "lab/sam-wells/" + path) }
 
-    private static func send<T: Decodable>(_ req: URLRequest) async throws -> T {
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw NSError(domain: "SamWell", code: http.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"])
-        }
-        let dec = JSONDecoder()
-        dec.keyDecodingStrategy = .convertFromSnakeCase
-        return try dec.decode(T.self, from: data)
-    }
+    private static func send<T: Decodable>(_ req: URLRequest) async throws -> T { try await VisionAPI.send(req) }
 
     static func targets() async throws -> [String] {
         struct Out: Decodable { let targets: [String] }
@@ -168,99 +159,6 @@ enum SamWellAPI {
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
         let _: Attempt = try await send(req)
-    }
-
-    // Continuous
-
-    struct Live: Decodable {
-        struct Well: Decodable {
-            let well: String
-            let frame: Int
-            let f0: Int
-            let confidence: String
-        }
-        struct Summary: Decodable {
-            let sure: Int
-            let notSure: Int
-            let hit: [String]
-            let outside: [String]
-            let missed: [String]
-            let toCatch: [String]
-        }
-        struct Chunk: Decodable {
-            let n: Int
-            let status: String
-            let why: String?
-            let error: String?
-            let timing: [String: Double]?
-        }
-        struct Reference: Decodable {
-            let chunk: String
-            let frame: Int
-            let wells: Int
-        }
-        let id: String
-        let wells: [Well]
-        let targets: [String]
-        let summary: Summary
-        let done: Bool
-        let chunks: [Chunk]
-        let references: [Reference]
-    }
-
-    static func newLive(a1: String, pointer: String, targets: String) async throws -> Live {
-        var req = URLRequest(url: url("live"))
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["a1": a1, "pointer": pointer, "targets": targets])
-        return try await send(req)
-    }
-
-    static func live(_ id: String) async throws -> Live { try await send(URLRequest(url: url("live/\(id)"))) }
-
-    static func stopLive(_ id: String) async throws -> Live {
-        var req = URLRequest(url: url("live/\(id)/stop"))
-        req.httpMethod = "POST"
-        return try await send(req)
-    }
-
-    /// The frames at Record; the server picks the session's one reference from them.
-    static func uploadStills(live id: String, stills: [(frame: Int, jpeg: Data)]) async throws {
-        struct Out: Decodable { let frames: [Int] }
-        let boundary = "----samwell\(UUID().uuidString)"
-        var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"numbers\"\r\n\r\n\(stills.map { String($0.frame) }.joined(separator: ","))\r\n".utf8)
-        for s in stills {
-            body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"frames\"; filename=\"\(s.frame).jpg\"\r\n".utf8))
-            body.append(Data("Content-Type: image/jpeg\r\n\r\n".utf8))
-            body.append(s.jpeg)
-            body.append(Data("\r\n".utf8))
-        }
-        body.append(Data("--\(boundary)--\r\n".utf8))
-        var req = URLRequest(url: url("live/\(id)/reference"))
-        req.httpMethod = "POST"
-        req.timeoutInterval = 30
-        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        req.httpBody = body
-        let _: Out = try await send(req)
-    }
-
-    static func uploadChunk(live id: String, n: Int, start: Int, clip: URL) async throws {
-        struct Out: Decodable { let n: Int }
-        let boundary = "----samwell\(UUID().uuidString)"
-        var body = Data()
-        for (k, v) in [("n", "\(n)"), ("start", "\(start)")] {
-            body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(k)\"\r\n\r\n\(v)\r\n".utf8))
-        }
-        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"clip\"; filename=\"chunk.mp4\"\r\n".utf8))
-        body.append(Data("Content-Type: application/octet-stream\r\n\r\n".utf8))
-        body.append(try Data(contentsOf: clip))
-        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
-        var req = URLRequest(url: url("live/\(id)/chunks"))
-        req.httpMethod = "POST"
-        req.timeoutInterval = 60
-        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        req.httpBody = body
-        let _: Out = try await send(req)
     }
 
     static func imageURL(session: String, attempt: Int, name: String) -> URL {
@@ -336,31 +234,8 @@ final class WellCam: @unchecked Sendable {
     private var pendingURL: URL?
     private var fps = 2
 
-    /// A started H.264 .mp4 writer from time zero, or nil.
-    static func writer(url: URL, width: Int, height: Int, fps: Int)
-        -> (AVAssetWriter, AVAssetWriterInput, AVAssetWriterInputPixelBufferAdaptor)? {
-        guard let w = try? AVAssetWriter(outputURL: url, fileType: .mp4) else { return nil }
-        let settings: [String: Any] = [
-            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height,
-            // ~0.6 bits a pixel a frame (3.9 Mbps at 720×1280, 7 fps): the frames come
-            // already compressed for Bluetooth, so more adds only size
-            // a keyframe a second and no reordering: easy to seek, whichever way SAM reads it
-            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: max(500_000, width * height * 6 * fps / 10),
-                                              AVVideoMaxKeyFrameIntervalKey: fps,
-                                              AVVideoAllowFrameReorderingKey: false],
-        ]
-        let i = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
-        i.expectsMediaDataInRealTime = true
-        let a = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: i, sourcePixelBufferAttributes: nil)
-        guard w.canAdd(i) else { return nil }
-        w.add(i)
-        w.startWriting()
-        w.startSession(atSourceTime: .zero)
-        return (w, i, a)
-    }
-
     private func open(width: Int, height: Int) {
-        guard let url = pendingURL, let (w, i, a) = Self.writer(url: url, width: width, height: height, fps: fps) else { return }
+        guard let url = pendingURL, let (w, i, a) = WellChunks.writer(url: url, width: width, height: height, fps: fps) else { return }
         (writer, input, adaptor, first) = (w, i, a, .zero)
     }
 
@@ -461,10 +336,6 @@ struct SamWellTestView: View {
     }
 }
 
-func cornerName(_ c: String) -> String {
-    ["tl": "Top left", "tr": "Top right", "br": "Bottom right", "bl": "Bottom left"][c] ?? c
-}
-
 // MARK: - One session
 
 struct SamWellSessionView: View {
@@ -544,12 +415,14 @@ struct SamWellSessionView: View {
             let cam = cam
             let finder = PlateFinder { quad in Task { @MainActor in aimed(quad) } }
             self.finder = finder
+            dat?.testing = true
             dat?.frameTap.set { cam.frame($0); finder.frame($0) }
             live()
         }
         .onDisappear {
             dat?.frameTap.set(nil)
             dat?.stopLive()
+            dat?.testing = false
             finder = nil
             aimQuad = nil
             aimState = PlateAimState()

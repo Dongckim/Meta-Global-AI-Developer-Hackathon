@@ -114,6 +114,11 @@ struct WellDot: View {
     private var excluded: Bool { state == "excluded" }
     private var redo: Bool { lab.redo[well] != nil }
     private var noted: Bool { lab.hasNote(well) }
+    private var vision: RecordSnapshot.Bench.BenchVision? { lab.bench?.vision }
+    /// The glasses logged or confirmed it.
+    private var seen: Bool { vision?.seen?.contains(well) == true || vision?.loggedBy?[well] != nil }
+    /// Not sure: only a hint, on a well nobody has filled.
+    private var hinted: Bool { !filled && vision?.hints?.contains(well) == true }
     private var lit: Bool { lab.flashing.contains(well) }
     private var tone: Color { lab.groupIndex(lab.conditionOf(well)).map(Theme.groupTone) ?? Theme.text1 }
 
@@ -167,6 +172,21 @@ struct WellDot: View {
                             .lineLimit(1).minimumScaleFactor(0.5)
                     }
                 }
+                .overlay {
+                    if hinted {
+                        Text("\(well)?").font(Theme.ui(d * 15 / 48, weight: .medium))
+                            .foregroundStyle(Theme.text4).lineLimit(1).minimumScaleFactor(0.5)
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if seen {
+                        Image(systemName: "eye.fill").font(Theme.ui(d * 13 / 48, weight: .semibold))
+                            .foregroundStyle(Theme.polishBlue)
+                            .padding(d * 3 / 48)
+                            .background(Circle().fill(Theme.card))
+                            .accessibilityLabel("Seen by the glasses")
+                    }
+                }
                 .overlay(alignment: .topTrailing) {
                     if noted {
                         Circle().fill(Theme.text1)
@@ -195,7 +215,7 @@ struct WellDot: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(well)
-        .animation(.easeInOut(duration: 0.3), value: "\(state ?? "")\(redo)\(noted)\(lit)")
+        .animation(.easeInOut(duration: 0.3), value: "\(state ?? "")\(redo)\(noted)\(lit)\(seen)\(hinted)")
     }
 }
 

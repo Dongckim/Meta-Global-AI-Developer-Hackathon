@@ -179,6 +179,8 @@ final class VoiceSession {
     /// gen that set activeTrigger; only that capture's exit may clear it.
     private var captureGen = 0
     private var activated = false
+    /// Speech would actually play (the session has been set up).
+    var canSpeak: Bool { activated }
     private var startingWake = false
     private var wakeBroken = false
 

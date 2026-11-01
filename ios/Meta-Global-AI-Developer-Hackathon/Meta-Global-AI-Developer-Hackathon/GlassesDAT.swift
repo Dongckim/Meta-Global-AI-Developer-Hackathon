@@ -227,6 +227,14 @@ final class GlassesDAT {
     private(set) var liveFrame: UIImage?
     /// Every stream frame as it comes, for whoever listens (Diagnostics' SAM well test records it).
     nonisolated let frameTap = FrameTap()
+    /// The same frames for Bench Watching (VisionWatcher), alongside whatever else listens.
+    nonisolated let visionTap = FrameTap()
+    /// A Diagnostics test page is open: it owns the camera, Watching stays out.
+    var testing = false
+    /// Who has the stream: `startLive` callers (a photo question), Watching, or both, sharing it.
+    private var plainUser = false
+    private var watching = false
+    private var liveAsked: (StreamingResolution, UInt)?
     private var liveSession: DeviceSession?
     private var liveStream: MWDATCamera.Stream?
     private var liveTokens = ListenerTokenBag()
@@ -237,7 +245,26 @@ final class GlassesDAT {
     /// 6 s (Bluetooth too busy), it restarts at medium, unless `hold` (a test
     /// that wants this resolution or nothing). Fewer fps: less compression a frame.
     func startLive(resolution: StreamingResolution = .high, frameRate: UInt = 15, hold: Bool = false) {
+        plainUser = true
+        openLive(resolution: resolution, frameRate: frameRate, hold: hold)
+    }
+
+    /// Watching's stream: 720×1280 at 7 fps. A photo question's joins it, its frames serving the photo;
+    /// one already open at another size makes way.
+    func startWatching() {
+        watching = true
+        if let asked = liveAsked, asked != (.high, 7) { closeLive() }
+        openLive(resolution: .high, frameRate: 7, hold: true)
+    }
+
+    func stopWatching() {
+        watching = false
+        if !plainUser { closeLive() }
+    }
+
+    private func openLive(resolution: StreamingResolution, frameRate: UInt, hold: Bool) {
         guard liveSession == nil else { return }
+        liveAsked = (resolution, frameRate)
         liveFrame = nil
         guard let id = devices.first(where: { wearables.deviceForIdentifier($0)?.linkState == .connected }) else {
             Log.dat.info("[look] live: no connected glasses (devices=\(self.devices.count))")
@@ -278,8 +305,10 @@ final class GlassesDAT {
                     Log.dat.error("[look] live: stream error \(String(describing: error), privacy: .public)")
                 }.store(in: liveTokens)
                 let tap = frameTap
+                let vision = visionTap
                 stream.videoFramePublisher.listen { [weak self] frame in
                     tap.send(frame.sampleBuffer)
+                    vision.send(frame.sampleBuffer)
                     guard let img = frame.makeUIImage() else { return }
                     Task { @MainActor in self?.liveFrame = img }
                 }.store(in: liveTokens)
@@ -292,18 +321,24 @@ final class GlassesDAT {
                     try? await Task.sleep(for: .seconds(6))
                     if liveSession === session, liveFrame == nil {
                         Log.dat.info("[look] live: no frame at \(String(describing: resolution), privacy: .public) in 6 s -> medium")
-                        stopLive()
-                        startLive(resolution: .medium)
+                        closeLive()
+                        openLive(resolution: .medium, frameRate: 15, hold: false)
                     }
                 }
             } catch {
                 Log.dat.error("[look] live failed: \(String(describing: error), privacy: .public)")
-                stopLive()
+                closeLive()
             }
         }
     }
 
     func stopLive() {
+        plainUser = false
+        if !watching { closeLive() }
+    }
+
+    private func closeLive() {
+        liveAsked = nil
         guard liveSession != nil else { return }
         livePhoto?.set(nil)
         liveStream?.stop()

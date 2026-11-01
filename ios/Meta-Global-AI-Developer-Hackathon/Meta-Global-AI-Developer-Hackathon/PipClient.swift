@@ -326,6 +326,12 @@ enum PipClient {
         Config.baseURL.appending(path: "looks/\(searchId)/crop")
     }
 
+    /// A camera line was said: it leaves the server's queue.
+    static func visionNoticePlayed(_ id: String) async throws {
+        struct Out: Decodable { let ok: Bool }
+        let _: Out = try await post("vision/notices/\(id)/played", [:])
+    }
+
     static func protocols() async throws -> [ProtocolSummary] {
         let r: ProtocolListResponse = try await get("protocols")
         return r.protocols
