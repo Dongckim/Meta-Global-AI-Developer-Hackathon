@@ -749,9 +749,9 @@ struct ContentView: View {
         .background { BenchCanvas() }
     }
 
-    /// Watching can run: a run that isn't Private, glasses connected, no test page holding the camera.
+    /// Watching can run: asked for by voice, a run that isn't Private, glasses connected, no test page holding the camera.
     private var visionRun: RunBlock? {
-        guard let run = lab.run, lab.runMode != nil, lab.runMode != "private",
+        guard lab.visionOn, let run = lab.run, lab.runMode != nil, lab.runMode != "private",
               dat?.status == .connected, dat?.testing == false else { return nil }
         return run
     }
@@ -769,6 +769,7 @@ struct ContentView: View {
     /// For the log and the server: the first thing keeping `visionWant` nil.
     private var visionOffWhy: String {
         if lab.run == nil { return "no run" }
+        if !lab.visionOn { return "end watch" }
         if lab.runMode == nil || lab.runMode == "private" { return "mode \(lab.runMode ?? "unknown")" }
         if dat?.status != .connected { return "glasses \(dat?.status.rawValue ?? "none")" }
         if dat?.testing != false { return "test page open" }

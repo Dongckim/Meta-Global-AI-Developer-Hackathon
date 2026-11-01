@@ -752,6 +752,7 @@ struct RecordSnapshot: Decodable {
     /// The header's mode label, decided by the server (nil: not drawn).
     var headerMode: RunModeLabel?
     var visionNotices: [VisionNotice]
+    var visionOn: Bool
     /// The bench as the server worked it out from the run so far.
     var bench: Bench?
     /// The private model's wake-up (server `private`); nil until Private asks for it.
@@ -807,7 +808,7 @@ struct RecordSnapshot: Decodable {
         var speak: String
     }
 
-    private struct Vision: Decodable { var notices: [VisionNotice]? }
+    private struct Vision: Decodable { var notices: [VisionNotice]?; var on: Bool? }
 
     /// The run mode as the header shows it (`header.mode`): id full / private, its label.
     struct RunModeLabel: Decodable, Equatable {
@@ -844,7 +845,9 @@ struct RecordSnapshot: Decodable {
         cards = (try c.decodeIfPresent([String: ServerCard].self, forKey: .cards) ?? [:])
             .values.sorted { $0.ts > $1.ts }
         draft = (try? c.decodeIfPresent(ProtocolDraft.self, forKey: .draft)) ?? nil
-        visionNotices = ((try? c.decodeIfPresent(Vision.self, forKey: .vision)) ?? nil)?.notices ?? []
+        let vision = (try? c.decodeIfPresent(Vision.self, forKey: .vision)) ?? nil
+        visionNotices = vision?.notices ?? []
+        visionOn = vision?.on ?? false
         handoff = (try? c.decodeIfPresent(Handoff.self, forKey: .handoff)) ?? nil  // auxiliary, like draft
         run = try c.decodeIfPresent(RunBlock.self, forKey: .run)
         recent = try c.decodeIfPresent([HistoryEntry].self, forKey: .recent) ?? []
@@ -971,6 +974,8 @@ final class LabState {
     /// The mode last seen in the header: some screens draw none, and Watching needs it on all of them.
     var runMode: String?
     var visionNotices: [RecordSnapshot.VisionNotice] = []
+    /// "Watching" said, "End watch" not yet.
+    var visionOn = false
     var headerMode: RecordSnapshot.RunModeLabel?
     /// The server's bench (plate well states, legend, Done rows); drawn as is.
     var bench: RecordSnapshot.Bench?
@@ -1018,6 +1023,7 @@ final class LabState {
         headerMode = snap.headerMode
         runMode = snap.headerMode?.id ?? runMode
         visionNotices = snap.visionNotices
+        visionOn = snap.visionOn
         if view.current.screen == "private_wait", privateWake?.state == "warming", snap.privateWake?.state == "ready" {
             wakeEnding = true
         }
