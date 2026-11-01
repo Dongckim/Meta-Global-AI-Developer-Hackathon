@@ -807,6 +807,8 @@ struct RecordSnapshot: Decodable {
     struct VisionNotice: Decodable, Equatable {
         var id: String
         var speak: String
+        /// done / ask: an ask wants an answer.
+        var kind: String?
     }
 
     private struct Vision: Decodable { var notices: [VisionNotice]?; var on: Bool?; var asked: Int? }

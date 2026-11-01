@@ -298,12 +298,7 @@ struct ContentView: View {
         // hidden from the first frame on and never toggled: a status bar
         // appearing with Main changed the safe area under it (the bands)
         .statusBarHidden(true)
-        .onChange(of: visionWant, initial: true) { _, want in watcher.update(want, why: visionOffWhy, dat: dat, voice: voice) }
-        .onChange(of: lab.visionNotices) { _, list in notices.step(list, voice: voice) }
-        .onChange(of: watcher.chip) { old, new in if old == .looking, new == .watching { visionCue("vision_watching") } }
-        .onChange(of: visionChecking) { _, on in if on { visionCue("vision_checking") } }
-        .onChange(of: watcher.drops) { visionCue("vision_dropped") }
-        .onChange(of: voice.state) { notices.step(lab.visionNotices, voice: voice) }
+        .background { visionWatchers }
         .sheet(isPresented: askA1) {
             VisionSetupSheet(a1: $a1, pointer: $pointer) { askA1.wrappedValue = false }
         }
@@ -782,6 +777,18 @@ struct ContentView: View {
     private var askA1: Binding<Bool> {
         Binding(get: { showsBench && visionRun.map { $0.runId != a1Run } == true },
                 set: { if !$0, let id = visionRun?.runId { a1Run = id } })
+    }
+
+    /// Here, not on the body's own chain: it had grown past what the compiler will type-check.
+    private var visionWatchers: some View {
+        Color.clear
+        .onChange(of: visionWant, initial: true) { _, want in watcher.update(want, why: visionOffWhy, dat: dat, voice: voice) }
+        .onChange(of: lab.visionNotices) { _, list in notices.step(list, voice: voice) }
+        .onChange(of: watcher.chip) { old, new in if old == .looking, new == .watching { SamTone.rising.play() } }
+        .onChange(of: visionChecking) { _, on in if on { visionCue("vision_checking") } }
+        .onChange(of: watcher.drops) { visionCue("vision_dropped") }
+        .onChange(of: lab.visionOn) { was, on in if was, !on, lab.run != nil { voice.continueSession() } }
+        .onChange(of: voice.state) { notices.step(lab.visionNotices, voice: voice) }
     }
 
     private var visionPending: Int { lab.bench?.vision?.pending ?? 0 }

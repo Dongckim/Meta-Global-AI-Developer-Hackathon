@@ -185,8 +185,30 @@ final class VoiceSession {
         didSet { if keepLiveClosed, live != nil { endLive("client") } }
     }
 
+    /// A question was just said: the mic opens without "Hey Milo", in a session or, while the
+    /// glasses stream, for one turn. Nothing heard: the card stays, for a tap or a "Hey Milo".
+    func listenForAnswer() {
+        if state == .ready { _ = open(trigger: .wakeWord) }
+    }
+
+    /// Watching ended by voice: the conversation goes on, in a session again, once the reply is said.
+    func continueSession() {
+        Task { @MainActor [weak self] in
+            for _ in 0..<40 {
+                guard let self else { return }
+                if self.state == .ready, !self.keepLiveClosed {
+                    _ = self.open(trigger: .wakeWord)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
     /// Both quiet this long inside a session: a line that isn't a reply may go.
     static let quietGap: TimeInterval = 1.5
+    /// Shorter for the stream: Milo's line is over and the session closes before it starts.
+    static let streamGap: TimeInterval = 0.3
     /// When the person or Milo last made a sound in this session.
     private var lastSound = Date.distantPast
     /// Speech cut off before its end (stopped, or replaced by newer speech).
@@ -204,7 +226,7 @@ final class VoiceSession {
     /// Nobody has made a sound for `quietGap`: a good moment to start the glasses' stream, which shares
     /// the Bluetooth link with the voice.
     var quietForStream: Bool {
-        (state == .ready || state == .listening) && Date().timeIntervalSince(lastSound) >= Self.quietGap
+        (state == .ready || state == .listening) && Date().timeIntervalSince(lastSound) >= Self.streamGap
     }
 
     private func cutSpeech() {
