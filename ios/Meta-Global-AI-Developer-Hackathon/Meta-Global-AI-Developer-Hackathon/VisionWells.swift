@@ -215,8 +215,16 @@ final class PlateFinder: @unchecked Sendable {
             return nil
         }
         // shortcut: the largest rectangle, a sheet of paper can pass for a plate; aiming only, SAM judges
-        let best = request.results?.max { area($0) < area($1) }
-        return best.map { o in [o.topLeft, o.topRight, o.bottomRight, o.bottomLeft].map { CGPoint(x: $0.x, y: 1 - $0.y) } }
+        let best = request.results?.filter { inFrame(corners($0)) }.max { area($0) < area($1) }
+        return best.map { corners($0).map { CGPoint(x: $0.x, y: 1 - $0.y) } }
+    }
+
+    private static func corners(_ o: VNRectangleObservation) -> [CGPoint] { [o.topLeft, o.topRight, o.bottomRight, o.bottomLeft] }
+
+    /// All four corners inside the picture (0-1): a rectangle touching its edge is cut off, and a
+    /// cut-off plate gives SAM no outline to work from.
+    nonisolated static func inFrame(_ corners: [CGPoint], margin: CGFloat = 0.01) -> Bool {
+        corners.allSatisfy { $0.x > margin && $0.x < 1 - margin && $0.y > margin && $0.y < 1 - margin }
     }
 
     private static func area(_ o: VNRectangleObservation) -> Double {

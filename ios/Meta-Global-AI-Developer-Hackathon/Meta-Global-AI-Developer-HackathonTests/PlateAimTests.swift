@@ -40,6 +40,17 @@ struct PlateAimTests {
         #expect(abs(top.x - 75) < 0.01 && abs(top.y - (50 - 80 * 150.0 / 90)) < 0.01)
     }
 
+    @Test func onlyARectangleWhollyInThePictureCounts() {
+        let whole = [CGPoint(x: 0.2, y: 0.5), CGPoint(x: 0.8, y: 0.5), CGPoint(x: 0.8, y: 0.9), CGPoint(x: 0.2, y: 0.9)]
+        #expect(PlateFinder.inFrame(whole))
+        var cut = whole
+        cut[2].y = 1  // runs off the bottom
+        #expect(!PlateFinder.inFrame(cut))
+        cut = whole
+        cut[0].x = 0.005  // touches the left edge
+        #expect(!PlateFinder.inFrame(cut))
+    }
+
     @Test func toneIsAShortWav() {
         let two = SamTone.wav([392, 330])
         #expect(two.prefix(4) == Data("RIFF".utf8))
