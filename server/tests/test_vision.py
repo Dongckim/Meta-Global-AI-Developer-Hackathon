@@ -323,8 +323,57 @@ live = live_mod.Live("x", "tl", "pen")
 live.dir = Path(tempfile.mkdtemp())
 live.chunks = {0: {"n": 0, "start": 0, "status": "analyzing", "low": list(range(21))}}
 live.finish(0, {"status": "done", "fps": 7.0, "track": stay, "inliers": {str(f): 200 for f in range(21)}})
-assert live.wells == [], live.wells
-print("V20 ok: frames that came in small aren't judged")
+assert [w["well"] for w in live.wells] == ["B2"], live.wells
+print("V20 ok: frames that came in small are judged like the rest")
+
+# SAM's service fails once: the chunk gets a second go; twice: it's failed, the others go on.
+calls = []
+real, make, wait = live_mod.sw.track_chunk, live_mod.lab_sam.make_sam, live_mod.RETRY_S
+live_mod.lab_sam.make_sam, live_mod.RETRY_S = (lambda: None), 0
+
+
+def flaky(*a):
+    calls.append(1)
+    if len(calls) == 1:
+        raise RuntimeError("500")
+    return {"track": [], "fps": 7.0, "why": "no tip"}
+
+
+live_mod.sw.track_chunk = flaky
+live = live_mod.Live("x", "tl", "pen")
+live.dir = Path(tempfile.mkdtemp())
+live.chunks = {0: {"n": 0, "start": 0, "status": "analyzing"}}
+live_mod._analyze(live, 0, live.dir / "0" / "clip.mp4")
+assert len(calls) == 2 and live.chunks[0]["status"] == "empty", live.chunks
+
+
+def down(*a):
+    raise RuntimeError("500")
+
+
+live_mod.sw.track_chunk = down
+live.chunks[1] = {"n": 1, "start": 63, "status": "analyzing"}
+live_mod._analyze(live, 1, live.dir / "1" / "clip.mp4")
+assert live.chunks[1]["status"] == "failed"
+live_mod.sw.track_chunk, live_mod.lab_sam.make_sam, live_mod.RETRY_S = real, make, wait
+print("V21 ok: a chunk gets a second go")
+
+# Wells of a run that was left: kept, and logged when it's back, out loud.
+s = fresh()
+first = run_id(s)
+s.apply_calls([{"name": "end_run", "args": {}}], "voice", "", "grammar", {})
+s.r["cards"] = {}
+s._finish_locked("paused")
+s._begin_locked(json.loads(json.dumps(PLAN)), "p2", "Other")
+sees_late = [{"well": "C2", "ts": time.time(), "confidence": "sure", "usable": True}]
+s.vision_events(first, sees_late)
+assert marks(s) == {} and json.loads(s._late_path.read_text())[first] == sees_late
+res = {"messages": [], "cards": [], "ui": [], "info": {"dropped": 0, "drop_reasons": []}}
+with s._lock:
+    s._resume_locked(first, {"id": "t"}, res)
+assert marks(s).get((1, "C2")) == "vision", marks(s)
+assert lines(s) and first not in json.loads(s._late_path.read_text())
+print("V22 ok: a run that was left gets its wells back")
 
 # Every event is logged, and the numbers add up. The queue plays through.
 s = fresh()

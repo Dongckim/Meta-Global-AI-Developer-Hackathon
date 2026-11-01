@@ -25,6 +25,7 @@ REFS = ROOT.parent / "sam_refs"
 MAX_CHUNK_BYTES = 100_000_000
 #: Longest a chunk's image calls stay behind the session's first ones.
 REF_FIRST_S = 30
+RETRY_S = 3
 #: The only stream the judging was tried on; a session that drops from it isn't judged.
 STREAM = (720, 1280, 7.0)
 #: Gets a bound session's new wells, a chunk at a time (server/api.py points it at the store).
@@ -93,10 +94,8 @@ class Live:
             c = self.chunks[n]
             if n and n - 1 not in self.chunks and not self.stopped or c["status"] == "analyzing":
                 break
-            low = set(c.get("low", ()))  # the glasses dropped the size there: too soft to judge a well on
             for f, x, y, a in c.get("track", ()):
-                if f not in low:
-                    joined.setdefault(c["start"] + f, (c["start"] + f, (x, y), a))
+                joined.setdefault(c["start"] + f, (c["start"] + f, (x, y), a))
                 holes.setdefault(c["start"] + f, c.get("ref_wells", 0))
             for f, count in c.get("inliers", {}).items():
                 inliers.setdefault(c["start"] + int(f), count)
@@ -253,7 +252,12 @@ async def new_reference(sid: str, background: BackgroundTasks, frames: list[Uplo
 
 def _analyze(live: Live, n: int, clip: Path) -> None:
     try:
-        r = sw.track_chunk(clip, live.a1, lab_sam.make_sam(), clip.parent, live.pointer, live)
+        try:
+            r = sw.track_chunk(clip, live.a1, lab_sam.make_sam(), clip.parent, live.pointer, live)
+        except Exception as e:  # SAM's service fails now and then: a chunk gets a second go before it's lost
+            print(f"sam live {live.id}: chunk {n} again after {type(e).__name__}", flush=True)
+            time.sleep(RETRY_S)
+            r = sw.track_chunk(clip, live.a1, lab_sam.make_sam(), clip.parent, live.pointer, live)
         live.finish(n, {**r, "status": "done" if r["track"] else "empty"})
     except Exception as e:  # the chunks around it still count
         print(f"sam live {live.id}: chunk {n} failed: {type(e).__name__}: {e}", flush=True)
@@ -265,7 +269,8 @@ def _analyze(live: Live, n: int, clip: Path) -> None:
 async def new_chunk(sid: str, background: BackgroundTasks, clip: UploadFile = File(...),
                     n: int = Form(...), start: int = Form(...), low: str = Form("")):
     """Chunk n, its first frame being the session's frame `start`; analysed in the background, alongside the
-    others. `low`, "4,5,6": its frames that came in smaller and were scaled up; they keep the timeline, nothing's judged on them."""
+    others. `low`, "4,5,6": its frames that came in smaller and were scaled up, kept for the record (a whole session of
+    them judged right, 2026-11-01)."""
     live = _live(sid)
     if n < 0 or start < 0 or n in live.chunks:
         raise HTTPException(400, "a bad or repeated chunk")

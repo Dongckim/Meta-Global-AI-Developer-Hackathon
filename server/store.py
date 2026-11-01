@@ -2241,6 +2241,7 @@ class RecordStore:
         if draft is not None:
             self.r["draft"] = draft
         runlog.write_run({**doc, "status": "active"}, self.root)
+        self._vision_release_locked(doc["run_id"], res)
         lab = self.run_label(self.active_run_doc())
         line = say("run_resumed", session, run=lab["display"], step=self.current_step())
         res["messages"].append(line + (" " + say("run_paused", session, run=paused) if paused else ""))
@@ -3150,22 +3151,47 @@ class RecordStore:
         run's end on an earlier one; not sure leaves only a hint. Every event is logged."""
         with self._lock:
             run = self.r.get("run") or {}
-            if run.get("run_id") != run_id or "private" in (run.get("mode"), run_mode()):
+            if run.get("run_id") != run_id:  # the run was left while its chunks were in analysis: kept for its return
+                self._vision_hold(run_id, events)
                 return
-            v = self._vision()
+            if "private" in (run.get("mode"), run_mode()):
+                return
             res: dict = {"messages": [], "cards": [], "ui": [], "info": {"dropped": 0, "drop_reasons": []}}
-            to_mark: dict = {}
-            for e in events:
-                step = runlog.step_at(self.r, e["ts"])
-                outcome = self._vision_outcome(e["well"], step, e, v, to_mark, res)
-                v["log"].append({"well": e["well"], "step": step, "ts": e["ts"], "confidence": e["confidence"],
-                                 "outcome": outcome})
-            if to_mark:
-                self._vision_mark_locked(to_mark, v, res)
+            self._vision_apply_locked(events, res)
             self._commit()
             for a in res["ui"]:
                 a.setdefault("id", uuid.uuid4().hex[:8])
                 self._broadcast({"kind": "ui", **a})
+
+    def _vision_apply_locked(self, events: list[dict], res: dict) -> None:
+        v = self._vision()
+        to_mark: dict = {}
+        for e in events:
+            step = runlog.step_at(self.r, e["ts"])
+            outcome = self._vision_outcome(e["well"], step, e, v, to_mark, res)
+            v["log"].append({"well": e["well"], "step": step, "ts": e["ts"], "confidence": e["confidence"],
+                             "outcome": outcome})
+        if to_mark:
+            self._vision_mark_locked(to_mark, v, res)
+
+    @property
+    def _late_path(self) -> Path:
+        return self.root / "vision_late.json"
+
+    def _vision_late(self) -> dict:
+        return json.loads(self._late_path.read_text()) if self._late_path.exists() else {}
+
+    def _vision_hold(self, run_id: str, events: list[dict]) -> None:
+        late = self._vision_late()
+        late.setdefault(run_id, []).extend(events)
+        self._late_path.write_text(json.dumps(late))
+
+    def _vision_release_locked(self, run_id: str, res: dict) -> None:
+        """A run back: the wells that finished analysis while it was away."""
+        late = self._vision_late()
+        if events := late.pop(run_id, None):
+            self._late_path.write_text(json.dumps(late))
+            self._vision_apply_locked(events, res)
 
     def _vision_outcome(self, well: str, step: int, e: dict, v: dict, to_mark: dict, res: dict) -> str:
         if not e.get("usable"):
