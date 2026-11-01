@@ -53,6 +53,7 @@ class Live:
         self.turn = threading.Condition()
         self.refs: list = []
         self.stopped = False
+        self.stop_why = ""
         self.fps = None
         self.wells: list = []
         self.created = time.time()
@@ -148,9 +149,10 @@ class Live:
             on_pending(self.run_id, sum(c["status"] == "analyzing" for s in list(_LIVE.values()) if s.run_id == self.run_id
                                         for c in list(s.chunks.values())))
 
-    def stop(self) -> None:
+    def stop(self, why: str = "") -> None:
         with self.lock:
             self.stopped = True
+            self.stop_why = why
             self._judge()
             self._save()
             fresh = self._new_events()
@@ -168,7 +170,7 @@ class Live:
     def out(self) -> dict:
         return {"id": self.id, "a1": self.a1, "pointer": self.pointer, "fps": self.fps, "wells": self.wells,
                 "targets": self.targets, "summary": self.summary(),
-                "stopped": self.stopped, "done": self.stopped and all(c["status"] != "analyzing" for c in self.chunks.values()),
+                "stopped": self.stopped, "stop_why": self.stop_why, "done": self.stopped and all(c["status"] != "analyzing" for c in self.chunks.values()),
                 "chunks": [{k: v for k, v in c.items() if k not in ("track", "inliers")} for _, c in sorted(self.chunks.items())],
                 "references": self.refs}
 
@@ -277,8 +279,14 @@ async def new_chunk(sid: str, background: BackgroundTasks, clip: UploadFile = Fi
     return {"n": n}
 
 
+class StopIn(BaseModel):
+    why: str = ""  # what ended it, for the log
+
+
 @router.post("/{sid}/stop")
-def stop(sid: str):
+def stop(sid: str, body: StopIn | None = None):
     """No more chunks are coming; the ones in hand finish, and `done` turns true."""
-    _live(sid).stop()
+    why = body.why if body else ""
+    print(f"sam live {sid}: stopped: {why or 'no reason given'}", flush=True)
+    _live(sid).stop(why)
     return _live(sid).out()

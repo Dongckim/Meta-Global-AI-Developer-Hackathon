@@ -277,6 +277,17 @@ for k in ("p1", "p2", "p3"):
 live_mod.on_pending = None
 print("V17 ok: chunks in analysis")
 
+# Why a session ended goes with it; the test page may not say.
+sid = "20261101-000000-abcd"
+live = live_mod.Live(sid, "tl", "pen")
+live.dir = Path(tempfile.mkdtemp())
+live_mod._LIVE[sid] = live
+assert c.post(f"/lab/sam-wells/live/{sid}/stop", json={"why": "stream downgraded: 9 frames in 3 s"}).json()["stop_why"].startswith("stream")
+assert json.loads((live.dir / "live.json").read_text())["stop_why"].startswith("stream")
+assert c.post(f"/lab/sam-wells/live/{sid}/stop").status_code == 200
+del live_mod._LIVE[sid]
+print("V18 ok: the reason a session stopped")
+
 # Every event is logged, and the numbers add up. The queue plays through.
 s = fresh()
 s.apply_calls([{"name": "mark_done", "args": {"wells": ["C2", "C3"]}}], "voice", "", "grammar", {})
