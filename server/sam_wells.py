@@ -42,7 +42,7 @@ from pathlib import Path
 
 import httpx
 
-from server import look
+from server import call_log, look
 
 BASE_URL = "https://api.meta.ai/v1"
 PLATE, TIP = "96-well plate", "pipette tip"
@@ -554,12 +554,15 @@ class MetaSam:
         body = look.build_sam_body(target, url)
         for attempt in range(IMAGE_TRIES):
             try:
+                t0 = time.perf_counter()
                 r = self.client.post(f"{BASE_URL}/responses", json=body,
                                      headers={**self.headers, "Accept": "text/event-stream"})
                 break
             except httpx.TransportError:
                 if attempt == IMAGE_TRIES - 1:
                     raise
+        print(call_log.line(body["model"], f"find {target}", int((time.perf_counter() - t0) * 1000),
+                            r.status_code), flush=True)
         r.raise_for_status()
         return look.matches(look.sse_text(r.text))
 

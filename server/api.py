@@ -73,6 +73,7 @@ from server import lab_sam
 from server import lab_sam_latency
 from server import lab_sam_stills
 from server import lab_sam_live
+from server import call_log
 from server import look as lookmod
 from server.screens import guide as _screen_guide
 from server.screens import READS as SCREEN_READS
@@ -562,10 +563,14 @@ def _check(name: str, resp: httpx.Response) -> None:
 async def _post(client: httpx.AsyncClient, name: str, *a, **k) -> httpx.Response:
     if recorded.on():
         return recorded.post(name)
+    t0 = time.perf_counter()
     try:
-        return await client.post(*a, **k)
+        resp = await client.post(*a, **k)
     except httpx.HTTPError as e:
         raise HTTPException(502, f"{name} unreachable: {e}")
+    print(call_log.line((k.get("json") or {}).get("model", ""), name, int((time.perf_counter() - t0) * 1000),
+                        resp.status_code, call_log.usage_of(resp)), flush=True)
+    return resp
 
 
 def _log_private_round(session: dict, t0: float, ms: int, payload: dict) -> None:
