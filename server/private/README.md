@@ -23,6 +23,29 @@ then `.venv/bin/modal run server/private/glimmer_modal.py::download` and deploy.
 **Do not redeploy during a demo or filming.** A request that lands while the
 container is replaced can fail with a 500.
 
+## First deploy
+
+Use your own [Modal](https://modal.com) account; the URL you get is billed to it.
+Our deployment URL is not shared. The weights are public on Hugging Face, so no
+token is needed. From the repo root:
+
+```bash
+.venv/bin/pip install modal
+.venv/bin/modal setup                                              # sign in to Modal
+.venv/bin/modal run server/private/glimmer_modal.py::download      # about 23 GB to a Modal volume, once
+.venv/bin/modal deploy server/private/glimmer_modal.py
+```
+
+The deploy prints a URL ending in `.modal.run`. Put it in `.env` and restart the
+server:
+
+```bash
+PRIVATE_LLM_URL=https://<the URL the deploy printed>.modal.run
+```
+
+In the app, open a run's Mode screen and pick Private. The first request after
+idle waits for a cold start (table below).
+
 Run every command from the repo root. Each deploy reads both settings, and a
 setting left out goes back to its default, so name both when they aren't
 default.

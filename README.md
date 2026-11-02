@@ -49,7 +49,7 @@ Hands-free lab assistant for Ray-Ban Meta glasses. It tracks a wet-lab run by vo
 
 <sub>Both devices are <a href="https://developers.meta.com/wearables/faq/">supported by Meta Wearables DAT</a>; capabilities vary by device. <a href="https://www.meta.com/ai-glasses/oakley-meta-vanguard-black-prizm-black/">Vanguard’s IP67 rating</a> describes dust and water resistance, not laboratory eye-protection certification.</sub>
 
-**Demo:** _link to be added on submission_ · [Try it without hardware](#try-it-without-hardware)
+**Demo:** _link to be added on submission_ · [Try it without hardware](#try-it-without-hardware) · [API keys](#api-keys)
 
 ## Features
 
@@ -116,7 +116,7 @@ A4, A9 and A12 were missed. Video-based results from earlier sessions are not li
 | Web search, photo questions | Meta Model API | Asks first, then Meta Model API |
 | Watching, robot handoff | On | Off |
 
-The run record is never sent to the Meta Model API. To deploy Glimmer, see [`server/private/README.md`](server/private/README.md).
+The run record is never sent to the Meta Model API. To deploy Glimmer on your own Modal account, see [`server/private/README.md`](server/private/README.md).
 
 ## Try it without hardware
 
@@ -145,7 +145,7 @@ xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/*.app
 xcrun simctl launch booted com.dongchankim.Meta-Global-AI-Developer-Hackathon -demo
 ```
 
-`-demo` pairs mock glasses through Meta's Mock Device Kit and shows a text box in place of the microphone. Open **Demo protocol** on Home and start a run, then type commands such as `B2 to B4 done`, `next step` and `finish`.
+`-demo` pairs mock glasses through Meta's Mock Device Kit and shows a text box in place of the microphone. Open **Demo protocol** on Home and start a run, then type commands such as `B2 to B4 done` and `next step`. On the last step, `finish` ends the run. Review the changes it lists, then choose to make robot code.
 
 | Works without a key | Result |
 |---|---|
@@ -165,6 +165,20 @@ xcrun simctl launch booted com.dongchankim.Meta-Global-AI-Developer-Hackathon -d
 
 No model replies are stored, and `MODEL_MODE=recorded` blocks every outside network call.
 
+## API keys
+
+Use your own keys. None are in this repo, and `.env` is gitignored.
+
+| Setting in `.env` | Needed for | How to get it |
+|---|---|---|
+| `MODEL_API_KEY` | Everything that calls Muse Spark, Muse Voice Transcribe or SAM 3.1 | Your Meta Model API key |
+| `PRIVATE_LLM_URL` | Private mode only (optional) | Deploy Muse Glimmer to your own Modal account: [`server/private/README.md`](server/private/README.md) |
+| `MODEL_MODE=recorded` | Running with no key | Nothing; see [Try it without hardware](#try-it-without-hardware) |
+
+```bash
+cp .env.example .env    # then fill in the values above
+```
+
 ## Setup
 
 **Requirements:** Python 3.11+, ffmpeg, [uv](https://docs.astral.sh/uv/), Xcode 26+, an iPad on iPadOS 26+, a Meta Model API key, and Ray-Ban Meta glasses with DAT access.
@@ -174,7 +188,7 @@ No model replies are stored, and `MODEL_MODE=recorded` blocks every outside netw
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r server/requirements.txt
-cp .env.example .env    # add your API key
+cp .env.example .env    # set MODEL_API_KEY to your own Meta Model API key
 .venv/bin/uvicorn server.api:app --host 0.0.0.0 --port 8000
 ```
 
