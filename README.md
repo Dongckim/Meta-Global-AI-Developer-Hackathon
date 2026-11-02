@@ -54,7 +54,7 @@ Hands-free lab assistant for Ray-Ban Meta glasses. It tracks a wet-lab run by vo
 ## Features
 
 - **Voice control:** log wells, advance steps, start timers and add notes without touching a screen.
-- **Watching:** follows the pipette tip through the glasses camera and logs the well. If unsure, it asks.
+- **Watching:** follows the pipette tip in photos from the glasses and asks you to confirm each well it saw.
 - **Protocol import:** extracts steps, wells and reagents from a PDF, photo or text, with source evidence for review.
 - **Questions in context:** reads labels from a glasses photo and answers web questions with sources.
 - **Robot handoff:** generates an Opentrons Flex protocol from the approved run and checks it against the record in simulation.
@@ -65,7 +65,7 @@ Hands-free lab assistant for Ray-Ban Meta glasses. It tracks a wet-lab run by vo
 ```mermaid
 flowchart LR
   G[Ray-Ban Meta] -->|audio| V[Muse Voice Transcribe]
-  G -->|video| W[Watching]
+  G -->|photos| W[Watching]
   V --> O[Orchestrator]
   O --> S[Muse Spark 1.3]
   W --> T[SAM 3.1]
@@ -90,23 +90,22 @@ Taps, voice and vision share one server action path, so the run record has a sin
 
 ## Watching
 
-The glasses stream 720×1280 video at 7 fps, analysed in 10-second chunks. SAM 3.1 finds the plate and wells and tracks the tip; ORB + RANSAC keep the plate aligned. A well counts when the tip stays within 4.5 mm of it for at least 1.0 s while still.
+During a pipetting step the app sends one photo a second from the glasses. SAM 3.1 finds the tip in each photo and the plate in every third photo, or sooner if the view moves. The first three photos correct the well grid. A well counts when the tip stays in it for at least two photos, and it is sure when the tip is within 3 mm of the well's center. Wells reach the run together after Watching stops, so a late photo can't change one already recorded. The app beeps while the plate is out of view.
 
 | Verdict | Action |
 |---|---|
-| Sure, in this step | Log it and announce it |
+| Sure, in this step | Ask to log it |
 | Sure, already logged | Keep the person's record |
-| Sure, not in this step | Ask before logging |
+| Sure, not in this step | Ask before logging, or flag it for review if the step has passed |
 | Not sure | Ask whether the well was filled |
 
-Results from real-bench sessions, with the true well order entered before recording. These are early and small, not a held-out set.
+Result from one session with a pen, A1 to A12 in order. It is a single early run, not a held-out set, and SAM took about 6.3 s per photo.
 
-| Session | Tool | Correct positions | Wrong sure verdicts |
-|---|---|---:|---:|
-| 215941 | Pipette tip | 6 / 6 | 0 |
-| 215638 | Pipette tip | 0 / 6 (all deferred as not sure) | 0 |
-| 224714 | Pen | 9 / 9 | 0 |
-| 001735 | Pen | 7 / 7 | 0 |
+| Session | Tool | Wells shown | In the right place | False wells |
+|---|---|---:|---:|---:|
+| 175631 | Pen | 9 / 12 | 9 / 9 | 0 |
+
+A4, A9 and A12 were missed. Video-based results from earlier sessions are not listed because Watching no longer uses video.
 
 ## Private mode
 
