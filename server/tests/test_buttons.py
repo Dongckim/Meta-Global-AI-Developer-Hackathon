@@ -268,7 +268,7 @@ for said, want in (("number 2", "mtt_assay.txt"), ("the first one", "drug_ab_dos
 j = c.post("/input", json={"action": {"id": "pick", "args": {"n": 9}}, "session": "bt"}).json()
 assert j["reply"] == "There are only 2.", j
 assert control_call("browse files", "import_file", []) is None
-# A file reviewed before: last in the list, and picking it opens its protocol, no second review.
+# A file reviewed before: last in the list, and picking it imports it, so Milo offers review again.
 api.store = fresh("import_file")
 raw17 = b"a protocol reviewed before"
 doc17 = lib.save({"title": "MTT", "conditions": {"a": {"label": "A", "wells": ["C2"], "replicates": 1}},
@@ -282,8 +282,11 @@ got17 = c.post("/screen/items", json={"screen": "import_file", "items": [
 assert [i["id"] for i in got17] == ["new.pdf", "old.pdf"] and got17[1]["title"] == "MTT assay", got17
 assert api.store.snapshot()["view"]["prompt"] == "2 files, 1 already reviewed. Which one?"
 j = c.post("/input", json={"text": "number 2", "session": "bt"}).json()
-assert not j.get("ui") and "MTT assay" in j["reply"], j
+assert noid(j["ui"]) == [{"action": "pick", "target": "old.pdf"}] and "MTT assay" in j["reply"], j
+j = c.post("/protocols/import", files={"file": ("old.pdf", raw17)}).json()
+assert j["card"]["kind"] == "import_known" and "review again" in j["reply"], j
 assert api.store.r["view"]["current"] == {"screen": "protocol_detail", "target": doc17["id"]}, api.store.r["view"]["current"]
+api.store.r["cards"] = []
 api.store.r["view"]["current"] = {"screen": "import_file", "target": ""}
 j = c.post("/input", json={"text": "number 1", "session": "bt"}).json()
 assert noid(j["ui"]) == [{"action": "pick", "target": "new.pdf"}], j

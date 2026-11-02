@@ -2222,12 +2222,9 @@ class RecordStore:
                                        else "I couldn't find that one.")
                 return
             hit = hits[0]
-        if hit.get("protocol"):  # reviewed already: its protocol, no second review
-            self._navigate_locked(res, session, "protocol_detail", hit["protocol"])
-            res["messages"].append(f"Opening {hit['title']}.")
-            return
+        # reviewed already or not, the import decides: a known one asks "open it or review again?"
         res["ui"].append({"action": "pick", "target": hit["id"]})
-        res["messages"].append(f"Opening {hit['name']}.")
+        res["messages"].append(f"Opening {hit.get('title') or hit['name']}.")
 
     # --- Start: draft review (registry actions; same logic as the REST routes) ---
 
