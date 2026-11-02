@@ -27,3 +27,10 @@
 - tried SAM at 3 and 3.5 fps on the iPad sessions 150444, 144925, 145113; stays 7 fps
 - why: 3 fps changed 3 of 18 wells (H5 to G5, F5 to F4, D6 and D7 to D7 and D8), 3.5 fps changed 1 (H5 to G5). Lost tracking was about the same.
 - tried leaving the pen and the hand behind it out of ORB (3f7054b): 144925 read H5 again, but following then waits for SAM's pen and mean delay rose to 41-50 s. Rolled back: it looked worse on the iPad.
+
+## 2026-11-01 (one a second, Diagnostics only: Watching's values unchanged)
+- new stills values: MIN_STILLS 2, MAX_GAP 2, PLATE_EVERY 3, MOVED 12, EDGE_MM 2, REF_PHOTOS 3; no ORB, each photo judged as it lands
+- result 175631 (A1 to A12, in order): 9 wells shown, all 9 in the right place, 0 false, 6.3 s a photo, 1.9 s after Stop. A4, A9 and A12 went in and weren't shown: 9 of 12.
+- why those three: A4, the pen plainly in view but SAM found none on 26-27, so one photo in the well. A9, put in by hand, but no photo reads column 9; not explained (a visit between photos, or read as column 10). A12, read in a replay, missed live; cause not reproduced.
+- after the deadline: SAM missing a pen in plain view; slanted pen reading about half a well outward in outer wells (A row, 12th column); head moves MOVED 12 misses, leaving a stale grid (66-67 read 12th-column work as A10).
+- tried and removed: dropping shaken photos by view change (25) dropped 21 of 40 with the head nearly still; the IMU path went with it.
