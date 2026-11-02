@@ -50,6 +50,9 @@ PLATE, TIP = "96-well plate", "pipette tip"
 WELL = "hole"
 #: What goes into the wells (SAM's prompt).
 POINTERS = (TIP, "pen")
+#: SAM finds a pointer as the whole tool ("pipette tip" alone finds none on
+#: the bench photos); its end over the plate is the tip (tip_ends).
+SAM_NAME = {TIP: "pipette"}
 PLATE_MM = (127.76, 85.48)  # ANSI/SLAS footprint
 A1_MM, PITCH_MM, WELL_D_MM = (14.38, 11.24), 9.0, 6.86
 #: A visit is where the tip stays >= DWELL_S within DWELL_MM (half the well pitch).
@@ -223,6 +226,42 @@ def long_axis(points: list) -> tuple:
     sxy = sum((p[0] - mx) * (p[1] - my) for p in points)
     ang = 0.5 * math.atan2(2 * sxy, sxx - syy)
     return (mx, my), (math.cos(ang), math.sin(ang))
+
+
+def follow_line(gray, points: list, side: int = 6, dark: float = 0.65, gap: int = 2, most: int = 300) -> list:
+    """The inked tip past the mask: from each end of the mask's long axis, the
+    pixels at most `dark` of both sides' brightness (black ink on the bright
+    plate; the plate's own seams are greyer), followed along that axis until
+    the line stops. -> the last point of
+    each line ([] for an end with none). On the dark desk the sides are dark too."""
+    h, w = gray.shape
+    (_, _), (ux, uy) = long_axis(points)
+    out = []
+    for (x, y), s in zip(tip_ends(points), (-1, 1)):
+        dx, dy, px, py = ux * s, uy * s, -uy * s, ux * s
+        last, miss = None, 0
+        for _ in range(most):
+            x, y = x + dx, y + dy
+            best = None
+            for t in (-1, 0, 1):  # the tip is on the tool's axis: a step that bends off it is the wells
+                cx, cy = round(x + px * t), round(y + py * t)
+                ax, ay, bx, by = round(cx + px * side), round(cy + py * side), round(cx - px * side), round(cy - py * side)
+                if not all(0 <= v < w for v in (cx, ax, bx)) or not all(0 <= v < h for v in (cy, ay, by)):
+                    continue
+                ratio = int(gray[cy, cx]) / max(1, min(int(gray[ay, ax]), int(gray[by, bx])))
+                if best is None or ratio < best[0]:
+                    best = (ratio, t)
+            if best is None:
+                break
+            if best[0] <= dark:
+                last, miss = (x + px * best[1], y + py * best[1]), 0
+            else:
+                miss += 1
+                if miss > gap:
+                    break
+        if last:
+            out.append(last)
+    return out
 
 
 def outline(points: list) -> list:
@@ -551,7 +590,7 @@ class MetaSam:
 
     def image(self, target: str, png: Path) -> list:
         url = look.data_url(as_jpeg(png)) if self.light else look.data_url(png.read_bytes(), "image/png")
-        body = look.build_sam_body(target, url)
+        body = look.build_sam_body(SAM_NAME.get(target, target), url)
         for attempt in range(IMAGE_TRIES):
             try:
                 t0 = time.perf_counter()
@@ -561,7 +600,7 @@ class MetaSam:
             except httpx.TransportError:
                 if attempt == IMAGE_TRIES - 1:
                     raise
-        print(call_log.line(body["model"], f"find {target}", int((time.perf_counter() - t0) * 1000),
+        print(call_log.line(body["model"], f"find {SAM_NAME.get(target, target)}", int((time.perf_counter() - t0) * 1000),
                             r.status_code), flush=True)
         r.raise_for_status()
         return look.matches(look.sse_text(r.text))

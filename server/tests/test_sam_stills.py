@@ -129,4 +129,16 @@ land(run, 1, "D8")
 T.deliver(run)
 assert len(got) == 1
 T.on_wells = T.on_pending = None
+
+# The inked tip past the mask: followed along the tool's axis to where the dark line stops.
+plate = np.full((400, 300), 200, np.uint8)
+plate[200:261, 149:152] = 50  # the tip, below the mask (y 100..200)
+plate[270:280, 160:163] = 50  # a well's shadow off the axis and past a gap: not the tip
+shaft = [(150.0, float(y)) for y in range(100, 201, 2)]
+end = max(sw.follow_line(plate, shaft), key=lambda p: p[1])
+assert abs(end[1] - 260) <= 1 and abs(end[0] - 150) <= 1, end
+plate[261:320, 149:152] = 140  # a grey seam between wells right after the ink, on the same axis
+assert abs(max(sw.follow_line(plate, shaft), key=lambda p: p[1])[1] - 260) <= 1  # the ink ends the tip
+desk = np.full((400, 300), 60, np.uint8)  # past the mask, no line on the desk: nothing to follow
+assert sw.follow_line(desk, shaft) == []
 print("ALL PASS")

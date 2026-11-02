@@ -144,10 +144,13 @@ def stays_out(stays: list) -> list:
     return out
 
 
-def place(run: Run, n: int, plates: list, pens: list, size: tuple) -> None:
-    """One photo's finds -> the wells so far. Photos can land out of order: wells_of takes them sorted."""
+def place(run: Run, n: int, plates: list, pens: list, size: tuple, gray=None) -> None:
+    """One photo's finds -> the wells so far. Photos can land out of order: wells_of takes them sorted.
+    A pipette's tip is inked black: SAM's mask often stops before it, so the line is followed in `gray`."""
     quad = own_grid(plates, pens, size)
     pen = {**pens[0], "points": sw.mask_points(pens[0], 2)} if pens else None
+    if pen and gray is not None and run.pointer == sw.TIP:
+        pen["points"] = pen["points"] + sw.follow_line(gray, pen["points"])
     with run.lock:
         if quad:
             run.quads[n] = quad
@@ -244,7 +247,7 @@ def _look(run: Run, n: int, data: bytes, landed: float) -> None:
         with ThreadPoolExecutor(2) as both:
             plates = both.submit(lab_sam.make_sam().image, sw.PLATE, png) if ask else None
             pens = both.submit(lab_sam.make_sam(light=True).image, run.pointer, png)
-        place(run, n, plates.result() if ask else [], pens.result(), size)
+        place(run, n, plates.result() if ask else [], pens.result(), size, gray)
         with run.lock:
             run.looked += 1
             run.look_s.append(time.perf_counter() - landed)
