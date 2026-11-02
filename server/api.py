@@ -2431,6 +2431,10 @@ async def look_crop(search_id: str):
     return FileResponse(path, media_type="image/jpeg")
 
 
+def _original_key(original_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "", original_id)[:64]
+
+
 @app.post("/protocols/import")
 async def protocol_import(file: list[UploadFile] = File(default=[]), text: str = Form(""),
                           filename: str = Form(""), original_id: str = Form(""),
@@ -2460,6 +2464,8 @@ async def protocol_import(file: list[UploadFile] = File(default=[]), text: str =
     known = lib.find_by_source(h, store.root)
     if known:
         print(f"import {h}: case 2, already the protocol {known['id']}", flush=True)
+        if oid := _original_key(original_id):
+            lib.set_original(known, h, oid, store.root)
         card = store.ask_known_import(known["id"], sess)
         return {"draft": None, "review": [], "errors": [], "reply": card["question"],
                 "speak": speak_text(card["question"]), "card": card, "ms": 0, "protocol_id": known["id"],
@@ -2609,7 +2615,7 @@ async def _import_once(uploads: list, text: str, filename: str, original_id: str
         raise HTTPException(502, f"protocol extraction failed: {data}")
     draft = proto.build_draft(data, proto.evidence_from_text(doc_text, pages), name)
     draft["meta"]["origin"] = origin
-    draft["meta"]["original_id"] = re.sub(r"[^A-Za-z0-9_-]", "", original_id)[:64]
+    draft["meta"]["original_id"] = _original_key(original_id)
     draft["meta"]["content_hash"] = h
     return draft, ms
 

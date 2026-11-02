@@ -593,8 +593,9 @@ with patch("httpx.AsyncClient", ScriptClient):
     short = lib.get(first, api.store.root)["short_title"] or lib.get(first, api.store.root)["name"]
     # ② open it
     k = spark()
-    j = c.post("/protocols/import", data={"text": DOC}).json()
+    j = c.post("/protocols/import", data={"text": DOC, "original_id": "new-copy/1"}).json()
     assert spark() == k and j["card"]["kind"] == "import_known", j
+    assert lib.get(first, api.store.root)["original_id"] == "new-copy1"  # the device's copy is the one it can open
     assert j["reply"] == f"Already saved as {short}. Open it or review again?", j["reply"]
     assert api.store.r["view"]["current"] == {"screen": "protocol_detail", "target": first}
     j = said("open it")

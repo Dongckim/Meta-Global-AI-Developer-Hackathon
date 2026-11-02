@@ -172,6 +172,14 @@ def save(plan: dict, name: str, source_filename: str, root: Path | None = None,
     return doc
 
 
+def set_original(doc: dict, src: str, original_id: str, root: Path | None = None) -> None:
+    """The device just imported this original again and holds it under `original_id`."""
+    for v in [doc] + (doc.get("versions") or []):
+        if v.get("source_hash") == src:
+            v["original_id"] = original_id
+    (_dir(root) / f"{doc['id']}.json").write_text(json.dumps(doc, ensure_ascii=False, indent=1))
+
+
 def get(protocol_id: str, root: Path | None = None) -> dict | None:
     if not protocol_id or "/" in protocol_id or protocol_id.startswith("."):
         return None
