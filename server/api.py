@@ -2456,13 +2456,14 @@ async def protocol_import(file: list[UploadFile] = File(default=[]), text: str =
     uploads = [(f.filename or "", await f.read()) for f in file]
     h = lib.source_hash([raw for _, raw in uploads], text)
     print(f"[import] recv {h} mode={run_mode()} files={[(n, len(b)) for n, b in uploads]} text={len(text)}", flush=True)
+    private = route("imports") == "glimmer"  # Private always reads it again
     draft = store.r.get("draft")
-    if draft and (draft.get("meta") or {}).get("content_hash") == h:
+    if not private and draft and (draft.get("meta") or {}).get("content_hash") == h:
         print(f"import {h}: case 3, its draft is in review", flush=True)
         reply = store.resume_review(sess)
         return {**_import_reply(draft, sess, 0), "reply": reply, "speak": speak_text(reply)}
     known = lib.find_by_source(h, store.root)
-    if known:
+    if known and not private:
         print(f"import {h}: case 2, already the protocol {known['id']}", flush=True)
         if oid := _original_key(original_id):
             lib.set_original(known, h, oid, store.root)
@@ -2525,6 +2526,9 @@ async def _extract_import(sess: dict, uploads: list, text: str, filename: str, o
         # the title the page says (flagged or not): a re-photographed page reads the same
         same = lib.find_by_title((draft["plan"].get("title") or "").strip() or proto.resolve_name(draft), store.root)
         draft["meta"]["same_title"] = same["id"] if same else ""
+        known = lib.find_by_source(h, store.root)
+        if known and known.get("source_hash") == h:  # read again in Private: saving fixes that protocol
+            draft["meta"]["protocol_id"] = known["id"]
         print(f"import {h}: case {4 if same else 1}", flush=True)
         store.save_draft(draft)  # opens Draft ready (⑤b)
         out = _import_reply(draft, sess, ms)

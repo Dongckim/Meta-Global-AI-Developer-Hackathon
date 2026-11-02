@@ -229,12 +229,12 @@ assert "Add 10 uL to C2." in calls.glimmer[1]["messages"][1]["content"][0]["text
 print("PV11 ok: a photo is transcribed on Glimmer first, then extracted, Meta 0")
 
 c = private()
-calls = Calls(chat(text=EMPTY_PLAN))
+calls = Calls(chat(text=EMPTY_PLAN), chat(text=EMPTY_PLAN))
 with patch.object(api, "_post", calls):
     r = post_import(c, data={"text": "Add 20 uL to C3."})
     again = post_import(c, data={"text": "Add 20 uL to C3."})
-assert r.status_code == 200 and len(calls.glimmer) == 1 and not calls.meta and again.status_code == 200, again.text
-print("PV12 ok: text on Glimmer; the same content doesn't extract twice")
+assert r.status_code == 200 and len(calls.glimmer) == 2 and not calls.meta and again.status_code == 200, again.text
+print("PV12 ok: text on Glimmer; the same content is read again")
 
 c = private()
 calls = Calls(chat(text="{not json"))

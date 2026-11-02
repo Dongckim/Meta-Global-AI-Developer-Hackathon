@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import server.api as api  # noqa: E402
 from server import protocol as proto  # noqa: E402
 from server.store import RecordStore  # noqa: E402
+from server.tone import set_run_mode  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 PDF = (ROOT / "samples" / "protocol_demo.pdf").read_bytes()
@@ -685,4 +686,29 @@ for said in ("all wells except Control", "the remaining wells", "Control and Dru
     assert settled(said)["type"] == "other", said
 assert proto.settle_other_target(CONTROL, "all wells", GROUPS) == CONTROL, "only `other` moves"
 print("P20 ok: other targets settle from their words, else stay for review")
+# P21. Private reads every import again on Glimmer, known or in review; saving
+# fixes the same protocol, no copy and no version question.
+other = {**good, "title": "Another assay", "short_title": "Another", "steps": STEPS[:-1]}
+with patch("httpx.AsyncClient", ScriptClient):
+    ScriptClient.queue = [extraction(other)]
+    c.post("/protocols/import", data={"text": DOC + "\nP21."})
+    act("save_draft")
+    pid = api.store.r["view"]["current"]["target"]
+    n, glimmer = count(), []
+
+    async def fake_glimmer(client, label, body):
+        glimmer.append(label)
+        return extraction(other)
+
+    set_run_mode("private")
+    with patch.object(api, "_glimmer_json", fake_glimmer):
+        c.post("/protocols/import", data={"text": DOC + "\nP21."})
+        j = c.post("/protocols/import", data={"text": DOC + "\nP21."}).json()  # in review: read again too
+    set_run_mode("full")
+    assert len(glimmer) == 2 and not j.get("card") and j["draft"], (glimmer, j)
+    assert api.store.r["draft"]["meta"]["protocol_id"] == pid, api.store.r["draft"]["meta"]
+    j = act("save_draft")
+    assert count() == n and not api.store.r["cards"], j
+print("P21 ok: Private reads known imports again on Glimmer")
+
 print("ALL PASS")
