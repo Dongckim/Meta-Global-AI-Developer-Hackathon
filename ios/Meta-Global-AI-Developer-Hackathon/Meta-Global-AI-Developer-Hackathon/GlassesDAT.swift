@@ -42,6 +42,8 @@ final class GlassesDAT {
     private(set) var showCameraRedirectConfirm = false
     #if DEBUG
     private(set) var mockEnabled = false
+    /// `-demo`: the mock glasses never connected (DemoBar says so).
+    var demoNotConnected = false
     #endif
 
     var status: LinkStatus {

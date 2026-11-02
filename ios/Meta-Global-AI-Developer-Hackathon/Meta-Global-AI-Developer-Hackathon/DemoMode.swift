@@ -40,9 +40,16 @@ extension GlassesDAT {
             glasses.don()
         }
         Task { @MainActor in
-            for _ in 0..<40 where status != .connected { try? await Task.sleep(for: .milliseconds(250)) }
-            Log.dat.info("[demo] glasses \(String(describing: self.status), privacy: .public)")
-            startLive(hold: true)
+            for tries in 0...15 {  // every 2 s for 30 s
+                if status == .connected {
+                    Log.dat.info("[demo] glasses connected after \(tries * 2) s")
+                    startLive(hold: true)
+                    return
+                }
+                if tries < 15 { try? await Task.sleep(for: .seconds(2)) }
+            }
+            Log.dat.info("[demo] glasses \(String(describing: self.status), privacy: .public) after 30 s")
+            demoNotConnected = true
         }
     }
 }
@@ -59,7 +66,10 @@ struct DemoBar: View {
                 if let frame = dat?.liveFrame {
                     Image(uiImage: frame).resizable().scaledToFit()
                 } else {
-                    Color.black.overlay(Text("Mock glasses…").font(.caption).foregroundStyle(.white))
+                    Color.black.overlay(
+                        Text(dat?.demoNotConnected == true ? "Mock glasses not connected — the rest of the app works"
+                                                           : "Mock glasses…")
+                            .font(.caption).multilineTextAlignment(.center).foregroundStyle(.white).padding(8))
                 }
             }
             .frame(width: 108, height: 192)
