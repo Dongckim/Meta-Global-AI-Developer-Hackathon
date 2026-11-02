@@ -1183,6 +1183,7 @@ struct ContentView: View {
 
     /// The app's files, newest first, told to the server ("number 2", a name).
     private func refreshFiles() {
+        OriginalStore.keepInFiles(protocols)
         let found = LocalFile.all()
         files = found
         Task {
@@ -1313,6 +1314,8 @@ struct ContentView: View {
                 async let r = PipClient.runs()
                 async let w = PipClient.searches()
                 protocols = try await p
+                // a source opened before the list came couldn't find its original id
+                if let s = viewingSource { openSourceTarget(s.target) }
                 runs = try await r
                 searches = try await w.searches
             } catch {
@@ -1338,6 +1341,8 @@ struct ContentView: View {
         }
         // the original lives under its import's id; older imports under the protocol id
         let oid = protocols.first { $0.id == parsed.protocolId }?.originalId ?? ""
+        let key = oid.isEmpty ? parsed.protocolId : oid
+        Log.imports.info("[source] \(t, privacy: .public) key=\(key, privacy: .public) listed=\(protocols.count) pdf=\(FileManager.default.fileExists(atPath: OriginalStore.url(protocolId: key).path))")
         viewingSource = ViewingSource(target: oid.isEmpty ? t : "protocol:\(oid)#\(parsed.fragment)",
                                       page: page, phrase: phrase)
     }
@@ -1345,8 +1350,7 @@ struct ContentView: View {
     private func openCurrentSource() {
         guard let pid = lab.run?.protocolId, !pid.isEmpty,
               lab.stepIndex < lab.planSteps.count else { return }
-        let s = lab.planSteps[lab.stepIndex]
-        openSource("protocol:\(pid)#step:\(lab.stepIndex + 1)", s.quotePage, s.quote)
+        openSourceTarget("protocol:\(pid)#step:\(lab.stepIndex + 1)")
     }
 
     private func say(_ s: String) {

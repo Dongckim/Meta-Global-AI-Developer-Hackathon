@@ -3,6 +3,20 @@ import Testing
 @testable import Meta_Global_AI_Developer_Hackathon
 
 struct HandoffTests {
+    /// An imported PDF returns to the folder once; another PDF of that name doesn't overwrite it.
+    @Test func keptOriginals() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let a = Data("a".utf8), b = Data("b".utf8)
+        OriginalStore.keep(a, name: "demo.pdf", in: dir)
+        OriginalStore.keep(a, name: "demo.pdf", in: dir)
+        OriginalStore.keep(b, name: "demo.pdf", in: dir)
+        OriginalStore.keep(b, name: "../demo.pdf", in: dir)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == ["demo 2.pdf", "demo.pdf"])
+        #expect(try Data(contentsOf: dir.appending(path: "demo.pdf")) == a)
+    }
+
     /// plate_map.csv fields: quoted commas and doubled quotes stay in one field.
     @Test func csvFields() {
         #expect(HandoffFilesScreen.fields(#"C3,"Drug A",excluded,1,voice,"bubbles, ""big""""#)

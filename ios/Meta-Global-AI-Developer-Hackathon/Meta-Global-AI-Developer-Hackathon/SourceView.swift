@@ -26,6 +26,31 @@ enum OriginalStore {
         dir().appending(path: "\(id)-p\(page).jpg")
     }
 
+    /// Imported PDFs back in the app's folder under their own names, so Browse files lists them.
+    /// shortcut: a kept PDF deleted in Files comes back while its protocol exists, fine for the demo.
+    static func keepInFiles(_ protocols: [ProtocolSummary]) {
+        let docs = dir().deletingLastPathComponent()
+        for p in protocols {
+            let id = p.originalId?.isEmpty == false ? p.originalId! : p.id
+            guard let name = p.sourceFilename, let data = try? Data(contentsOf: url(protocolId: id)) else { continue }
+            keep(data, name: name, in: docs)
+        }
+    }
+
+    /// Writes under `name`, or "name 2" when another file has it; nothing when it's already there.
+    static func keep(_ data: Data, name: String, in folder: URL) {
+        let file = URL(filePath: name).lastPathComponent  // the name came from the server
+        let stem = URL(filePath: file).deletingPathExtension().lastPathComponent
+        for n in 1...99 {
+            let u = folder.appending(path: n == 1 ? file : "\(stem) \(n).pdf")
+            guard let old = try? Data(contentsOf: u) else {
+                try? data.write(to: u, options: .atomic)
+                return
+            }
+            if old == data { return }
+        }
+    }
+
     /// Page photos of an import, in page order.
     static func photos(_ id: String) -> [URL] {
         guard !id.isEmpty else { return [] }
