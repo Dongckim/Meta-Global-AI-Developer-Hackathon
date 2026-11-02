@@ -1,4 +1,4 @@
-"""Diagnostics "One a second": a photo a second instead of video. Each photo is judged as it lands:
+"""Bench Watching and Diagnostics "One a second": a photo a second instead of video. Each photo is judged as it lands:
 SAM finds the pen, and the plate on every PLATE_EVERY-th photo or when the view moved; a photo's own
 plate (or the last usable one before it) gives the
 grid, corrected by the session's grid correction from the first REF_PHOTOS photos, and the wells the pen stayed in for at least MIN_STILLS photos show on the page right away.
@@ -36,6 +36,10 @@ MAX_GAP = 2  # a photo with no pen between two of the same well doesn't end the 
 _SID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
 _POOL = ThreadPoolExecutor(6)
 _RUNS: dict = {}
+#: Get a Bench run's new wells and its count of photos left after a step's end (server/api.py).
+on_wells = None
+on_pending = None
+_PENDING = threading.Lock()
 
 
 def onto_grid(mm: tuple) -> tuple:
@@ -71,8 +75,11 @@ def wells_of(track: list) -> list:
 
 
 class Run:
-    def __init__(self, sid: str, a1: str, pointer: str):
+    def __init__(self, sid: str, a1: str, pointer: str, run_id: str = "", started_at: float | None = None):
         self.id, self.a1, self.pointer = sid, a1, pointer
+        self.run_id, self.started_at = run_id, started_at or time.time()  # run_id empty: the test page
+        self.landed: set = set()  # photos in, and of those
+        self.finished: set = set()  # the ones judged
         self.dir = ROOT / sid
         self.lock = threading.Lock()
         self.quads: dict = {}  # photo: its plate's corners
@@ -132,7 +139,7 @@ def stays_out(stays: list) -> list:
         mid = sw.well_center_mm(sw.ROWS.index(s["well"][0]), int(s["well"][1:]) - 1)
         off = statistics.median(sw.math.dist(mm, mid) for mm in s["mms"])
         why = sw.not_sure_why(off, [sw.SURE_INLIERS])  # nothing is matched here: only off center counts
-        out.append({"well": s["well"], "first": s["ns"][0], "photos": len(s["ns"]), "off_mm": round(off, 1),
+        out.append({"well": s["well"], "first": s["ns"][0], "last": s["ns"][-1], "photos": len(s["ns"]), "off_mm": round(off, 1),
                     "confidence": "not_sure" if why else "sure", "why": why})
     return out
 
@@ -168,6 +175,30 @@ def read(run: Run, n: int) -> None:
         run.track[n] = (track[0][1], track[0][2])
         run.ends[n] = per[0][4]
         run.wells = stays_out(wells_of([(k, *run.track[k]) for k in sorted(run.track)]))
+
+
+def deliver(run: Run) -> None:
+    """The session's wells, all at once after Stop: every photo is judged and the correction is in."""
+    if not run.run_id or not on_wells:
+        return
+    with run.lock:
+        # usable: the app scales a small frame up, and ends a session the stream can't feed
+        events = [{"well": w["well"], "ts": run.started_at + w["first"], "confidence": w["confidence"], "usable": True}
+                  for w in run.wells]
+    if events:
+        on_wells(run.run_id, events)
+
+
+def report_pending(run: Run) -> None:
+    """Photos left of the Bench run's finished steps: during a step a few are always on their way."""
+    if not run.run_id or not on_pending or run.status == "recording":
+        return
+    with _PENDING:
+        count = 0
+        for r in [r for r in _RUNS.values() if r.run_id == run.run_id and r.status != "recording"]:
+            with r.lock:
+                count += len(r.landed - r.finished)
+        on_pending(run.run_id, count)
 
 
 def set_fit(run: Run, ref: dict) -> None:
@@ -221,6 +252,10 @@ def _look(run: Run, n: int, data: bytes, landed: float) -> None:
         print(f"sam stills {run.id}: photo {n} failed: {type(e).__name__}: {e}", flush=True)
         with run.lock:
             run.failed += 1
+    finally:
+        with run.lock:
+            run.finished.add(n)
+        report_pending(run)
 
 
 def _finish(run: Run) -> None:
@@ -230,13 +265,17 @@ def _finish(run: Run) -> None:
         seen = len(run.jobs)
         wait(run.jobs)
     run.took_s = round(time.perf_counter() - t0, 1)
+    deliver(run)
     run.status = "done"
+    report_pending(run)
     (run.dir / "stills.json").write_text(json.dumps({**run.out(), "a1": run.a1, "pointer": run.pointer}, indent=1))
 
 
 class StillsIn(BaseModel):
     a1: str
     pointer: str = sw.TIP
+    run_id: str = ""  # the Bench run this session reports to; empty: the test page
+    started_at: float | None = None  # when the first photo was taken
 
 
 @router.post("")
@@ -246,7 +285,7 @@ def new_run(body: StillsIn):
     if body.pointer not in sw.POINTERS:
         raise HTTPException(400, f"pointer is one of {', '.join(sw.POINTERS)}")
     sid = time.strftime("%Y%m%d-%H%M%S-") + os.urandom(2).hex()
-    run = _RUNS[sid] = Run(sid, body.a1, body.pointer)
+    run = _RUNS[sid] = Run(sid, body.a1, body.pointer, body.run_id, body.started_at)
     run.dir.mkdir(parents=True)
     return run.out()
 
@@ -271,14 +310,22 @@ async def photo(sid: str, frames: list[UploadFile] = File(...), numbers: str = F
     for n, f in zip(wanted, frames):
         data = await f.read()
         run.taken += 1
+        with run.lock:
+            run.landed.add(n)
         run.jobs.append(_POOL.submit(_look, run, n, data, time.perf_counter()))
     return {"frames": wanted}
 
 
+class StopIn(BaseModel):
+    why: str = ""  # what ended it, for the log
+
+
 @router.post("/{sid}/stop")
-def stop(sid: str):
+def stop(sid: str, body: StopIn | None = None):
     run = _run(sid)
     if run.status == "recording":
+        print(f"sam stills {sid}: stopped: {body.why if body and body.why else 'no reason given'}", flush=True)
         run.status = "finishing"
+        report_pending(run)
         threading.Thread(target=_finish, args=(run,), daemon=True).start()
     return run.out()

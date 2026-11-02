@@ -23,10 +23,9 @@
       "description": "Served snapshots and run details only: what the bench draws from the run so far. wells: well -> done (filled in its group) / now (a target of this step not done in it) / skipped (passed over unmarked, never done since) / excluded; others are untouched. legend: wells per condition. rows: the last steps passed (Done).",
       "properties": {
         "wells": {"type": "object", "additionalProperties": {"enum": ["done", "now", "skipped", "excluded"]}},
-        "vision": {"type": "object", "description": "What the glasses saw. seen: wells to mark with the eye. logged_by: wells only the camera logged. hints: not-sure wells of this step, drawn faint as C4?. pending, live snapshots only: chunks uploaded and not analysed yet.",
+        "vision": {"type": "object", "description": "What the glasses saw. seen: wells to mark with the eye. logged_by: wells only the camera logged. pending, live snapshots only: chunks uploaded and not analysed yet.",
                    "properties": {"seen": {"type": "array", "items": {"type": "string"}},
                                   "logged_by": {"type": "object", "additionalProperties": {"enum": ["vision"]}},
-                                  "hints": {"type": "array", "items": {"type": "string"}},
                                   "pending": {"type": "integer"}}},
         "legend": {"type": "array", "items": {"type": "object", "required": ["key", "label", "n"],
                    "properties": {"key": {"type": "string"}, "label": {"type": "string"}, "n": {"type": "integer"}}}},

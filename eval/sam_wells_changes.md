@@ -34,3 +34,8 @@
 - why those three: A4, the pen plainly in view but SAM found none on 26-27, so one photo in the well. A9, put in by hand, but no photo reads column 9; not explained (a visit between photos, or read as column 10). A12, read in a replay, missed live; cause not reproduced.
 - after the deadline: SAM missing a pen in plain view; slanted pen reading about half a well outward in outer wells (A row, 12th column); head moves MOVED 12 misses, leaving a stale grid (66-67 read 12th-column work as A10).
 - tried and removed: dropping shaken photos by view change (25) dropped 21 of 40 with the head nearly still; the IMU path went with it.
+
+## 2026-11-01 (Bench Watching: photos instead of video)
+- Watching now judges a photo a second with the stills values above (MIN_STILLS 2, MAX_GAP 2, PLATE_EVERY 3, MOVED 12, EDGE_MM 2); filled(), its FILL values and ORB no longer judge a Bench step. Diagnostics Continuous keeps video.
+- why: 175631 showed wells in seconds, not 30+. Its gaps (9 of 12) come along, see the note above.
+- the wells reach the run all at once after Stop: every photo is judged and the correction is in, so a late photo can't change a recorded well.

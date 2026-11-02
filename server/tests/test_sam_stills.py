@@ -92,4 +92,41 @@ assert not run.wells
 T.place(run, 1, ["plate"], pen("D8"), SIZE)
 assert shown(run) == ["D8"] and run.wells[0]["photos"] == 3, run.wells
 
+
+# A Bench run: its wells reach the store after Stop, all at once.
+got: list = []
+T.on_wells = lambda run_id, events: got.append((run_id, events))
+pend: list = []
+T.on_pending = lambda run_id, n: pend.append(n)
+
+
+def land(run: T.Run, n: int, well: str | None) -> None:
+    with run.lock:
+        run.landed.add(n)
+    T.place(run, n, ["plate"], pen(well) if well else [], SIZE)
+    with run.lock:
+        run.finished.add(n)
+
+
+run = T.Run("x", "tl", sw.TIP, "run1", 1000.0)
+T._RUNS["x"] = run
+for n, well in enumerate(["D8", "D8", None, None, None, None, "D7", "D7", None, None, None]):
+    land(run, n, well)
+assert shown(run) == ["D8", "D7"] and not got  # shown on the test page; the Bench waits for Stop
+with run.lock:
+    run.landed.add(11)  # still with SAM
+run.status = "finishing"
+T.report_pending(run)
+assert pend == [1]
+T.deliver(run)
+assert got == [("run1", [{"well": "D8", "ts": 1000.0, "confidence": "sure", "usable": True},
+                         {"well": "D7", "ts": 1006.0, "confidence": "sure", "usable": True}])], got
+
+# The test page has no run: nothing is passed on.
+run = T.Run("z", "tl", sw.TIP)
+land(run, 0, "D8")
+land(run, 1, "D8")
+T.deliver(run)
+assert len(got) == 1
+T.on_wells = T.on_pending = None
 print("ALL PASS")

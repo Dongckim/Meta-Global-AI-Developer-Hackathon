@@ -1,5 +1,5 @@
 """Wells the glasses saw, on a Bench run (fake events, no SAM): late wells land on their step,
-people's marks win, off-plan is asked, not sure stays a hint, Catch clears, Undo and "No, not C2",
+people's marks win, everything is asked in bundles, Catch clears, Undo and "No, not C2",
 Private and a dropped stream, and the lines Milo gets.
 
 Run: python -m server.tests.test_vision (runs on import).
@@ -47,6 +47,22 @@ def run_id(s):
 
 def sees(s, *wells, ts=None, confidence="sure", usable=True):
     s.vision_events(run_id(s), [{"well": w, "ts": ts or time.time(), "confidence": confidence, "usable": usable} for w in wells])
+    yes_seen(s)
+
+
+def answer(s, ok=True, kind="vision_seen"):
+    cid = next(k for k, c in s.r["cards"].items() if c["kind"] == kind)
+    res = {"messages": [], "cards": [], "ui": [], "info": {"dropped": 0, "drop_reasons": []}}
+    with s._lock:
+        s._apply_call({"name": "answer_card", "args": {"card_id": cid, "ok": ok}}, "voice", "", "card", {}, res, force=True)
+        s._commit()
+    return res
+
+
+def yes_seen(s):
+    """The sure wells' question, answered yes: the tests about what follows."""
+    while any(c["kind"] == "vision_seen" for c in s.r["cards"].values()):
+        answer(s)
 
 
 def said(text):
@@ -89,22 +105,31 @@ print("V1 ok: step times")
 s = fresh()
 sees(s, "C2", "C3", "C4")
 assert marks(s) == {(1, w): "vision" for w in ("C2", "C3", "C4")}
-spoken = [n["speak"] for n in s.snapshot()["vision"]["notices"]]
-assert spoken == ["C 2 to C 4 done."], spoken  # spelled for TTS
 b = s.snapshot()["bench"]
 assert b["vision"]["seen"] == ["C2", "C3", "C4"] and b["vision"]["logged_by"] == {w: "vision" for w in ("C2", "C3", "C4")}
 assert b["wells"]["C2"] == "done"
 sees(s, "C5")  # the step's last well offers the next step
 assert any(c["kind"] == "next_step" for c in s.r["cards"].values())
 sees(s, "C5")  # the same stay again: nothing new
-assert len(lines(s)) == 2 and outcomes(s)[-1] == "repeat"
-print("V2 ok: sure targets are logged, one line a chunk")
+assert outcomes(s)[-1] == "repeat" and len([c for c in s.r["cards"].values() if c["kind"] == "next_step"]) == 1
+s = fresh()
+s.vision_events(run_id(s), [{"well": w, "ts": time.time(), "confidence": "sure", "usable": True} for w in ("C2", "C3", "C4")])
+assert marks(s) == {} and [n["speak"] for n in s.snapshot()["vision"]["notices"]] == ["Log C 2 to C 4?"]  # spelled for TTS
+got_reply = answer(s)
+assert got_reply["messages"] == ["C2–C4 done."] and marks(s) == {(1, w): "vision" for w in ("C2", "C3", "C4")}, got_reply
+s = fresh()
+s.vision_events(run_id(s), [{"well": "C2", "ts": time.time(), "confidence": "sure", "usable": True}])
+answer(s, ok=False)
+assert marks(s) == {} and not s.r["cards"]
+sees(s, "C2")
+assert marks(s) == {} and outcomes(s)[-1] == "rejected_before"
+print("V2 ok: sure targets are asked together, a yes logs them, as vision")
 
 # Late: the stay was on a step already passed.
 s = fresh()
 go_next(s)
 sees(s, "C2", ts=s.r["step_log"][1]["ts"] - 5)
-assert marks(s) == {(1, "C2"): "vision"} and lines(s) == ["Step 1: C2 done."], lines(s)
+assert marks(s) == {(1, "C2"): "vision"}
 print("V3 ok: a late well lands on its step")
 
 # A person's mark of the same well stands, in silence, with the eye.
@@ -151,44 +176,38 @@ s.apply_calls([{"name": "end_run", "args": {}}], "voice", "", "grammar", {})
 assert any(c["kind"] == "end_run" for c in s.r["cards"].values())
 print("V8 ok: off plan on a passed step waits for the run's end")
 
-# Not sure: asked on a well the step wants, a hint on any other. Sure later settles it.
+# After Stop: a question for the sure wells, one for off plan, one for the not sure; each said once.
 s = fresh()
-sees(s, "C4", confidence="not_sure")
-sees(s, "H9", confidence="not_sure")
-assert marks(s) == {} and [c["kind"] for c in s.r["cards"].values()] == ["vision_check"]
-assert lines(s) == ["Did C4 go in?"], lines(s)
-assert s.snapshot()["bench"]["vision"]["hints"] == ["C4", "H9"]
-sees(s, "C4")
-assert marks(s) == {(1, "C4"): "vision"} and not s.r["cards"]
-assert s.snapshot()["bench"]["vision"]["hints"] == ["H9"]  # logged since
-print("V9 ok: not sure asks")
+s.vision_events(run_id(s), [{"well": w, "ts": time.time(), "confidence": c, "usable": True} for w, c in
+                            (("C2", "sure"), ("C3", "sure"), ("H9", "sure"), ("C4", "not_sure"), ("H8", "not_sure"),
+                             ("C5", "not_sure"), ("C3", "not_sure"), ("C4", "not_sure"))])
+assert [c["question"] for c in s.r["cards"].values()] == ["Log C2–C3?"], s.r["cards"]  # one at a time
+res = answer(s)
+assert res["messages"] == ["C2–C3 done."] and not res["cards"]
+card = next(iter(s.r["cards"].values()))
+assert len(s.r["cards"]) == 1 and card["kind"] == "catch" and card["payload"]["wells"] == ["H9"]
+assert not answer(s, ok=False, kind="catch")["cards"]  # the next is the notice's to say, not the reply's as well
+assert [c["payload"]["wells"] for c in s.r["cards"].values()] == [["C4", "C5", "H8"]], s.r["cards"]
+said("yes")
+assert all((1, w) in marks(s) for w in ("C4", "C5", "H8")) and [c["kind"] for c in s.r["cards"].values()] == ["next_step"]
+assert s.snapshot()["bench"]["vision"]["seen"] == ["C2", "C3", "C4", "C5", "H8"]
+assert len(lines(s)) == len(set(lines(s))) == 3, lines(s)
+assert "hints" not in s.snapshot()["bench"]["vision"]
+print("V9 ok: bundled questions, each said once")
 
-# Yes logs it and shows the eye; no drops it, and the camera won't bring it up again.
+# What's logged or ruled out while a question waits its turn drops off it; no stands for the bundle.
 s = fresh()
 sees(s, "C4", "C5", confidence="not_sure")
-assert [c["question"] for c in s.r["cards"].values()] == ["Did C4 go in?"], s.r["cards"]  # one at a time, oldest first
-sees(s, "C3", confidence="not_sure")
-assert lines(s) == ["Did C4 go in?"]
-said("yes")
-assert marks(s).get((1, "C4")) and [c["question"] for c in s.r["cards"].values()] == ["Did C5 go in?"], s.r["cards"]
-said("yes")
-assert [c["question"] for c in s.r["cards"].values()] == ["Did C3 go in?"], s.r["cards"]
-said("yes")
-assert marks(s).get((1, "C5")) and marks(s).get((1, "C3")) and not s.r["cards"]
-assert s.snapshot()["bench"]["vision"]["seen"] == ["C3", "C4", "C5"]
-assert lines(s) == ["Did C4 go in?", "Did C5 go in?", "Did C3 go in?"], lines(s)
-s = fresh()
-sees(s, "C4", "C5", confidence="not_sure")
-sees(s, "C5")  # logged while it waits its turn: never asked
+s.apply_calls([{"name": "mark_done", "args": {"wells": ["C5"]}}], "voice", "", "grammar", {})
 said("no")
-assert not s.r["cards"] and lines(s) == ["Did C4 go in?", "C5 done."], lines(s)
-s = fresh()
-sees(s, "C4", confidence="not_sure")
-said("no")
-assert marks(s) == {} and not s.r["cards"] and s.snapshot()["bench"]["vision"]["hints"] == []
+assert (1, "C4") not in marks(s) and not s.r["cards"]
 sees(s, "C4", confidence="not_sure")
 sees(s, "C4")
-assert marks(s) == {} and not s.r["cards"]
+assert (1, "C4") not in marks(s) and not s.r["cards"]
+s = fresh()
+go_next(s)
+sees(s, "C4", confidence="not_sure", ts=s.r["step_log"][1]["ts"] - 5)
+assert [c["payload"]["step"] for c in s.r["cards"].values()] == [1]  # a stop by moving on: still asked
 print("V23 ok: the person settles a not-sure well")
 
 # Catch clears when the camera logs the well after all, asked or already skipped.
@@ -234,6 +253,7 @@ s = api.store = fresh()
 sees(s, "H9")  # asks about H9
 sees(s, "C2")
 said("No, H9")  # the card asking about H9: its no
+yes_seen(s)
 assert not s.r["cards"] and (1, "H9") not in marks(s) and (1, "C2") in marks(s)
 sees(s, "H8")
 said("No, C2")  # another well: the camera's mark, and the card stays
@@ -409,8 +429,7 @@ assert marks(s) == {} and json.loads(s._late_path.read_text())[first] == sees_la
 res = {"messages": [], "cards": [], "ui": [], "info": {"dropped": 0, "drop_reasons": []}}
 with s._lock:
     s._resume_locked(first, {"id": "t"}, res)
-assert marks(s).get((1, "C2")) == "vision", marks(s)
-assert lines(s) and first not in json.loads(s._late_path.read_text())
+assert lines(s) == ["Log C2?"] and first not in json.loads(s._late_path.read_text())
 print("V22 ok: a run that was left gets its wells back")
 
 # Every event is logged, and the numbers add up. The queue plays through.
