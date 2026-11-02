@@ -790,14 +790,13 @@ struct RecordSnapshot: Decodable {
         var legend: [Legend]
         var rows: [Row]
         var vision: BenchVision?
-        /// What the glasses saw. seen and logged_by: the eye; hints: this step's not-sure wells, faint "C4?".
+        /// What the glasses saw. seen and logged_by: the eye.
         struct BenchVision: Decodable, Equatable {
             var seen: [String]?
             var loggedBy: [String: String]?
-            var hints: [String]?
             /// Chunks uploaded and not analysed yet.
             var pending: Int?
-            enum CodingKeys: String, CodingKey { case seen, loggedBy = "logged_by", hints, pending }
+            enum CodingKeys: String, CodingKey { case seen, loggedBy = "logged_by", pending }
         }
         struct Legend: Decodable, Equatable { var key: String; var label: String; var n: Int }
         struct Row: Decodable, Equatable { var wells: String; var name: String; var state: String }

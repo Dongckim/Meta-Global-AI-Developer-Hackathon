@@ -79,6 +79,27 @@ enum VisionAPI {
         return try await send(req)
     }
 
+    /// A Bench step's session: a photo a second, judged as each lands (server/lab_sam_stills.py).
+    struct PhotoRun: Decodable { let id: String }
+
+    static func newPhotos(a1: String, pointer: String, bench: BenchLink) async throws -> PhotoRun {
+        var req = URLRequest(url: url("stills"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "a1": a1, "pointer": pointer, "run_id": bench.runId, "started_at": Date.now.timeIntervalSince1970,
+        ] as [String: Any])
+        return try await send(req)
+    }
+
+    static func stopPhotos(_ id: String, why: String) async throws -> PhotoRun {
+        var req = URLRequest(url: url("stills/\(id)/stop"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["why": why])
+        return try await send(req)
+    }
+
     static func live(_ id: String) async throws -> Live { try await send(URLRequest(url: url("live/\(id)"))) }
 
     static func stopLive(_ id: String, why: String) async throws -> Live {
@@ -315,6 +336,8 @@ final class WellChunks: @unchecked Sendable {
     private let fps: Int
     private let closed: @Sendable (Chunk) -> Void
     private let stillsReady: @Sendable ([(frame: Int, jpeg: Data)]) -> Void
+    /// Set: a photo a second goes here (number, JPEG) and no video is written.
+    private let photo: (@Sendable (Int, Data) -> Void)?
     private var stills: [(frame: Int, jpeg: Data)] = []
     private let images = CIContext()
     private var open: [Open] = []
@@ -327,8 +350,9 @@ final class WellChunks: @unchecked Sendable {
     private var lowFrames = 0
 
     init(fps: Int, stillsReady: @escaping @Sendable ([(frame: Int, jpeg: Data)]) -> Void,
-         closed: @escaping @Sendable (Chunk) -> Void) {
+         closed: @escaping @Sendable (Chunk) -> Void, photo: (@Sendable (Int, Data) -> Void)? = nil) {
         self.fps = fps
+        self.photo = photo
         self.stillsReady = stillsReady
         self.closed = closed
     }
@@ -350,6 +374,13 @@ final class WellChunks: @unchecked Sendable {
             if let last = arrivals.last { worstGap = max(worstGap, now - last) }
             arrivals.append(now)
             sizes.insert("\(CVPixelBufferGetWidth(raw))x\(CVPixelBufferGetHeight(raw))")
+            if let photo {
+                if frame % fps == 0,
+                   let jpeg = images.jpegRepresentation(of: CIImage(cvPixelBuffer: pb), colorSpace: CGColorSpaceCreateDeviceRGB()) {
+                    photo(frame / fps, jpeg)
+                }
+                return
+            }
             if stillFrames.contains(frame),
                let jpeg = images.jpegRepresentation(of: CIImage(cvPixelBuffer: pb), colorSpace: CGColorSpaceCreateDeviceRGB()) {
                 stills.append((frame, jpeg))
@@ -483,6 +514,7 @@ final class SamWellRun {
     var error: String?
 
     private var id: String?
+    private var photos = false
     private var chunks: WellChunks?
     private var uploads: [Task<Void, Never>] = []
     private var polling: Task<Void, Never>?
@@ -497,6 +529,10 @@ final class SamWellRun {
 
     func start(a1: String, pointer: String, targets: String, fps: Int, bench: VisionAPI.BenchLink? = nil) async {
         guard phase == .idle else { return }
+        if let bench {
+            await startPhotos(a1: a1, pointer: pointer, fps: fps, bench: bench)
+            return
+        }
         do {
             let s = try await VisionAPI.newLive(a1: a1, pointer: pointer, targets: targets, bench: bench)
             id = s.id
@@ -520,6 +556,31 @@ final class SamWellRun {
                 guard let self, await self.poll() else { return }
             }
         }
+    }
+
+    private func startPhotos(a1: String, pointer: String, fps: Int, bench: VisionAPI.BenchLink) async {
+        do {
+            let s = try await VisionAPI.newPhotos(a1: a1, pointer: pointer, bench: bench)
+            id = s.id
+            photos = true
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
+        chunks = WellChunks(fps: fps, stillsReady: { _ in }, closed: { _ in }, photo: { n, jpeg in
+            Task { @MainActor [weak self] in self?.send(photo: n, jpeg) }
+        })
+        phase = .recording
+    }
+
+    /// A lost photo costs one second of the stay: no retries behind the next one.
+    private func send(photo n: Int, _ jpeg: Data) {
+        guard let id else { return }
+        uploads.append(Task {
+            do { try await VisionAPI.uploadStills(path: "stills/\(id)/photo", stills: [(n, jpeg)]) } catch {
+                Log.dat.error("[samwell] photo \(n) upload failed: \(error.localizedDescription, privacy: .public)")
+            }
+        })
     }
 
     private func send(_ chunk: WellChunks.Chunk) {
@@ -573,6 +634,11 @@ final class SamWellRun {
             try? await Task.sleep(for: .seconds(1))  // the last writers report through finishWriting
             for upload in uploads { await upload.value }
             guard let id else { return }
+            if photos {
+                _ = try? await VisionAPI.stopPhotos(id, why: why)
+                phase = .done
+                return
+            }
             do { take(try await VisionAPI.stopLive(id, why: why)) } catch { self.error = error.localizedDescription }
         }
     }
@@ -580,7 +646,7 @@ final class SamWellRun {
 
 // MARK: - Bench
 
-/// Runs one session per pipetting step: stream, Vision finds the plate, then chunks. Told what's
+/// Runs one session per pipetting step: stream, Vision finds the plate, then a photo a second. Told what's
 /// wanted on every change (`update`); anything else (step over, run paused or ended, Private) is nil.
 @MainActor @Observable
 final class VisionWatcher {
@@ -609,6 +675,22 @@ final class VisionWatcher {
     @ObservationIgnored private weak var voice: VoiceSession?
     @ObservationIgnored private var gen = 0
     private static let longestWait: TimeInterval = 15
+    /// The first frame Vision saw: the stream coming up isn't the plate being out of view.
+    @ObservationIgnored private var firstFrame: Double?
+    /// Beeps while it's true: Vision has no plate.
+    @ObservationIgnored private var blind = false {
+        didSet {
+            guard blind != oldValue else { return }
+            beeps?.cancel()
+            beeps = !blind ? nil : Task {
+                while !Task.isCancelled {
+                    SamTone.highDing.play()
+                    try? await Task.sleep(for: .milliseconds(600))
+                }
+            }
+        }
+    }
+    @ObservationIgnored private var beeps: Task<Void, Never>?
 
     /// `why`: what took it off, when `new` is nil.
     func update(_ new: Want?, why: String, dat: GlassesDAT?, voice: VoiceSession) {
@@ -631,6 +713,8 @@ final class VisionWatcher {
         self.dat = dat
         self.voice = voice
         aim = PlateAimState()
+        firstFrame = nil
+        blind = false
         chip = .looking
         Log.dat.info("[watching] step \(new.step) looking for the plate")
         let finder = PlateFinder { [weak self] quad in
@@ -653,13 +737,17 @@ final class VisionWatcher {
 
     private func aimed(_ quad: [CGPoint]?, gen g: Int) {
         guard g == gen else { return }
-        let event = aim.update(seen: quad != nil, at: CACurrentMediaTime())
+        let now = CACurrentMediaTime()
+        let event = aim.update(seen: quad != nil, at: now)
+        let since = firstFrame ?? now
+        firstFrame = since
         if run == nil {
             if chip == .looking, case .entered = event { Task { await begin(gen: g) } }
         } else if chip != .looking {  // recording goes on either way: a hand over the plate is normal
             if case .entered = event { chip = .watching }
             if event == .lost { chip = .plateLost }
         }
+        blind = !aim.inView && now - since >= 2  // the 2 s of "lost": from the start too
     }
 
     private func begin(gen g: Int) async {
@@ -705,6 +793,7 @@ final class VisionWatcher {
         dat?.stopWatching()
         voice?.keepLiveClosed = false
         finder = nil
+        blind = false
         chip = .off
     }
 
@@ -801,7 +890,7 @@ final class VisionNotices {
 /// The temporary chip (no Figma yet): is the camera following this step?
 struct VisionChip: View {
     let chip: VisionWatcher.Chip
-    /// Chunks still in analysis: recording may be over, the wells aren't.
+    /// Photos still being judged: recording may be over, the wells aren't.
     var pending = 0
     var u: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduce
