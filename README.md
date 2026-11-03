@@ -69,7 +69,7 @@
 
 > **3-minute demo:** _link added on submission_
 
-We filmed it through the glasses on a real bench, with a real plate and pipette. Every model call in the video is live.
+We filmed it through the glasses at a desk, with a real 96-well plate and pipette. Every model call in the video is live.
 
 <br/>
 
@@ -122,7 +122,7 @@ We interviewed 6 biology PhDs and lab researchers. They leave the bench to write
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/stats-dark.svg" />
-  <img src="docs/assets/stats-light.svg" alt="14× faster well verification (84 s → 6 s per photo) · 0 false wells in live bench sessions · 4× faster Private mode (6.0 s → 1.5 s per turn) · 99% prompt-cache hits, voice turns 23% faster" width="100%" />
+  <img src="docs/assets/stats-light.svg" alt="14× faster well verification (84 s → 6 s per photo) · 0 false wells in both recorded sessions · 4× faster Private mode (6.0 s → 1.5 s per turn) · 99% prompt-cache hits, voice turns 23% faster" width="100%" />
 </picture>
 
 - **One agent**: Milo, a Muse Spark agent, turns speech into tool calls, several at once, and picks the glasses camera or the web.

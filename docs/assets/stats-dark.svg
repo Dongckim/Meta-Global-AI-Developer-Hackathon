@@ -6,7 +6,7 @@
 <rect x="244.5" y="0.5" width="227.0" height="167" rx="12" fill="#161b22" stroke="#30363d"/>
 <text x="358.0" y="72" text-anchor="middle" font-size="46" font-weight="700" fill="#4c8dff">0</text>
 <text x="358.0" y="112" text-anchor="middle" font-size="16" font-weight="600" fill="#e6edf3">false wells</text>
-<text x="358.0" y="138" text-anchor="middle" font-size="13" fill="#8b949e">live bench sessions</text>
+<text x="358.0" y="138" text-anchor="middle" font-size="13" fill="#8b949e">both recorded sessions</text>
 <rect x="488.5" y="0.5" width="227.0" height="167" rx="12" fill="#161b22" stroke="#30363d"/>
 <text x="602.0" y="72" text-anchor="middle" font-size="46" font-weight="700" fill="#4c8dff">4×</text>
 <text x="602.0" y="112" text-anchor="middle" font-size="16" font-weight="600" fill="#e6edf3">faster Private mode</text>
