@@ -24,11 +24,10 @@
 
 <p>
 <img src="https://img.shields.io/badge/Muse_Spark-1.3-0866FF?style=flat-square&logo=meta&logoColor=white" alt="Muse Spark 1.3" />
-<img src="https://img.shields.io/badge/Muse_Voice-Transcribe-0866FF?style=flat-square&logo=meta&logoColor=white" alt="Muse Voice Transcribe" />
+<img src="https://img.shields.io/badge/Voice_Transcribe-1.0-0866FF?style=flat-square&logo=meta&logoColor=white" alt="Muse Voice Transcribe 1.0" />
 <img src="https://img.shields.io/badge/SAM-3.1-0866FF?style=flat-square&logo=meta&logoColor=white" alt="SAM 3.1" />
-<img src="https://img.shields.io/badge/Muse_Glimmer-open_weights-0866FF?style=flat-square&logo=meta&logoColor=white" alt="Muse Glimmer" />
-<br/>
-<img src="https://img.shields.io/badge/Meta_Wearables-DAT_1.0-0866FF?style=flat-square&logo=meta&logoColor=white" alt="Meta Wearables DAT 1.0" />
+<img src="https://img.shields.io/badge/Muse_Glimmer-30B-0866FF?style=flat-square&logo=meta&logoColor=white" alt="Muse Glimmer 30B" />
+<img src="https://img.shields.io/badge/Wearables_DAT-1.0.1-0866FF?style=flat-square&logo=meta&logoColor=white" alt="Meta Wearables DAT 1.0.1" />
 </p>
 
 <sub>Theme: <b>Push the Frontier</b> · Built by a team of two during the <a href="https://dev.meta.ai/events/global-hackathon">Meta Global AI Developer Hackathon</a> · Oct 26 – Nov 4, 2026</sub>
@@ -36,6 +35,23 @@
 </div>
 
 <br/>
+
+## Team
+
+<table width="100%">
+  <tr>
+    <td align="center" width="50%">
+      <b>Dongchan Kim</b><br/>
+      <sub>Team lead · engineering</sub><br/>
+      <a href="https://github.com/Dongckim">GitHub</a> · <a href="https://www.linkedin.com/in/dongckim99/">LinkedIn</a>
+    </td>
+    <td align="center" width="50%">
+      <b>Eunbi Cho</b><br/>
+      <sub>Product and interaction design</sub><br/>
+      <a href="https://github.com/Eunnox">GitHub</a> · <a href="https://www.linkedin.com/in/eunbicho-eunnox/">LinkedIn</a>
+    </td>
+  </tr>
+</table>
 
 ## Demo
 
@@ -439,23 +455,6 @@ eval/      Evaluation scripts and the log of every tuned Watching threshold (res
 samples/   Demo protocols (made-up data)
 docs/      Design notes and README images
 ```
-
-## Team
-
-<table width="100%">
-  <tr>
-    <td align="center" width="50%">
-      <a href="https://github.com/Dongckim"><img src="https://github.com/Dongckim.png" width="120" alt="Dongchan Kim" /></a><br/>
-      <b><a href="https://github.com/Dongckim">Dongchan Kim</a></b><br/>
-      <sub>Team lead · engineering</sub>
-    </td>
-    <td align="center" width="50%">
-      <a href="https://github.com/Eunnox"><img src="https://github.com/Eunnox.png" width="120" alt="Eunbi Cho" /></a><br/>
-      <b><a href="https://github.com/Eunnox">Eunbi Cho</a></b><br/>
-      <sub>Product and interaction design</sub>
-    </td>
-  </tr>
-</table>
 
 <sub>Everything in this repository was built during the hackathon. All data is made up.</sub>
 
