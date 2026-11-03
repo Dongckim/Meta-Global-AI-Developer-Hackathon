@@ -492,7 +492,7 @@ Nothing below is bundled in this repository. Each part is downloaded when you se
 | Meta Wearables Device Access Toolkit 1.0.1 | Glasses audio, photos and Mock Device Kit | [Meta Wearables Developer Terms](https://wearables.developer.meta.com/terms) and [Acceptable Use Policy](https://wearables.developer.meta.com/acceptable-use-policy) |
 | Muse Spark, Voice Transcribe, SAM 3.1 | Hosted models | Meta Model API terms of your own account |
 | `meta-sam-parser` | Reading SAM 3.1 responses | SAM License |
-| Muse Glimmer weights | Private mode | Meta's license for the weights, accepted when you download them |
+| Muse Glimmer 30B weights and DFlash drafter ([`meta-models/Muse-Glimmer-30B-GGUF`](https://huggingface.co/meta-models/Muse-Glimmer-30B-GGUF)) | Private mode | Apache-2.0 |
 | llama.cpp | Serving Glimmer | MIT |
 | Opentrons API | Robot simulator | Apache-2.0 |
 | OpenCV (`opencv-python-headless`) | Feature matching | Apache-2.0 |
