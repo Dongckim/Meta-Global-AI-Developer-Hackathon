@@ -1,33 +1,34 @@
 <div align="center">
 
-<img src="docs/assets/icon.png" alt="" width="96" />
+<p>
+  <img src="docs/assets/icon.png" alt="" width="96" /><br/>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg" />
+    <img src="docs/assets/logo-light.svg" alt="Glassistant" width="360" />
+  </picture>
+</p>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg" />
-  <img src="docs/assets/logo-light.svg" alt="Glassistant" width="360" />
-</picture>
+<h3>A hands-free lab assistant.</h3>
 
-<br/>
+<p>Meta AI glasses see the bench. Meta models keep the record.<br/>
+<em>Voice is the new interface. Speak the run, the glasses check it, a robot repeats it.</em></p>
 
-### A hands-free lab assistant. Meta AI glasses see the bench. Meta models keep the record.
-
-**Voice is the new interface. Speak the run, the glasses check it, a robot repeats it.**
+<p>
+<a href="#demo">Demo</a> &nbsp;·&nbsp;
+<a href="#see-it-in-action">Features</a> &nbsp;·&nbsp;
+<a href="#how-it-works">How it works</a> &nbsp;·&nbsp;
+<a href="#performance">Performance</a> &nbsp;·&nbsp;
+<a href="#try-it-without-hardware">Try it</a> &nbsp;·&nbsp;
+<a href="#setup">Setup</a>
+</p>
 
 <p>
 <img src="https://img.shields.io/badge/Muse_Spark-1.3-0866FF?style=flat-square&logo=meta&logoColor=white" alt="Muse Spark 1.3" />
 <img src="https://img.shields.io/badge/Muse_Voice-Transcribe-0866FF?style=flat-square&logo=meta&logoColor=white" alt="Muse Voice Transcribe" />
 <img src="https://img.shields.io/badge/SAM-3.1-0866FF?style=flat-square&logo=meta&logoColor=white" alt="SAM 3.1" />
 <img src="https://img.shields.io/badge/Muse_Glimmer-open_weights-0866FF?style=flat-square&logo=meta&logoColor=white" alt="Muse Glimmer" />
-<img src="https://img.shields.io/badge/Meta_Wearables-DAT_1.0-1C2B33?style=flat-square&logo=meta&logoColor=white" alt="Meta Wearables DAT 1.0" />
-</p>
-
-<p>
-<a href="#demo"><b>Demo</b></a> &nbsp;·&nbsp;
-<a href="#see-it-in-action"><b>Features</b></a> &nbsp;·&nbsp;
-<a href="#how-it-works"><b>How it works</b></a> &nbsp;·&nbsp;
-<a href="#performance"><b>Performance</b></a> &nbsp;·&nbsp;
-<a href="#try-it-without-hardware"><b>Try it</b></a> &nbsp;·&nbsp;
-<a href="#setup"><b>Setup</b></a>
+<br/>
+<img src="https://img.shields.io/badge/Meta_Wearables-DAT_1.0-0866FF?style=flat-square&logo=meta&logoColor=white" alt="Meta Wearables DAT 1.0" />
 </p>
 
 <sub>Theme: <b>Push the Frontier</b> · Built by a team of two during the <a href="https://dev.meta.ai/events/global-hackathon">Meta Global AI Developer Hackathon</a> · Oct 26 – Nov 4, 2026</sub>
