@@ -385,6 +385,6 @@ docs/      Design notes
 | | Role |
 |---|---|
 | **Dongchan Kim** | Team lead · engineering |
-| **Eunbi [last name]** | Product and interaction design |
+| **[Eunbi Cho](https://github.com/Eunnox)** | Product and interaction design |
 
 <sub>Everything in this repository was built during the hackathon. All data is synthetic.</sub>
