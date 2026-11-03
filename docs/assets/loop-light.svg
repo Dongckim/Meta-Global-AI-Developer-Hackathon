@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="128" viewBox="0 0 960 128" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<defs><marker id="ar" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8c959f"/></marker></defs>
+<rect x="0.5" y="0.5" width="289.6666666666667" height="127" rx="12" fill="#f6f8fa" stroke="#d0d7de"/>
+<circle cx="145.33333333333334" cy="34" r="15" fill="#0866ff"/>
+<text x="145.33333333333334" y="39.5" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">1</text>
+<text x="145.33333333333334" y="78" text-anchor="middle" font-size="17" font-weight="600" fill="#1f2328">Run hands-free</text>
+<text x="145.33333333333334" y="104" text-anchor="middle" font-size="13" fill="#59636e">Talk to Milo, or just pipette</text>
+<line x1="298.6666666666667" y1="64.0" x2="326.6666666666667" y2="64.0" stroke="#8c959f" stroke-width="2" marker-end="url(#ar)"/>
+<rect x="335.1666666666667" y="0.5" width="289.6666666666667" height="127" rx="12" fill="#f6f8fa" stroke="#d0d7de"/>
+<circle cx="480.0" cy="34" r="15" fill="#0866ff"/>
+<text x="480.0" y="39.5" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">2</text>
+<text x="480.0" y="78" text-anchor="middle" font-size="17" font-weight="600" fill="#1f2328">Record what happened</text>
+<text x="480.0" y="104" text-anchor="middle" font-size="13" fill="#59636e">Glasses see each well; unsure → ask</text>
+<line x1="633.3333333333334" y1="64.0" x2="661.3333333333334" y2="64.0" stroke="#8c959f" stroke-width="2" marker-end="url(#ar)"/>
+<rect x="669.8333333333334" y="0.5" width="289.6666666666667" height="127" rx="12" fill="#f6f8fa" stroke="#d0d7de"/>
+<circle cx="814.6666666666667" cy="34" r="15" fill="#0866ff"/>
+<text x="814.6666666666667" y="39.5" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">3</text>
+<text x="814.6666666666667" y="78" text-anchor="middle" font-size="17" font-weight="600" fill="#1f2328">Hand it to a robot</text>
+<text x="814.6666666666667" y="104" text-anchor="middle" font-size="13" fill="#59636e">As-run record → verified Opentrons code</text>
+</svg>
