@@ -77,7 +77,13 @@ We filmed it through the glasses on a real bench, with a real plate and pipette.
 
 A wet-lab scientist can spend hours pipetting with gloves on and both hands busy. Inside a clean bench they can't touch their notes or a screen, so the record often gets written later, from memory. When the work is automated after that, the robot repeats the plan, not what actually worked.
 
-Capturing bench work as data is now its own frontier: [Transfyr](https://www.synbiobeta.com/read/transfyr-launches-physical-ai-platform-for-science-with-25m-seed-funding) raised a $25M seed in 2026 to do it with sensors installed in the lab. Glassistant needs no install. The scientist's own glasses are the sensor, Milo checks each well during the run, and the record becomes robot code checked in a simulator.
+We interviewed 6 biology PhDs and lab researchers. They leave the bench to write notes, lose track of which wells they filled, and keep research questions in a private AI workspace.
+
+> "When I seed cells, I sometimes forget which wells I've done. I skip the unsure ones, check under the microscope, and seed them again."
+
+> Capturing bench work as data is now its own frontier: [Transfyr](https://www.synbiobeta.com/read/transfyr-launches-physical-ai-platform-for-science-with-25m-seed-funding) raised a $25M seed in 2026 to do it with sensors installed in the lab.
+
+**Glassistant** needs no install. The scientist's own glasses are the sensor, Milo checks each well during the run, and the record becomes robot code checked in a simulator.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/loop-dark.svg" />
@@ -204,6 +210,15 @@ sequenceDiagram
 | 3. Spark picks the source | For a question, Spark decides whether to take a photo with the glasses (SAM 3.1 crops the object and Spark reads only the crop) or search the web | The right evidence for each question |
 | 4. Server checks | Every call is checked against the run (wells, step, state) before it changes the record. Taps and vision go the same way | One source of truth |
 | 5. Agent loop for code | Handoff runs Spark in a loop: `read_run` → `generate_protocol` → `simulate` → fix → `finish` | Code that passes the simulator, not code that only looks right |
+
+| By the numbers | |
+|---|---|
+| Actions Milo can call | 42 |
+| Right outcome on the tool-choice set (28 spoken requests, 4 runs) | 25–27 / 28 |
+| Every action done, for sentences that ask for two or three things | 30 / 33, up from 10 / 30 |
+| Actions dropped without a word | 0 / 33, down from 20 / 30 |
+
+<sub>Live Muse Spark 1.3 runs, one fresh session each. The scripts are in <code>eval/</code> (<code>tool_choice.py</code>, <code>multi_action.py</code>).</sub>
 
 ## Meta models
 
