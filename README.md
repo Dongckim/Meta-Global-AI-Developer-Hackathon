@@ -1,7 +1,9 @@
 <div align="center">
 
 <p>
-  <img src="docs/assets/icon.png" alt="" width="96" /><br/>
+  <img src="docs/assets/icon.png" alt="" width="96" />
+</p>
+<p>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg" />
     <img src="docs/assets/logo-light.svg" alt="Glassistant" width="360" />
@@ -464,4 +466,22 @@ docs/      Design notes and README images
 
 ## License
 
-[MIT](LICENSE). Third-party SDKs and packages, such as Meta Wearables DAT and the Opentrons API, keep their own licenses.
+The code in this repository is released under the [MIT License](LICENSE), © 2026 Dongchan Kim and Eunbi Cho.
+
+Nothing below is bundled in this repository. Each part is downloaded when you set the project up and keeps its own terms.
+
+| Component | Used for | License or terms |
+|---|---|---|
+| Meta Wearables Device Access Toolkit 1.0.1 | Glasses audio, photos and Mock Device Kit | [Meta Wearables Developer Terms](https://wearables.developer.meta.com/terms) and [Acceptable Use Policy](https://wearables.developer.meta.com/acceptable-use-policy) |
+| Muse Spark, Voice Transcribe, SAM 3.1 | Hosted models | Meta Model API terms of your own account |
+| `meta-sam-parser` | Reading SAM 3.1 responses | SAM License |
+| Muse Glimmer weights | Private mode | Meta's license for the weights, accepted when you download them |
+| llama.cpp | Serving Glimmer | MIT |
+| Opentrons API | Robot simulator | Apache-2.0 |
+| OpenCV (`opencv-python-headless`) | Feature matching | Apache-2.0 |
+| FastAPI, jsonschema, Pillow | Server | MIT, MIT, MIT-CMU |
+| Uvicorn, httpx, python-dotenv, pypdf, websockets | Server | BSD-3-Clause |
+| python-multipart | Server | Apache-2.0 |
+| ffmpeg | Re-encoding clips, called as a separate program | LGPL or GPL, depending on your build |
+
+All protocols and sample data in this repository are made up.
