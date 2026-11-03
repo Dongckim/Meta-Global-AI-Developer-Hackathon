@@ -34,9 +34,13 @@
   <img src="docs/assets/stats-light.svg" alt="14× faster well verification (84 s → 6 s per photo) · 0 false wells in live bench sessions · 4× faster Private mode (6.0 s → 1.5 s per turn) · 99% prompt-cache hits, voice turns 23% faster" width="100%" />
 </picture>
 
-<!-- GIF slot: hero, 16:9, ~6 s loop of a well appearing on the iPad as the pipette lands.
-<p align="center"><img src="docs/assets/watching.gif" alt="Milo marks the well the glasses saw" width="820" /></p>
--->
+<table>
+  <tr>
+    <td align="center" width="33%"><img src="docs/assets/watching.gif" alt="Milo marks the well the glasses saw" width="100%" /><br/><b>Watching</b><br/><sub>The glasses mark each well</sub></td>
+    <td align="center" width="33%"><img src="docs/assets/search.gif" alt="Milo answers a question from the web" width="100%" /><br/><b>Search</b><br/><sub>Answers from the web, hands-free</sub></td>
+    <td align="center" width="33%"><img src="docs/assets/original.gif" alt="The imported protocol shown as the original page" width="100%" /><br/><b>Original</b><br/><sub>The source page, opened by voice</sub></td>
+  </tr>
+</table>
 
 ## ▶ Demo
 
@@ -48,7 +52,7 @@ Recorded first-person through the glasses, on a real bench, with a real plate an
 
 A wet-lab scientist spends hours pipetting with gloves on and both hands busy. Inside a clean bench they can't touch notes or a screen, so the record gets written from memory. When the work is later automated, the robot repeats **the plan, not what actually worked**.
 
-Capturing bench work as data is now a frontier of its own: [Transfyr](https://www.synbiobeta.com/read/transfyr-launches-physical-ai-platform-for-science-with-25m-seed-funding) raised a $25M seed in 2026 to build physical-AI infrastructure for exactly this. **Glassistant takes the wearable path**: the scientist's own glasses become the sensor, and Meta's models turn what they see and hear into a record a robot can repeat.
+Capturing bench work as data is now its own frontier: [Transfyr](https://www.synbiobeta.com/read/transfyr-launches-physical-ai-platform-for-science-with-25m-seed-funding) raised a $25M seed in 2026 to do it with sensors installed in the lab. **Glassistant needs no install.** The scientist's own glasses are the sensor, Milo checks each well during the run, and the record becomes robot code verified in a simulator.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/loop-dark.svg" />
