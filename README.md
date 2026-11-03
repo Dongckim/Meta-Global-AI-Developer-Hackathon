@@ -101,9 +101,9 @@ Capturing bench work as data is now its own frontier: [Transfyr](https://www.syn
       <sub>Ask a question out loud and Milo answers from the web, without you putting the pipette down.</sub>
     </td>
     <td align="center" valign="top" width="33%">
-      <img src="docs/assets/original.gif" alt="The imported protocol shown as the original page" width="100%" />
-      <h4>Original</h4>
-      <sub>Ask to see the original, and the page of the protocol this step came from opens.</sub>
+      <img src="docs/assets/handoff.gif" alt="The final protocol becomes Opentrons robot code" width="100%" />
+      <h4>Robot handoff</h4>
+      <sub>Approve what actually happened, and Spark writes Opentrons Flex code that passes the simulator.</sub>
     </td>
   </tr>
 </table>
@@ -462,7 +462,7 @@ samples/   Demo protocols (made-up data)
 docs/      Design notes and README images
 ```
 
-<sub>Everything in this repository was built during the hackathon. All data is made up.</sub>
+<sub>Everything in this repository was built during the hackathon. The demo protocols and sample run data are synthetic. The sessions, timings and recordings in this README come from real runs.</sub>
 
 ## License
 
@@ -483,5 +483,3 @@ Nothing below is bundled in this repository. Each part is downloaded when you se
 | Uvicorn, httpx, python-dotenv, pypdf, websockets | Server | BSD-3-Clause |
 | python-multipart | Server | Apache-2.0 |
 | ffmpeg | Re-encoding clips, called as a separate program | LGPL or GPL, depending on your build |
-
-All protocols and sample data in this repository are made up.
