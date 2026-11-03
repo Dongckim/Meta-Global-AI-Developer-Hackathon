@@ -1,10 +1,19 @@
 <div align="center">
 
-# Glassistant
+<img src="docs/assets/icon.png" alt="" width="96" />
 
-### Hands-free lab assistant for Ray-Ban Meta glasses
+<br/><br/>
 
-**It watches the bench, keeps an honest record of the run, and turns it into a verified robot protocol.**
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg" />
+  <img src="docs/assets/logo-light.svg" alt="Glassistant" width="360" />
+</picture>
+
+<br/>
+
+### A hands-free lab assistant for Ray-Ban Meta glasses
+
+**It watches the bench, keeps an honest record of the run, and turns that record into a robot protocol that has been checked.**
 
 <p>
 <img src="https://img.shields.io/badge/Muse_Spark-1.3-0866FF?style=flat-square&logo=meta&logoColor=white" alt="Muse Spark 1.3" />
@@ -15,17 +24,44 @@
 </p>
 
 <p>
-<a href="#-demo"><b>Demo video</b></a> ·
-<a href="#-how-it-works"><b>How it works</b></a> ·
-<a href="#-orchestration-one-agent-many-tools"><b>Orchestration</b></a> ·
-<a href="#-performance"><b>Performance</b></a> ·
-<a href="#-try-it-without-hardware"><b>Try it without hardware</b></a> ·
-<a href="#-setup"><b>Setup</b></a>
+<a href="#demo"><b>Demo</b></a> &nbsp;·&nbsp;
+<a href="#see-it-in-action"><b>Features</b></a> &nbsp;·&nbsp;
+<a href="#how-it-works"><b>How it works</b></a> &nbsp;·&nbsp;
+<a href="#performance"><b>Performance</b></a> &nbsp;·&nbsp;
+<a href="#try-it-without-hardware"><b>Try it</b></a> &nbsp;·&nbsp;
+<a href="#setup"><b>Setup</b></a>
 </p>
 
-<sub>Built from scratch in <b>6 days</b> by a team of two for the <a href="https://dev.meta.ai/events/global-hackathon">Meta Global AI Developer Hackathon</a> · Oct 26 – Nov 4, 2026</sub>
+<sub>Theme: <b>Push the Frontier</b> · Built by a team of two during the <a href="https://dev.meta.ai/events/global-hackathon">Meta Global AI Developer Hackathon</a> · Oct 26 – Nov 4, 2026</sub>
 
 </div>
+
+<br/>
+
+## Demo
+
+<!-- Replace with the video once it's uploaded, e.g.
+<p align="center">
+  <a href="https://youtu.be/VIDEO_ID"><img src="https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg" alt="Watch the 3-minute demo" width="100%" /></a>
+</p>
+-->
+
+> **3-minute demo:** _link added on submission_
+
+We filmed it through the glasses on a real bench, with a real plate and pipette. Every model call in the video is live.
+
+<br/>
+
+## Why
+
+A wet-lab scientist can spend hours pipetting with gloves on and both hands busy. Inside a clean bench they can't touch their notes or a screen, so the record often gets written later, from memory. When the work is automated after that, the robot repeats the plan, not what actually worked.
+
+Capturing bench work as data is now its own frontier: [Transfyr](https://www.synbiobeta.com/read/transfyr-launches-physical-ai-platform-for-science-with-25m-seed-funding) raised a $25M seed in 2026 to do it with sensors installed in the lab. Glassistant needs no install. The scientist's own glasses are the sensor, Milo checks each well during the run, and the record becomes robot code checked in a simulator.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/loop-dark.svg" />
+  <img src="docs/assets/loop-light.svg" alt="1 Run hands-free → 2 Record what happened → 3 Hand it to a robot" width="100%" />
+</picture>
 
 <br/>
 
@@ -34,39 +70,40 @@
   <img src="docs/assets/stats-light.svg" alt="14× faster well verification (84 s → 6 s per photo) · 0 false wells in live bench sessions · 4× faster Private mode (6.0 s → 1.5 s per turn) · 99% prompt-cache hits, voice turns 23% faster" width="100%" />
 </picture>
 
+<br/>
+
+## See it in action
+
 <table>
   <tr>
-    <td align="center" width="33%"><img src="docs/assets/watching.gif" alt="Milo marks the well the glasses saw" width="100%" /><br/><b>Watching</b><br/><sub>The glasses mark each well</sub></td>
-    <td align="center" width="33%"><img src="docs/assets/search.gif" alt="Milo answers a question from the web" width="100%" /><br/><b>Search</b><br/><sub>Answers from the web, hands-free</sub></td>
-    <td align="center" width="33%"><img src="docs/assets/original.gif" alt="The imported protocol shown as the original page" width="100%" /><br/><b>Original</b><br/><sub>The source page, opened by voice</sub></td>
+    <td align="center" valign="top" width="33%">
+      <img src="docs/assets/watching.gif" alt="Milo marks the well the glasses saw" width="100%" />
+      <h4>Watching</h4>
+      <sub>The glasses follow the pipette tip and mark each well on the iPad as you fill it.</sub>
+    </td>
+    <td align="center" valign="top" width="33%">
+      <img src="docs/assets/search.gif" alt="Milo answers a question from the web" width="100%" />
+      <h4>Search</h4>
+      <sub>Ask a question out loud and Milo answers from the web, without you putting the pipette down.</sub>
+    </td>
+    <td align="center" valign="top" width="33%">
+      <img src="docs/assets/original.gif" alt="The imported protocol shown as the original page" width="100%" />
+      <h4>Original</h4>
+      <sub>Ask to see the original, and the page of the protocol this step came from opens.</sub>
+    </td>
   </tr>
 </table>
 
-## ▶ Demo
+<br/>
 
-> **3-minute demo:** _link added on submission_
+## Highlights
 
-Recorded first-person through the glasses, on a real bench, with a real plate and pipette. Every model call in the video is live.
-
-## 💡 Why
-
-A wet-lab scientist spends hours pipetting with gloves on and both hands busy. Inside a clean bench they can't touch notes or a screen, so the record gets written from memory. When the work is later automated, the robot repeats **the plan, not what actually worked**.
-
-Capturing bench work as data is now its own frontier: [Transfyr](https://www.synbiobeta.com/read/transfyr-launches-physical-ai-platform-for-science-with-25m-seed-funding) raised a $25M seed in 2026 to do it with sensors installed in the lab. **Glassistant needs no install.** The scientist's own glasses are the sensor, Milo checks each well during the run, and the record becomes robot code verified in a simulator.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/loop-dark.svg" />
-  <img src="docs/assets/loop-light.svg" alt="1 Run hands-free → 2 Record what happened → 3 Hand it to a robot" width="100%" />
-</picture>
-
-## ✨ Highlights
-
-- **One agent drives the whole app.** Muse Spark turns each sentence into validated tool calls, several in parallel, and picks whether to look through the glasses or search the web.
-- **Four Meta models, each where it fits.** Voice Transcribe hears, Muse Spark 1.3 reasons and writes code, SAM 3.1 sees, and Muse Glimmer runs privately on our own GPU.
-- **The glasses see what you did.** SAM 3.1 finds the plate and the pipette in every photo and places the tip in a well. **Every well shown was in the right place: 9 / 9 with a pen, 4 / 4 with a real pipette.**
-- **Vision never overrides a person.** Sure wells are proposed, uncertain ones become a question, and voice always wins.
-- **The robot repeats what worked.** Spark writes Opentrons Flex code from the as-run record, and a deterministic verifier checks it in the Opentrons simulator, **well by well and second by second**.
-- **Runs without hardware.** Build and run the app with no glasses, Meta account or API key, through Meta's Mock Device Kit.
+- **One agent runs the app.** Milo is a Muse Spark agent. It turns what you say into tool calls, sometimes several at once, and decides whether to look through the glasses or search the web.
+- **Four Meta models, each doing one job.** Voice Transcribe listens, Muse Spark 1.3 thinks and writes code, SAM 3.1 sees, and Muse Glimmer runs on our own GPU for Private mode.
+- **The glasses see what you did.** SAM 3.1 finds the plate and the pipette in each photo and works out which well the tip is in. In our two recorded sessions, every well it showed was the right one: 9 of 9 with a pen, 4 of 4 with a real pipette.
+- **The person always wins.** When vision is sure, it suggests a well. When it isn't, it asks. What you say overrides it.
+- **The robot repeats what worked.** Spark writes Opentrons Flex code from the record of what happened. Plain code then runs it in the Opentrons simulator and checks every well and every wait.
+- **You can try it without hardware.** No glasses, Meta account or API key needed. Meta's Mock Device Kit stands in for the glasses.
 
 <div align="center">
 <table>
@@ -83,9 +120,9 @@ Capturing bench work as data is now its own frontier: [Transfyr](https://www.syn
 </table>
 </div>
 
-<sub>Both devices are <a href="https://developers.meta.com/wearables/faq/">supported by Meta Wearables DAT</a>. IP67 describes dust and water resistance, not laboratory eye protection.</sub>
+<sub>Both devices are <a href="https://developers.meta.com/wearables/faq/">supported by Meta Wearables DAT</a>. We tested on Ray-Ban Meta only. IP67 means dust and water resistance, not lab eye protection.</sub>
 
-## 🧭 How it works
+## How it works
 
 ```mermaid
 flowchart LR
@@ -109,15 +146,15 @@ flowchart LR
   H --> X[Opentrons simulator]
 ```
 
-| Principle | What it means |
-|---|---|
-| **One action path** | Taps, voice and vision go through the same server action, so the run record has a single source of truth. |
-| **The model chooses, code verifies** | Deterministic code validates every well, step and line of generated robot code. |
-| **Vision never overrides a person** | The scientist's record always wins. Vision proposes; uncertain wells become a question. |
+Three rules hold the design together:
 
-## 🎛 Orchestration: one agent, many tools
+- **One way in.** Taps, voice and vision all go through the same server action, so there is only one run record.
+- **The model picks, code checks.** Plain code checks every well, every step and every line of robot code the model writes.
+- **Vision never overrides a person.** Vision suggests. If it isn't sure, it asks.
 
-**Every input becomes a validated action.** Milo is a single Muse Spark agent that drives the whole app through tool calls. The server, not the model, decides whether each call is allowed and writes it to the run record.
+## Orchestration
+
+Milo is a single Muse Spark agent that runs the app through tool calls. The server, not the model, decides whether each call is allowed and writes it to the run record.
 
 ```mermaid
 sequenceDiagram
@@ -142,41 +179,32 @@ sequenceDiagram
   R-->>S: plate, timer and note update · Milo confirms aloud
 ```
 
-| Layer | What happens | Why it matters |
+| Step | What happens | Why |
 |---|---|---|
-| **1 · Grammar first** | Exact bench commands ("C2 to C4 done", "next step") run without a model | ~0.7 s, deterministic, no tokens |
-| **2 · Spark tool calls** | Everything else goes to Muse Spark 1.3 with strict tool schemas; one sentence can fire **several tools in parallel** | Natural speech, no menus |
-| **3 · Spark picks the sense** | For a question, Spark decides whether to **open the glasses camera** (SAM 3.1 crops the object, Spark reads only the crop) or **search the web** | The right evidence for each question |
-| **4 · Server validates** | Every call is checked against the run (wells, step, state) before it touches the record; taps and vision use the same path | One source of truth |
-| **5 · Agent loop for code** | Handoff runs Spark as a loop: `read_run` → `generate_protocol` → `simulate` → fix → `finish` | Code that passes the simulator, not code that looks right |
+| 1. Grammar first | Exact bench commands like "C2 to C4 done" or "next step" skip the model | About 0.1 s on the server, same result every time, no tokens |
+| 2. Spark tool calls | Everything else goes to Muse Spark 1.3 with strict tool schemas. One sentence can trigger several tools at once | You talk normally, no menus |
+| 3. Spark picks the source | For a question, Spark decides whether to take a photo with the glasses (SAM 3.1 crops the object and Spark reads only the crop) or search the web | The right evidence for each question |
+| 4. Server checks | Every call is checked against the run (wells, step, state) before it changes the record. Taps and vision go the same way | One source of truth |
+| 5. Agent loop for code | Handoff runs Spark in a loop: `read_run` → `generate_protocol` → `simulate` → fix → `finish` | Code that passes the simulator, not code that only looks right |
 
-<!-- TODO before submission: fill from eval/results/tool_choice.md and multi_action.md, then uncomment.
-| By the numbers | |
-|---|---|
-| Tools Milo can call | ⟨N⟩ |
-| Tool-choice accuracy on the eval set | ⟨N⟩ / ⟨N⟩ |
-| Multi-action sentences handled in one turn | ⟨N⟩ / ⟨N⟩ |
-| Agent-loop rounds to a passing protocol (median) | ⟨N⟩ |
--->
-
-## 🧠 Meta models
+## Meta models
 
 | Model | Runs on | Used for | Why this model |
 |---|---|---|---|
-| **Muse Spark 1.3** | Meta Model API | Bench agent, protocol import, photo questions, web search, robot code | PDF and image input, structured output, parallel tool calls, built-in web search |
-| **Muse Voice Transcribe** | Meta Model API | Live transcription and turn detection | Streaming speaker diarization (other voices ignored), keyword biasing for well and reagent names |
-| **SAM 3.1** | Meta Model API | Plate, well and pipette tracking; label crops | Text- and box-prompted segmentation with pixel masks, no GPUs to manage |
-| **Muse Glimmer** | Self-hosted, open weights | Private-mode commands and imports | Distilled from Muse Spark, image input, runs on one GPU we control |
+| Muse Spark 1.3 | Meta Model API | The bench agent, protocol import, photo questions, web search, robot code | Reads PDFs and images, structured output, parallel tool calls, built-in web search |
+| Muse Voice Transcribe | Meta Model API | Live transcription and turn detection | Tells speakers apart so other voices are ignored, and can be biased toward well and reagent names |
+| SAM 3.1 | Meta Model API | Finding the plate, wells and pipette; cropping labels | Segments from a text or box prompt with pixel masks, and we don't run any GPUs for it |
+| Muse Glimmer | Self-hosted, open weights | Commands and imports in Private mode | Takes images and fits on one GPU we control |
 
-<sub>Non-model tools: Meta Wearables DAT (glasses SDK), OpenCV (feature matching only), ffmpeg, Opentrons API, Apple Speech (Private mode).</sub>
+<sub>Other tools: Meta Wearables DAT (glasses SDK), OpenCV (feature matching only), ffmpeg, the Opentrons API, Apple Speech (Private mode).</sub>
 
-## 👁 Watching
+## Watching
 
-<!-- GIF slot: glasses POV → SAM mask → 👁 on the well, ~5 s.
+<!-- GIF slot: glasses POV → SAM mask → eye mark on the well, ~5 s.
 <p align="center"><img src="docs/assets/sam.gif" alt="SAM 3.1 finds the plate and the pipette" width="720" /></p>
 -->
 
-During a pipetting step, the app sends **one photo a second** from the glasses.
+During a pipetting step the app sends one photo a second from the glasses.
 
 ```
 plate   SAM 3.1 finds the plate every third photo, or sooner if the view moves
@@ -186,21 +214,21 @@ well    the tip stays in a well for two photos → counted
 sure    the tip is within 3 mm of the well's center
 ```
 
-| Verdict | What Milo does |
+| What vision saw | What Milo does |
 |---|---|
-| Sure · in this step | Asks to log it |
-| Sure · already logged | Keeps the person's record |
-| Sure · not in this step | Asks before logging, or flags it for review if the step has passed |
-| Not sure | Asks whether the well was filled |
+| Sure, and the well is in this step | Asks to log it |
+| Sure, but you already logged it | Keeps your record |
+| Sure, but the well isn't in this step | Asks before logging, or flags it for review if the step is over |
+| Not sure | Asks whether you filled the well |
 
-**Live bench results** — true well order entered before recording.
+**Results from two live sessions.** Each is a single session, not a test set.
 
-| Session | Tool | Wells in order | Wells shown | In the right place | False wells | SAM per photo |
+| Session | Tool | Wells, in order | Wells shown | In the right place | False wells | SAM per photo |
 |---|---|---|---:|---:|---:|---:|
-| 175631 | Pen | A1 → A12 | 9 / 12 | **9 / 9** | **0** | 6.3 s |
-| 133607 | Pipette | A2, A3, D4, D5 | 4 / 4 | **4 / 4** | **0** | 8.1 s |
+| 175631 | Pen | A1 → A12 | 9 / 12 | 9 / 9 | 0 | 6.3 s |
+| 133607 | Pipette | A2, A3, D4, D5 | 4 / 4 | 4 / 4 | 0 | 8.1 s |
 
-Every well Watching showed was in the right place. In 133607, A3 sat 3.7 mm off center, so Milo **asked instead of guessing**.
+Every well Watching showed was in the right place. In 133607, A3 was 3.7 mm off center, so Milo asked instead of guessing. Three wells were missed in 175631, and a stay shorter than about 3 s can be missed because SAM doesn't find the pipette in every photo.
 
 <details>
 <summary><b>How Watching got from 84 s to 6 s</b></summary>
@@ -208,76 +236,76 @@ Every well Watching showed was in the right place. In 133607, A3 sat 3.7 mm off 
 
 | Change | Commit | Result |
 |---|---|---|
-| Video clips, plate and tip tracked | — | 84 s from dwell to mark |
-| Tip-only tracking, stages run side by side | — | 32–38 s |
-| One photo a second instead of video clips | `16af553` | Wells show in seconds |
-| Plate found every third photo, or when the view moves | `70c79fb` | No queue: 4.9–5.9 s per photo for the whole session |
-| Grid corrected from the first three photos | `9c5f946` | No row-off wells |
+| Video clips, tracking the plate and the tip | — | 84 s from the tip landing to the mark |
+| Tracking the tip only, running stages side by side | — | 32–38 s |
+| Grid corrected from the first three photos | `9c5f946` | No more wells read a row off |
+| Plate found every third photo, or when the view moves | `70c79fb` | Photos no longer queue up |
 | Outer cells reach 2 mm further | `8849365` | 12th-column wells read correctly |
+| Watching on the bench uses one photo a second instead of video | `16af553` | Wells show within seconds |
 | The whole pipette is found and its inked tip followed | `e670da6` | Works with a real pipette, not only a pen |
 
 </details>
 
-## 🤖 Robot handoff
+## Robot handoff
 
-<!-- GIF slot: review screen → simulator ✓ → protocol.py on a laptop, ~6 s.
+<!-- GIF slot: review screen → simulator check → protocol.py on a laptop, ~6 s.
 <p align="center"><img src="docs/assets/handoff.gif" alt="From run record to verified robot code" width="720" /></p>
 -->
 
-After a run, the code lists what changed from the plan and builds the **as-run** protocol from the record. Muse Spark writes the Opentrons Flex code, but **it does not decide whether that code is right**. The code runs in the Opentrons simulator, and a deterministic verifier compares the simulator's command log with the approved record.
+After a run, the app lists what changed from the plan and builds the as-run protocol from the record. Muse Spark writes the Opentrons Flex code, but it doesn't get to decide whether the code is right. The code runs in the Opentrons simulator, and plain code compares the simulator's command log with the record you approved.
 
 A protocol passes only if:
 
-- ✅ every step runs once, in order, under its `Step N` comment, and nothing moves liquid outside a step
-- ✅ each transfer fills exactly its wells, at its volume, from its reservoir well
-- ✅ each transfer uses the pipette the code chose, with a new tip for every well
-- ✅ each wait lasts the seconds the record holds, and no liquid moves during it
-- ✅ no container gives more than it holds above its dead volume
+- every step runs once, in order, under its `Step N` comment, and no liquid moves outside a step
+- each transfer fills exactly its wells, at its volume, from its reservoir well
+- each transfer uses the pipette the code picked, with a new tip for every well
+- each wait lasts as long as the record says, and no liquid moves during it
+- no container gives more than it holds above its dead volume
 
-A failed check names the step and the reason, for example `D4 got 20 µL, not 25`, and Spark fixes the code.
+When a check fails, it names the step and the reason, for example `D4 got 20 µL, not 25`, and Spark fixes the code.
 
-## 🔒 Private mode
+## Private mode
 
 | | Full | Private |
 |---|---|---|
-| Commands, imports | Muse Spark 1.3 | **Muse Glimmer** |
-| Speech | Muse Voice Transcribe | **Apple Speech on the iPad** |
+| Commands, imports | Muse Spark 1.3 | Muse Glimmer |
+| Speech | Muse Voice Transcribe | Apple Speech on the iPad |
 | Web search, photo questions | Meta Model API | Asks first, then Meta Model API |
 | Watching, robot handoff | On | Off |
 
-**The run record is never sent to the Meta Model API.** Glimmer runs on a GPU you host, not on the iPad or the glasses. To deploy it on your own Modal account, see [`server/private/README.md`](server/private/README.md).
+In Private mode the run record is never sent to the Meta Model API. Glimmer runs on a GPU you host, not on the iPad or the glasses. To deploy it on your own Modal account, see [`server/private/README.md`](server/private/README.md).
 
-## 📈 Performance
+## Performance
 
-Every number was measured on this project. Medians over 5–10 turns unless noted.
+We measured all of these on this project. They are medians over 5–10 turns unless noted.
 
 | | Before | After | How |
 |---|---:|---:|---|
-| **Well verification** (SAM 3.1) | 84 s | **~6 s / photo** | One photo a second, judged as each arrives |
-| Server compute per photo | 1.25 s | **0.53 s** | Each mask decoded once instead of four or five times |
-| SAM per photo, 105 s session | 18 s, growing | **4.9–5.9 s, flat** | Plate re-found every third photo or on view change, capped at one call per 2 s |
-| Wait after Watching stops | 26 s | **1.9–3.1 s** | Wells judged during recording, not after |
-| SAM 3.1 server errors | 3 clips | **0** | Clips re-encoded before upload (GOP = frame rate, no B-frames) |
-| **Voice turn** (Muse Spark) | 1.78 s | **1.37 s** | Prompt restructured so 99% of input tokens hit the cache |
-| **Private-mode turn** (Muse Glimmer) | 6.0 s | **1.5 s** | DFlash speculative decoding, zero reasoning budget, prompt caching |
-| Glimmer decode | 27 tok/s | **~100 tok/s** | Same change |
-| Glimmer prefill | 1.75 s | **~0.3 s** | Prompt caching |
+| Well verification (SAM 3.1) | 84 s | ~6 s per photo | One photo a second, each judged when it arrives |
+| Server compute per photo | 1.25 s | 0.53 s | Each mask decoded once instead of four or five times |
+| SAM per photo over a 105 s session | 18 s and growing | 4.9–5.9 s, flat | Plate found again only every third photo or when the view moves |
+| Wait after Watching stops | 26 s | 1.9 s (pen) – 9.2 s (pipette) | Wells judged during recording, not after |
+| SAM 3.1 server errors | 3 clips | 0 | Clips re-encoded before upload (a keyframe every second, no B-frames) |
+| Voice turn (Muse Spark) | 1.78 s | 1.37 s | Prompt reordered so 99% of input tokens hit the cache |
+| Private-mode turn (Muse Glimmer) | 6.0 s | 1.5 s | DFlash speculative decoding, no reasoning budget, prompt caching |
+| Glimmer decode | 27 tok/s | ~100 tok/s | Same change |
+| Glimmer prefill | 1.75 s | ~0.3 s | Prompt caching |
 
-## 🧪 Try it without hardware
+## Try it without hardware
 
-> **For judges.** No glasses, Meta account or API key needed. Needs a Mac with Xcode 26 and [uv](https://docs.astral.sh/uv/).
+> **For judges.** No glasses, Meta account, Apple Developer account or API key needed. You need a Mac with Xcode 26.5 (with an iPad simulator installed) and [uv](https://docs.astral.sh/uv/). uv installs Python 3.12 for you.
 
-**1. Server** — keep it running
+**1. Server.** Leave it running.
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r server/requirements.txt
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -r server/requirements.txt
 uv venv --python 3.12 .venv-sim
 uv pip install --python .venv-sim/bin/python opentrons
 MODEL_MODE=recorded .venv/bin/uvicorn server.api:app --port 8000
 ```
 
-**2. App** — in a second terminal, on the iPad simulator
+**2. App.** In a second terminal, on the iPad simulator. If you don't have `iPad Pro 13-inch (M5)`, use any iPad listed by `xcrun simctl list devices`.
 
 ```bash
 cd ios/Meta-Global-AI-Developer-Hackathon
@@ -290,46 +318,54 @@ xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/*.app
 xcrun simctl launch booted com.dongchankim.Meta-Global-AI-Developer-Hackathon -demo
 ```
 
-**3. Run it** — `-demo` pairs mock glasses through Meta's Mock Device Kit and shows a text box in place of the microphone. Open **Demo protocol** on Home and start a run, then type `B2 to B4 done` and `next step`. On the last step, `finish` ends the run. Review the changes it lists, then choose to make robot code.
+**3. Run it.** `-demo` connects mock glasses through Meta's Mock Device Kit and puts a text box where the microphone would be. Open **Demo protocol** on Home and start a run. Type `B2 to B4 done`, then `next step`. On the last step, type `finish`. Look over the changes it lists, then choose to make robot code.
 
 <table>
   <tr>
-    <th width="50%">✅ Works without a key</th>
-    <th width="50%">🔑 Needs a key or hardware</th>
+    <th width="50%">Works without a key</th>
+    <th width="50%">Needs a key or hardware</th>
   </tr>
   <tr valign="top">
     <td>
       • Screens, plate and run record<br/>
-      • Typed commands: wells, steps, timers, notes — same action path as voice<br/>
+      • Typed commands for wells, steps, timers and notes, using the same path as voice<br/>
       • Mock glasses and video, through Meta's real SDK<br/>
-      • Preloaded demo protocol<br/>
-      • Robot handoff with the real Opentrons simulator and verifier<sup>*</sup>
+      • The preloaded demo protocol<br/>
+      • Robot handoff with the real Opentrons simulator and checker<sup>*</sup>
     </td>
     <td>
       • Free-form questions, web search, photo questions<br/>
       • Importing a new protocol<br/>
-      • Voice (replaced by the text box)<br/>
+      • Voice (the text box replaces it)<br/>
       • Watching (needs glasses and SAM 3.1)<br/>
       • Private mode (needs the self-hosted model)
     </td>
   </tr>
 </table>
 
-<sub><sup>*</sup> In this mode the robot code comes from a deterministic stand-in for Muse Spark. No model replies are stored, and <code>MODEL_MODE=recorded</code> blocks every outside network call.</sub>
+<sub><sup>*</sup> In this mode the robot code comes from a fixed stand-in for Muse Spark. No model replies are stored, and <code>MODEL_MODE=recorded</code> blocks every outside network call.</sub>
 
-## 🛠 Setup
+## Setup
 
-**Requirements** · Python 3.11+ · ffmpeg · [uv](https://docs.astral.sh/uv/) · Xcode 26+ · iPad on iPadOS 26+ · Meta Model API key · Ray-Ban Meta glasses with DAT access
+**What you need**
+
+- A Mac with Xcode 26.5, ffmpeg and [uv](https://docs.astral.sh/uv/) (the server needs Python 3.12 or newer)
+- An iPad on iPadOS 26 or newer
+- An Apple ID. A free account (Personal Team) is enough; you don't need a paid Apple Developer membership.
+- A Meta Model API key
+- Ray-Ban Meta glasses and the Meta AI app on the iPad
 
 <details open>
 <summary><b>Server</b></summary>
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r server/requirements.txt
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -r server/requirements.txt
 cp .env.example .env    # set MODEL_API_KEY to your own Meta Model API key
 .venv/bin/uvicorn server.api:app --host 0.0.0.0 --port 8000
 ```
+
+`--host 0.0.0.0` lets the iPad reach the server over your Wi-Fi.
 </details>
 
 <details open>
@@ -337,11 +373,25 @@ cp .env.example .env    # set MODEL_API_KEY to your own Meta Model API key
 
 ```bash
 cd ios/Meta-Global-AI-Developer-Hackathon
-cp Secrets.example.xcconfig Secrets.xcconfig    # server URL, development team
+cp Secrets.example.xcconfig Secrets.xcconfig
 open Meta-Global-AI-Developer-Hackathon.xcodeproj
 ```
 
-Run on an iPad on the same network as the server.
+1. In `Secrets.xcconfig`, set `SERVER_BASE_URL = http:/$()/<your Mac's IP>:8000`. `localhost` only works in the simulator. The `$()` stops Xcode from reading `//` as a comment.
+2. In Xcode, select the `Meta-Global-AI-Developer-Hackathon` target and open **Signing & Capabilities**. Set **Team** to your own Apple ID and change **Bundle Identifier** to something unique, like `com.yourname.glassistant`. Change the Team here, not in `Secrets.xcconfig`, because the target's setting wins.
+3. On the iPad, turn on Developer Mode (Settings → Privacy & Security). After the first install, trust your certificate under Settings → General → VPN & Device Management. With a free Apple ID the app stops opening after 7 days; run it from Xcode again.
+4. Put the iPad on the same Wi-Fi as the Mac, run the app from Xcode, and allow Local Network, Bluetooth, Microphone and Speech Recognition when it asks.
+</details>
+
+<details open>
+<summary><b>Glasses</b></summary>
+
+1. Install the Meta AI app on the iPad and pair your glasses. Update both to the versions Meta lists for DAT SDK 1.0.1 in its [version dependencies](https://wearables.developer.meta.com/docs/develop/dat/version-dependencies).
+2. Turn on Developer Mode in Meta AI: Settings → App Info, then tap the version number 5 times.
+3. With Developer Mode on, `META_APP_ID` and `CLIENT_TOKEN` in `Secrets.xcconfig` can stay empty, and you don't need a Meta developer account.
+4. The first time you connect, Glassistant opens Meta AI so you can register the app.
+
+The DAT SDK is a public Swift package (`github.com/facebook/meta-wearables-dat-ios`, 1.0.1). Xcode downloads it on its own, no login needed.
 </details>
 
 <details>
@@ -356,35 +406,61 @@ uv pip install --python .venv-sim/bin/python opentrons
 <details>
 <summary><b>API keys</b></summary>
 
-Use your own keys. None are in this repo, and `.env` is gitignored.
+Use your own keys. None are in this repo, and `.env` and `Secrets.xcconfig` are gitignored.
 
 | Setting in `.env` | Needed for | How to get it |
 |---|---|---|
-| `MODEL_API_KEY` | Everything that calls Muse Spark, Voice Transcribe or SAM 3.1 | Your Meta Model API key |
+| `MODEL_API_KEY` | Anything that calls Muse Spark, Voice Transcribe or SAM 3.1 | Your Meta Model API key |
 | `PRIVATE_LLM_URL` | Private mode only (optional) | Deploy Muse Glimmer to your own Modal account: [`server/private/README.md`](server/private/README.md) |
-| `MODEL_MODE=recorded` | Running with no key | Nothing; see [Try it without hardware](#-try-it-without-hardware) |
+| `MODEL_MODE=recorded` | Running without a key | Nothing; see [Try it without hardware](#try-it-without-hardware) |
 
 ```bash
 cp .env.example .env    # then fill in the values above
 ```
 </details>
 
-## 📁 Repository
+<details>
+<summary><b>Tests</b></summary>
 
-```
-ios/       SwiftUI iPad app — Bench, plate map, voice session, glasses stream, Watching
-server/    FastAPI server — orchestrator, run record, Watching, robot handoff, Private mode
-shared/    Screen registry and voice grammar shared by app and server
-eval/      Evaluation scripts, results and the log of every tuned threshold
-samples/   Demo protocols (synthetic data)
-docs/      Design notes
+Server tests are plain scripts. Run each one on its own, for example:
+
+```bash
+.venv/bin/python -m server.tests.test_recorded
 ```
 
-## 👥 Team
+`test_private_guard` and `test_private_wake` also need `uv pip install --python .venv/bin/python modal`.
+</details>
 
-| | Role |
-|---|---|
-| **Dongchan Kim** | Team lead · engineering |
-| **[Eunbi Cho](https://github.com/Eunnox)** | Product and interaction design |
+## Repository
 
-<sub>Everything in this repository was built during the hackathon. All data is synthetic.</sub>
+```
+ios/       SwiftUI iPad app: bench screen, plate map, voice session, glasses stream, Watching
+server/    FastAPI server: orchestrator, run record, Watching, robot handoff, Private mode
+shared/    Screen list and voice grammar shared by the app and the server
+eval/      Evaluation scripts and the log of every tuned Watching threshold (results stay local)
+samples/   Demo protocols (made-up data)
+docs/      Design notes and README images
+```
+
+## Team
+
+<table width="100%">
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://github.com/Dongckim"><img src="https://github.com/Dongckim.png" width="120" alt="Dongchan Kim" /></a><br/>
+      <b><a href="https://github.com/Dongckim">Dongchan Kim</a></b><br/>
+      <sub>Team lead · engineering</sub>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://github.com/Eunnox"><img src="https://github.com/Eunnox.png" width="120" alt="Eunbi Cho" /></a><br/>
+      <b><a href="https://github.com/Eunnox">Eunbi Cho</a></b><br/>
+      <sub>Product and interaction design</sub>
+    </td>
+  </tr>
+</table>
+
+<sub>Everything in this repository was built during the hackathon. All data is made up.</sub>
+
+## License
+
+[MIT](LICENSE). Third-party SDKs and packages, such as Meta Wearables DAT and the Opentrons API, keep their own licenses.
