@@ -75,15 +75,15 @@ We filmed it through the glasses on a real bench, with a real plate and pipette.
 
 ## Why
 
-A wet-lab scientist can spend hours pipetting with gloves on and both hands busy. Inside a clean bench they can't touch their notes or a screen, so the record often gets written later, from memory. When the work is automated after that, the robot repeats the plan, not what actually worked.
+Wet-lab scientists pipette for hours with gloves on and both hands busy. The record gets written later, from memory, and a robot repeats the plan, not what actually worked.
 
-We interviewed 6 biology PhDs and lab researchers. They leave the bench to write notes, lose track of which wells they filled, and keep research questions in a private AI workspace.
+We interviewed 6 biology PhDs and lab researchers. They leave the bench to write notes and keep research questions in a private AI workspace.
 
 > "When I seed cells, I sometimes forget which wells I've done. I skip the unsure ones, check under the microscope, and seed them again."
 
-> Capturing bench work as data is now its own frontier: [Transfyr](https://www.synbiobeta.com/read/transfyr-launches-physical-ai-platform-for-science-with-25m-seed-funding) raised a $25M seed in 2026 to do it with sensors installed in the lab.
+[Transfyr](https://www.synbiobeta.com/read/transfyr-launches-physical-ai-platform-for-science-with-25m-seed-funding) raised a $25M seed in 2026 to capture bench work with [three fixed cameras over each workstation](https://www.thestar.com.my/tech/tech-news/2026/09/07/some-scientists-have-magic-hands-in-the-lab-this-ai-is-learning-why), headband cameras, microphones and environmental sensors.
 
-**Glassistant** needs no install. The scientist's own glasses are the sensor, Milo checks each well during the run, and the record becomes robot code checked in a simulator.
+**Glassistant** needs no install: Meta AI glasses, worn like lab goggles, are the sensor, and Milo checks each well during the run.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/loop-dark.svg" />
