@@ -38,16 +38,20 @@
 
 ## Team
 
-<table width="100%">
+<table>
   <tr>
-    <td align="center" width="50%">
-      <b>Dongchan Kim</b><br/>
-      <sub>Team lead · engineering</sub><br/>
+    <td align="center" width="500">
+      <h3>Dongchan Kim</h3>
+      Team lead · Engineering<br/>
+      <sub>University of Illinois Urbana-Champaign<br/>
+      M.S., Systems Engineering</sub><br/><br/>
       <a href="https://github.com/Dongckim">GitHub</a> · <a href="https://www.linkedin.com/in/dongckim99/">LinkedIn</a>
     </td>
-    <td align="center" width="50%">
-      <b>Eunbi Cho</b><br/>
-      <sub>Product and interaction design</sub><br/>
+    <td align="center" width="500">
+      <h3>Eunbi Cho</h3>
+      Product & Interaction Design<br/>
+      <sub>Carnegie Mellon University<br/>
+      MDes, Design for Interactions</sub><br/><br/>
       <a href="https://github.com/Eunnox">GitHub</a> · <a href="https://www.linkedin.com/in/eunbicho-eunnox/">LinkedIn</a>
     </td>
   </tr>
