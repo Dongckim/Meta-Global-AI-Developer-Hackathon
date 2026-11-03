@@ -2,8 +2,6 @@
 
 <img src="docs/assets/icon.png" alt="" width="96" />
 
-<br/><br/>
-
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg" />
   <img src="docs/assets/logo-light.svg" alt="Glassistant" width="360" />
@@ -11,9 +9,9 @@
 
 <br/>
 
-### A hands-free lab assistant for Ray-Ban Meta glasses
+### A hands-free lab assistant. Meta AI glasses see the bench. Meta models keep the record.
 
-**It watches the bench, keeps an honest record of the run, and turns that record into a robot protocol that has been checked.**
+**Voice is the new interface. Speak the run, the glasses check it, a robot repeats it.**
 
 <p>
 <img src="https://img.shields.io/badge/Muse_Spark-1.3-0866FF?style=flat-square&logo=meta&logoColor=white" alt="Muse Spark 1.3" />
@@ -65,13 +63,6 @@ Capturing bench work as data is now its own frontier: [Transfyr](https://www.syn
 
 <br/>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/stats-dark.svg" />
-  <img src="docs/assets/stats-light.svg" alt="14× faster well verification (84 s → 6 s per photo) · 0 false wells in live bench sessions · 4× faster Private mode (6.0 s → 1.5 s per turn) · 99% prompt-cache hits, voice turns 23% faster" width="100%" />
-</picture>
-
-<br/>
-
 ## See it in action
 
 <table>
@@ -98,12 +89,16 @@ Capturing bench work as data is now its own frontier: [Transfyr](https://www.syn
 
 ## Highlights
 
-- **One agent runs the app.** Milo is a Muse Spark agent. It turns what you say into tool calls, sometimes several at once, and decides whether to look through the glasses or search the web.
-- **Four Meta models, each doing one job.** Voice Transcribe listens, Muse Spark 1.3 thinks and writes code, SAM 3.1 sees, and Muse Glimmer runs on our own GPU for Private mode.
-- **The glasses see what you did.** SAM 3.1 finds the plate and the pipette in each photo and works out which well the tip is in. In our two recorded sessions, every well it showed was the right one: 9 of 9 with a pen, 4 of 4 with a real pipette.
-- **The person always wins.** When vision is sure, it suggests a well. When it isn't, it asks. What you say overrides it.
-- **The robot repeats what worked.** Spark writes Opentrons Flex code from the record of what happened. Plain code then runs it in the Opentrons simulator and checks every well and every wait.
-- **You can try it without hardware.** No glasses, Meta account or API key needed. Meta's Mock Device Kit stands in for the glasses.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/stats-dark.svg" />
+  <img src="docs/assets/stats-light.svg" alt="14× faster well verification (84 s → 6 s per photo) · 0 false wells in live bench sessions · 4× faster Private mode (6.0 s → 1.5 s per turn) · 99% prompt-cache hits, voice turns 23% faster" width="100%" />
+</picture>
+
+- **One agent**: Milo, a Muse Spark agent, turns speech into tool calls, several at once, and picks the glasses camera or the web.
+- **Four Meta models**: Voice Transcribe listens, Muse Spark 1.3 thinks and writes code, SAM 3.1 sees, Muse Glimmer runs Private mode.
+- **Vision**: SAM 3.1 tracks the plate and pipette tip. Every well shown was right: 9 / 9 with a pen, 4 / 4 with a pipette.
+- **Human first**: Sure wells are suggested, unsure ones become a question, and your voice always wins.
+- **Robot handoff**: Spark writes Opentrons Flex code from what actually happened, checked well by well in the simulator.
 
 <div align="center">
 <table>
@@ -120,7 +115,7 @@ Capturing bench work as data is now its own frontier: [Transfyr](https://www.syn
 </table>
 </div>
 
-<sub>Both devices are <a href="https://developers.meta.com/wearables/faq/">supported by Meta Wearables DAT</a>. We tested on Ray-Ban Meta only. IP67 means dust and water resistance, not lab eye protection.</sub>
+<sub>Both devices are <a href="https://developers.meta.com/wearables/faq/">supported by Meta Wearables DAT</a>. We built and tested on Ray-Ban Meta. Oakley Meta Vanguard, sealed to IP67 against dust and water, is our next step toward real lab use.</sub>
 
 ## How it works
 
@@ -152,9 +147,9 @@ Three rules hold the design together:
 - **The model picks, code checks.** Plain code checks every well, every step and every line of robot code the model writes.
 - **Vision never overrides a person.** Vision suggests. If it isn't sure, it asks.
 
-## Orchestration
+## Orchestration: Milo
 
-Milo is a single Muse Spark agent that runs the app through tool calls. The server, not the model, decides whether each call is allowed and writes it to the run record.
+Milo is our agent: one Muse Spark agent that runs the app through tool calls. The server, not the model, decides whether each call is allowed and writes it to the run record.
 
 ```mermaid
 sequenceDiagram
@@ -189,12 +184,14 @@ sequenceDiagram
 
 ## Meta models
 
-| Model | Runs on | Used for | Why this model |
-|---|---|---|---|
-| Muse Spark 1.3 | Meta Model API | The bench agent, protocol import, photo questions, web search, robot code | Reads PDFs and images, structured output, parallel tool calls, built-in web search |
-| Muse Voice Transcribe | Meta Model API | Live transcription and turn detection | Tells speakers apart so other voices are ignored, and can be biased toward well and reagent names |
-| SAM 3.1 | Meta Model API | Finding the plate, wells and pipette; cropping labels | Segments from a text or box prompt with pixel masks, and we don't run any GPUs for it |
-| Muse Glimmer | Self-hosted, open weights | Commands and imports in Private mode | Takes images and fits on one GPU we control |
+Each model does one job that the bench needs, and each was picked for a capability that job can't do without.
+
+| Model | Its job | Why this model |
+|---|---|---|
+| **Muse Voice Transcribe**<br/><sub>Meta Model API</sub> | Hears the scientist, live | **Speaker separation in the live stream.** A lab is shared and loud. Voice Transcribe labels who is speaking as it transcribes, so only the owner's turns reach Milo and a labmate's "C3 is done" is ignored. **Keyword biasing** with this protocol's reagents, its wells and our command words keeps lab terms from being misheard. One stream does both, with no separate diarization pass. |
+| **Muse Spark 1.3**<br/><sub>Meta Model API</sub> | Reads the protocol, runs the app, writes robot code | **Reads the PDF as it is.** The protocol goes in as a file, with no OCR or parsing step of our own. **Agent-grade tool calling.** Strict schemas and several tool calls from one sentence let one model drive every screen. **Built-in web search** answers reagent questions without another service. **Prompt caching** lets 99% of each turn's input hit the cache. Import, agent, search and code all run on one model with one prompt and tool contract. |
+| **SAM 3.1**<br/><sub>Meta Model API</sub> | Finds the plate and the pipette tip in every photo | **Text prompts, no training.** It segments "microplate" and "pipette" from a word, so we didn't need a labeled dataset of our plates and pipettes. **Pixel masks, not boxes.** The tip is where the inked line on the pipette ends, which a bounding box can't show. Hosted on the Meta Model API, so there are no GPUs for us to run. |
+| **Muse Glimmer**<br/><sub>open weights, self-hosted</sub> | Private mode | **Open weights.** It runs on a GPU you control, so the run record never leaves your hands. **A drop-in for Spark.** It takes the same instructions, tools and output format, so Private mode is the same agent, not a second app. **Image input** keeps page imports working. With DFlash speculative decoding a turn takes 1.5 s. |
 
 <sub>Other tools: Meta Wearables DAT (glasses SDK), OpenCV (feature matching only), ffmpeg, the Opentrons API, Apple Speech (Private mode).</sub>
 
