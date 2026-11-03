@@ -83,7 +83,9 @@ We interviewed 6 biology PhDs and lab researchers. They leave the bench to write
 
 [Transfyr](https://www.synbiobeta.com/read/transfyr-launches-physical-ai-platform-for-science-with-25m-seed-funding) raised a $25M seed in 2026 to capture bench work with [three fixed cameras over each workstation](https://www.thestar.com.my/tech/tech-news/2026/09/07/some-scientists-have-magic-hands-in-the-lab-this-ai-is-learning-why), headband cameras, microphones and environmental sensors.
 
-**Glassistant** needs no install: Meta AI glasses, worn like lab goggles, are the sensor, and Milo checks each well during the run.
+<table width="100%"><tr><td>
+<b>Glassistant</b> needs no install: Meta AI glasses, worn like lab goggles, are the sensor, and Milo checks each well during the run.
+</td></tr></table>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/loop-dark.svg" />
