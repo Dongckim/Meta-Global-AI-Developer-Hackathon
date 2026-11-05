@@ -61,13 +61,11 @@
 
 ## Demo
 
-<!-- Replace with the video once it's uploaded, e.g.
 <p align="center">
-  <a href="https://youtu.be/VIDEO_ID"><img src="https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg" alt="Watch the 3-minute demo" width="100%" /></a>
+  <a href="https://www.youtube.com/watch?v=RqihtHh110s"><img src="https://img.youtube.com/vi/RqihtHh110s/maxresdefault.jpg" alt="Watch the 3-minute demo" width="100%" /></a>
 </p>
--->
 
-> **3-minute demo:** _link added on submission_
+> **3-minute demo:** [youtube.com/watch?v=RqihtHh110s](https://www.youtube.com/watch?v=RqihtHh110s)
 
 We filmed it through the glasses at a desk, with a real 96-well plate and pipette. Every model call in the video is live.
 
